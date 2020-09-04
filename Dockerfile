@@ -12,6 +12,11 @@ RUN apk add --no-cache \
 		imagemagick \
 # For install ffmpeg
 		ffmpeg 
+		
+# fix work iconv library with alpine
+# Huge thanks to chodingsana!
+RUN apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
+ENV LD_PRELOAD /usr/lib/preloadable_libiconv.so php
 
 # install the PHP extensions we need (https://make.wordpress.org/hosting/handbook/handbook/server-environment/#php-extensions)
 RUN set -ex; \

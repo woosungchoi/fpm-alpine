@@ -1,10 +1,10 @@
 # fpm-alpine
 
-## Based on wordpress:php7.4-fpm-alpine Dockerfile.
+## Based on wordpress:php7.4-fpm-alpine Dockerfile
 
 `Source` : https://github.com/docker-library/wordpress/blob/master/php7.4/fpm-alpine/Dockerfile
 
-## Added ffmpeg and redis extensions.
+## Added ffmpeg and redis extensions
 
 You can convert animated `gif` images to `mp4` or `webm` with `ffmpeg`.
 

@@ -41,13 +41,8 @@ RUN set -ex; \
 		pdo_mysql \
 	; \
 	pecl install redis; \
-	git clone https://github.com/Imagick/imagick; \
-	cd imagick; \
-	phpize && ./configure; \
-	make; \
-	make install; \
 	\
-	docker-php-ext-enable imagick redis; \
+	docker-php-ext-enable redis; \
 	\
 	runDeps="$( \
 		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \

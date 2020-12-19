@@ -1,4 +1,4 @@
-FROM php:7.4-fpm-alpine
+FROM php:8.0-fpm-alpine
 
 # persistent dependencies
 RUN apk add --no-cache \
@@ -40,7 +40,13 @@ RUN set -ex; \
 		pdo \
 		pdo_mysql \
 	; \
-	pecl install imagick-3.4.4 redis; \
+	pecl install redis; \
+	git clone https://github.com/Imagick/imagick; \
+	cd imagick; \
+	phpize && ./configure; \
+	make; \
+	make install; \
+	\
 	docker-php-ext-enable imagick redis; \
 	\
 	runDeps="$( \
@@ -62,6 +68,8 @@ RUN set -eux; \
 		echo 'opcache.max_accelerated_files=4000'; \
 		echo 'opcache.revalidate_freq=2'; \
 		echo 'opcache.fast_shutdown=1'; \
+		echo 'opcache.jit_buffer_size=100M'; \
+                echo 'opcache.jit=tracing'; \
 	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
 # https://wordpress.org/support/article/editing-wp-config-php/#configure-error-logging
 RUN { \

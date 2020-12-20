@@ -39,6 +39,8 @@ RUN set -ex; \
 		zip \
 		pdo \
 		pdo_mysql \
+		intl \
+		apcu \
 	; \
 	pecl install imagick-3.4.4 redis; \
 	docker-php-ext-enable imagick redis; \

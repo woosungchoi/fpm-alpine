@@ -39,6 +39,8 @@ RUN set -ex; \
 		zip \
 		pdo \
 		pdo_mysql \
+		intl \
+		apcu \
 	; \
 	pecl install redis; \
 	\

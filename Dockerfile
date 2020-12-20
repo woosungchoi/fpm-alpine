@@ -30,6 +30,10 @@ RUN set -ex; \
 		libzip-dev \
 		# icu-dev is required for php intl extension
 		icu-dev \
+		# add for imagick source install
+		libtool \
+		make \
+		git \		
 	; \
 	\
 	docker-php-ext-configure gd --with-freetype --with-jpeg; \
@@ -46,7 +50,13 @@ RUN set -ex; \
 	; \
 	pecl install redis apcu; \
 	\
-	docker-php-ext-enable redis apcu; \
+	git clone https://github.com/Imagick/imagick; \
+	cd imagick; \
+	phpize && ./configure; \
+	make; \
+	make install; \
+	\
+	docker-php-ext-enable redis apcu imagick; \
 	\
 	runDeps="$( \
 		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
@@ -67,6 +77,7 @@ RUN set -eux; \
 		echo 'opcache.max_accelerated_files=4000'; \
 		echo 'opcache.revalidate_freq=2'; \
 		echo 'opcache.fast_shutdown=1'; \
+		echo 'opcache.enable=1'; \
 		echo 'opcache.jit_buffer_size=100M'; \
                 echo 'opcache.jit=tracing'; \
 	} > /usr/local/etc/php/conf.d/opcache-recommended.ini

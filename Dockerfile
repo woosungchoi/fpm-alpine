@@ -11,7 +11,7 @@ RUN apk add --no-cache \
 # Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
 		imagemagick \
 # For install ffmpeg
-		ffmpeg \
+		ffmpeg
 
 # fix work iconv library with alpine
 # Huge thanks to chodingsana!

@@ -65,7 +65,8 @@ RUN set -ex; \
 			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
 	)"; \
 	apk add --virtual .wordpress-phpexts-rundeps $runDeps; \
-	apk del .build-deps
+	apk del .build-deps; \
+	rm -rf /var/www/html/imagick
 
 # set recommended PHP.ini settings
 # see https://secure.php.net/manual/en/opcache.installation.php

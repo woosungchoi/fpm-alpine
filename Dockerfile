@@ -11,8 +11,8 @@ RUN apk add --no-cache \
 # Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
 		imagemagick \
 # For install ffmpeg
-		ffmpeg 
-		
+		ffmpeg \
+
 # fix work iconv library with alpine
 # Huge thanks to chodingsana!
 RUN apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
@@ -28,9 +28,12 @@ RUN set -ex; \
 		libjpeg-turbo-dev \
 		libpng-dev \
 		libzip-dev \
+		# icu-dev is required for php intl extension
+		icu-dev \
 	; \
 	\
 	docker-php-ext-configure gd --with-freetype --with-jpeg; \
+	docker-php-ext-configure intl; \
 	docker-php-ext-install -j "$(nproc)" \
 		bcmath \
 		exif \

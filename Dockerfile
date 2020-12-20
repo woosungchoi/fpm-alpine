@@ -40,11 +40,10 @@ RUN set -ex; \
 		pdo \
 		pdo_mysql \
 		intl \
-		apcu \
 	; \
-	pecl install redis; \
+	pecl install redis apcu; \
 	\
-	docker-php-ext-enable redis; \
+	docker-php-ext-enable redis apcu; \
 	\
 	runDeps="$( \
 		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \

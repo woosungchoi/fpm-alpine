@@ -9,14 +9,7 @@ RUN set -eux; \
 		ghostscript \
 # Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
 		imagemagick \
-# For install ffmpeg
-		ffmpeg \
 	;
-
-# fix work iconv library with alpine
-# Huge thanks to chodingsana!
-RUN apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
-ENV LD_PRELOAD /usr/lib/preloadable_libiconv.so php
 
 # install the PHP extensions we need (https://make.wordpress.org/hosting/handbook/handbook/server-environment/#php-extensions)
 RUN set -ex; \
@@ -28,30 +21,23 @@ RUN set -ex; \
 		libjpeg-turbo-dev \
 		libpng-dev \
 		libzip-dev \
-		# icu-dev is required for php intl extension
-		icu-dev \
 	; \
 	\
 	docker-php-ext-configure gd \
 		--with-freetype \
 		--with-jpeg \
 	; \
-	docker-php-ext-configure intl \
-	; \
 	docker-php-ext-install -j "$(nproc)" \
-		#bcmath \
+		bcmath \
 		exif \
 		gd \
 		mysqli \
 		zip \
-		pdo \
-		pdo_mysql \
-		intl \
 	; \
 # WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
 # https://pecl.php.net/package/imagick
-	pecl install imagick-3.5.0 redis apcu; \
-	docker-php-ext-enable imagick redis apcu; \
+	pecl install imagick-3.5.0; \
+	docker-php-ext-enable imagick; \
 	rm -r /tmp/pear; \
 	\
 	runDeps="$( \

@@ -28,15 +28,11 @@ RUN set -ex; \
 		libjpeg-turbo-dev \
 		libpng-dev \
 		libzip-dev \
-		# icu-dev is required for php intl extension
-		icu-dev \
 	; \
 	\
 	docker-php-ext-configure gd \
 		--with-freetype \
 		--with-jpeg \
-	; \
-	docker-php-ext-configure intl \
 	; \
 	docker-php-ext-install -j "$(nproc)" \
 		bcmath \
@@ -46,7 +42,6 @@ RUN set -ex; \
 		zip \
 		pdo \
 		pdo_mysql \
-		intl \
 	; \
 # WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
 # https://pecl.php.net/package/imagick

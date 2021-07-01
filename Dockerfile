@@ -1,17 +1,17 @@
 FROM php:7.4-fpm-alpine
 
 # persistent dependencies
-RUN apk add --no-cache \
+RUN set -eux; \
+	apk add --no-cache \
 # in theory, docker-entrypoint.sh is POSIX-compliant, but priority is a working, consistent image
 		bash \
-# BusyBox sed is not sufficient for some of our sed expressions
-		sed \
 # Ghostscript is required for rendering PDF previews
 		ghostscript \
 # Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
 		imagemagick \
 # For install ffmpeg
-		ffmpeg
+		ffmpeg \
+	;
 
 # fix work iconv library with alpine
 # Huge thanks to chodingsana!
@@ -32,8 +32,12 @@ RUN set -ex; \
 		icu-dev \
 	; \
 	\
-	docker-php-ext-configure gd --with-freetype --with-jpeg; \
-	docker-php-ext-configure intl; \
+	docker-php-ext-configure gd \
+		--with-freetype \
+		--with-jpeg \
+	; \
+	docker-php-ext-configure intl \
+	; \
 	docker-php-ext-install -j "$(nproc)" \
 		bcmath \
 		exif \
@@ -44,8 +48,11 @@ RUN set -ex; \
 		pdo_mysql \
 		intl \
 	; \
-	pecl install imagick-3.4.4 redis apcu; \
+# WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
+# https://pecl.php.net/package/imagick
+	pecl install imagick-3.5.0 redis apcu; \
 	docker-php-ext-enable imagick redis apcu; \
+	rm -r /tmp/pear; \
 	\
 	runDeps="$( \
 		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
@@ -53,8 +60,8 @@ RUN set -ex; \
 			| sort -u \
 			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
 	)"; \
-	apk add --virtual .wordpress-phpexts-rundeps $runDeps; \
-	apk del .build-deps
+	apk add --no-network --virtual .wordpress-phpexts-rundeps $runDeps; \
+	apk del --no-network .build-deps
 
 # set recommended PHP.ini settings
 # see https://secure.php.net/manual/en/opcache.installation.php

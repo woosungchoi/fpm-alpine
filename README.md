@@ -2,7 +2,7 @@
 
 ## Based on wordpress:php7.4-fpm-alpine Dockerfile
 
-`Source` : https://github.com/docker-library/wordpress/blob/master/php7.4/fpm-alpine/Dockerfile
+`Source` : [https://github.com/docker-library/wordpress/blob/master/php7.4/fpm-alpine/Dockerfile](https://github.com/docker-library/wordpress/tree/master/latest)
 
 ## Added ffmpeg and redis extensions
 

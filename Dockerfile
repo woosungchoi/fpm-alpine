@@ -1,17 +1,17 @@
-FROM php:8.0-fpm-alpine3.13
+FROM php:8.0-fpm-alpine
 
 # persistent dependencies
-RUN apk add --no-cache \
+RUN set -eux; \
+	apk add --no-cache \
 # in theory, docker-entrypoint.sh is POSIX-compliant, but priority is a working, consistent image
 		bash \
-# BusyBox sed is not sufficient for some of our sed expressions
-		sed \
 # Ghostscript is required for rendering PDF previews
 		ghostscript \
 # Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
 		imagemagick \
 # For install ffmpeg
-		ffmpeg 
+		ffmpeg \
+	;
 		
 # fix work iconv library with alpine
 # Huge thanks to chodingsana!
@@ -24,49 +24,58 @@ RUN set -ex; \
 	apk add --no-cache --virtual .build-deps \
 		$PHPIZE_DEPS \
 		freetype-dev \
+		icu-dev \
 		imagemagick-dev \
 		libjpeg-turbo-dev \
 		libpng-dev \
-		libzip-dev \
-		# icu-dev is required for php intl extension
-		icu-dev \
-		# add for imagick source install
-		libtool \
-		make \
-		git \		
+		libwebp-dev \
+		libzip-dev \	
 	; \
 	\
-	docker-php-ext-configure gd --with-freetype --with-jpeg; \
+	docker-php-ext-configure gd \
+		--with-freetype \
+		--with-jpeg \
+		--with-webp \
+	; \
 	docker-php-ext-configure intl; \
 	docker-php-ext-install -j "$(nproc)" \
 		bcmath \
 		exif \
 		gd \
+		intl \
 		mysqli \
 		zip \
 		pdo \
 		pdo_mysql \
-		intl \
 	; \
-	pecl install redis apcu; \
-	\
-	git clone https://github.com/Imagick/imagick; \
-	cd imagick; \
-	phpize && ./configure; \
-	make; \
-	make install; \
-	\
+# WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
+# https://pecl.php.net/package/imagick
+	pecl install redis apcu imagick-3.6.0; \
 	docker-php-ext-enable redis apcu imagick; \
 	\
+	rm -r /tmp/pear; \
+	\
+# some misbehaving extensions end up outputting to stdout 🙈 (https://github.com/docker-library/wordpress/issues/669#issuecomment-993945967)
+	out="$(php -r 'exit(0);')"; \
+	[ -z "$out" ]; \
+	err="$(php -r 'exit(0);' 3>&1 1>&2 2>&3)"; \
+	[ -z "$err" ]; \
+	\
+	extDir="$(php -r 'echo ini_get("extension_dir");')"; \
+	[ -d "$extDir" ]; \
 	runDeps="$( \
-		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
+		scanelf --needed --nobanner --format '%n#p' --recursive "$extDir" \
 			| tr ',' '\n' \
 			| sort -u \
 			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
 	)"; \
-	apk add --virtual .wordpress-phpexts-rundeps $runDeps; \
-	apk del .build-deps; \
-	rm -rf /var/www/html/imagick
+	apk add --no-network --virtual .wordpress-phpexts-rundeps $runDeps; \
+	apk del --no-network .build-deps; \
+	\
+	! { ldd "$extDir"/*.so | grep 'not found'; }; \
+# check for output like "PHP Warning:  PHP Startup: Unable to load dynamic library 'foo' (tried: ...)
+	err="$(php --version 3>&1 1>&2 2>&3)"; \
+	[ -z "$err" ]
 
 # set recommended PHP.ini settings
 # see https://secure.php.net/manual/en/opcache.installation.php

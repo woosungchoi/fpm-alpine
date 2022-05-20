@@ -22,6 +22,10 @@ The iconv function on the php alpine image has been modified to work well.
 
 https://github.com/woosungchoi/fpm-alpine/tree/8.0
 
+## Added PHP 8.1 branch
+
+https://github.com/woosungchoi/fpm-alpine/tree/8.1
+
 ## Repositories where this image is being used
 
 ### docker-wordpress

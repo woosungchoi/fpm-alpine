@@ -1,4 +1,4 @@
-FROM php:7.4-fpm-alpine3.13
+FROM php:7.4-fpm-alpine
 
 # persistent dependencies
 RUN set -eux; \
@@ -15,8 +15,8 @@ RUN set -eux; \
 
 # fix work iconv library with alpine
 # Huge thanks to chodingsana!
-RUN apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
-ENV LD_PRELOAD /usr/lib/preloadable_libiconv.so php
+#RUN apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
+#ENV LD_PRELOAD /usr/lib/preloadable_libiconv.so php
 
 # install the PHP extensions we need (https://make.wordpress.org/hosting/handbook/handbook/server-environment/#php-extensions)
 RUN set -ex; \
@@ -28,6 +28,7 @@ RUN set -ex; \
 		libjpeg-turbo-dev \
 		libpng-dev \
 		libzip-dev \
+		libwebp-dev \
 		# icu-dev is required for php intl extension
 		icu-dev \
 	; \
@@ -35,6 +36,7 @@ RUN set -ex; \
 	docker-php-ext-configure gd \
 		--with-freetype \
 		--with-jpeg \
+		--with-webp \
 	; \
 	docker-php-ext-configure intl \
 	; \
@@ -50,7 +52,7 @@ RUN set -ex; \
 	; \
 # WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
 # https://pecl.php.net/package/imagick
-	pecl install imagick-3.5.0 redis apcu; \
+	pecl install imagick-3.6.0 redis apcu; \
 	docker-php-ext-enable imagick redis apcu; \
 	rm -r /tmp/pear; \
 	\
@@ -61,8 +63,13 @@ RUN set -ex; \
 			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
 	)"; \
 	apk add --no-network --virtual .wordpress-phpexts-rundeps $runDeps; \
-	apk del --no-network .build-deps
-
+	apk del --no-network .build-deps; \
+	\
+	! { ldd "$extDir"/*.so | grep 'not found'; }; \
+# check for output like "PHP Warning:  PHP Startup: Unable to load dynamic library 'foo' (tried: ...)
+	err="$(php --version 3>&1 1>&2 2>&3)"; \
+	[ -z "$err" ]
+	
 # set recommended PHP.ini settings
 # see https://secure.php.net/manual/en/opcache.installation.php
 RUN set -eux; \

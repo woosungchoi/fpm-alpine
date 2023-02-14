@@ -50,7 +50,7 @@ RUN set -ex; \
 	; \
 # WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
 # https://pecl.php.net/package/imagick
-	pecl install redis apcu imagick-3.6.0; \
+	pecl install redis apcu imagick-3.7.0; \
 	docker-php-ext-enable redis apcu imagick; \
 	\
 	rm -r /tmp/pear; \

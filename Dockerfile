@@ -9,6 +9,7 @@ RUN set -eux; \
 		ghostscript \
 # Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
 		imagemagick \
+  		php82-pecl-imagick \
 # For install ffmpeg
 		ffmpeg \
 	;

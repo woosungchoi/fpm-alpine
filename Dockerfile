@@ -9,7 +9,6 @@ RUN set -eux; \
 		ghostscript \
 # Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
 		imagemagick \
-  		php82-pecl-imagick \
 # For install ffmpeg
 		ffmpeg \
 	;
@@ -51,8 +50,8 @@ RUN set -ex; \
 	; \
 # WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
 # https://pecl.php.net/package/imagick
-	pecl install redis apcu; \
-	docker-php-ext-enable redis apcu; \
+	pecl install redis apcu imagick-3.7.0; \
+	docker-php-ext-enable redis apcu imagick; \
 	\
 	rm -r /tmp/pear; \
 	\

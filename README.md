@@ -76,6 +76,31 @@ Compared with the upstream PHP Alpine FPM image, this repository adds / configur
 
 You can convert animated `gif` images to `mp4` or `webm` with `ffmpeg`.
 
+## Verification
+
+For local validation after a Docker build, run:
+
+```bash
+./scripts/smoke-test-image.sh <built-image-tag>
+```
+
+This smoke test checks:
+
+- `php -v`
+- `php -m`
+- `php-fpm -t`
+- `imagick`, `redis`, `apcu` extension loading
+- `ffmpeg` availability
+- minimal `iconv` / `Imagick` runtime behavior
+
+For a published multi-arch image, you can also inspect the manifest explicitly:
+
+```bash
+./scripts/check-manifest.sh woosungchoi/fpm-alpine:8.5
+```
+
+That manifest check verifies that both `linux/amd64` and `linux/arm64` entries are present.
+
 ## Upstream base
 
 Historically this image started from the WordPress PHP-FPM Alpine Dockerfile lineage.

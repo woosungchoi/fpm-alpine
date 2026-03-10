@@ -36,6 +36,30 @@ Chosen direction:
 - [x] Delete remote `master`
 - [ ] Verify Docker Hub `latest` mapping follows `8.5` if `latest` is still published
 
+## Phase 4 — strengthen CI / build verification
+
+Status: **implemented on `8.5`**
+
+- [x] Add a reusable local smoke-test script for built images
+- [x] Add GitHub Actions smoke verification for push / PR builds
+- [x] Validate `php -v`, `php -m`, `php-fpm -t`
+- [x] Validate extension loading for `imagick`, `redis`, `apcu`
+- [x] Validate `ffmpeg` presence
+- [x] Add minimal runtime checks for `iconv` and `Imagick`
+- [ ] Extend the same smoke coverage to maintained sibling branches `8.0`–`8.4`
+- [x] Add a lightweight post-push manifest inspection helper for published multi-arch tags
+- [ ] Consider enforcing manifest inspection automatically after registry publish if CI/Docker Hub flow is later unified
+
+## Phase 5 — dependency modernization preparation
+
+Status: **started conservatively on `8.5`**
+
+- [x] Replace the Alpine edge community repository URL with HTTPS for the `gnu-libiconv` install step
+- [x] Normalize `ENV LD_PRELOAD=...` syntax to current Dockerfile style
+- [x] Document that `imagick` / `iconv` changes beyond this point should be tested branch-by-branch before wider rollout
+- [ ] Evaluate pinning a known-good `imagick` PECL release across all supported PHP lines
+- [ ] Reassess whether the `gnu-libiconv` workaround can be reduced or replaced safely on newer PHP/Alpine combinations
+
 Notes:
 
 - Documentation/policy state has been ported onto `8.5` without bringing over legacy PHP 7.4 Dockerfile logic.

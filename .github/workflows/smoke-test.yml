@@ -1,0 +1,38 @@
+name: smoke-test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      manifest_image:
+        description: "Optional published image ref to inspect (for example woosungchoi/fpm-alpine:8.5)"
+        required: false
+        type: string
+
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: fpm-alpine:smoke
+
+      - name: Run smoke test
+        run: ./scripts/smoke-test-image.sh fpm-alpine:smoke
+
+      - name: Inspect published multi-arch manifest (optional)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.manifest_image != '' }}
+        run: ./scripts/check-manifest.sh "${{ inputs.manifest_image }}"

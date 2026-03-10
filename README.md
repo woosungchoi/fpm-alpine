@@ -39,3 +39,29 @@ Clean Rhymix CMS + Docker (development & production)
 `Source` : https://github.com/woosungchoi/docker-multi-site
 
 Docker with wordpress, gnuboard, rhymix
+
+## Verification
+
+For local validation after a Docker build, run:
+
+```bash
+./scripts/smoke-test-image.sh <built-image-tag>
+```
+
+This smoke test checks:
+
+- `php -v`
+- `php -m`
+- `php-fpm -t`
+- `imagick`, `redis`, `apcu` extension loading
+- `ffmpeg` availability
+- minimal `iconv` / `Imagick` runtime behavior
+
+For a published multi-arch image, you can also inspect the manifest explicitly:
+
+```bash
+./scripts/check-manifest.sh woosungchoi/fpm-alpine:8.2
+```
+
+That manifest check verifies that both `linux/amd64` and `linux/arm64` entries are present.
+

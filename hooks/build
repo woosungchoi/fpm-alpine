@@ -1,8 +1,17 @@
 #!/bin/bash
+set -e
+
 echo "=> Building multi-arch (amd64 & arm64) for branch: $SOURCE_BRANCH"
 
-docker buildx create --name mybuilder --use
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+if docker buildx inspect mybuilder >/dev/null 2>&1; then
+  docker buildx use mybuilder
+else
+  docker buildx create --name mybuilder --use
+fi
 
-# 두 아키텍처를 동시에 빌드하고 하나의 태그($IMAGE_NAME)로 푸시합니다.
-docker buildx build --platform linux/amd64,linux/arm64 -f $DOCKERFILE_PATH -t $IMAGE_NAME --push .
+# Modern BuildKit environments usually provide cross-platform support already.
+# Avoid forcing a legacy qemu-user-static registration step here: it can fail with
+# "exec /register: exec format error" on arm64 hosts and Docker Hub builders.
+
+# Build both architectures and publish a single multi-arch tag.
+docker buildx build --platform linux/amd64,linux/arm64 -f "$DOCKERFILE_PATH" -t "$IMAGE_NAME" --push .

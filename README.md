@@ -101,6 +101,8 @@ For a published multi-arch image, you can also inspect the manifest explicitly:
 
 That manifest check verifies that both `linux/amd64` and `linux/arm64` entries are present.
 
+A separate GitHub Actions workflow also performs scheduled/manual published-manifest checks for the maintained tags.
+
 ## Upstream base
 
 Historically this image started from the WordPress PHP-FPM Alpine Dockerfile lineage.

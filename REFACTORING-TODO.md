@@ -38,7 +38,7 @@ Chosen direction:
 
 ## Phase 4 — strengthen CI / build verification
 
-Status: **implemented on `8.5`**
+Status: **implemented across maintained branches `8.0`–`8.5`**
 
 - [x] Add a reusable local smoke-test script for built images
 - [x] Add GitHub Actions smoke verification for push / PR builds
@@ -46,16 +46,16 @@ Status: **implemented on `8.5`**
 - [x] Validate extension loading for `imagick`, `redis`, `apcu`
 - [x] Validate `ffmpeg` presence
 - [x] Add minimal runtime checks for `iconv` and `Imagick`
-- [ ] Extend the same smoke coverage to maintained sibling branches `8.0`–`8.4`
+- [x] Extend the same smoke coverage to maintained sibling branches `8.0`–`8.4`
 - [x] Add a lightweight post-push manifest inspection helper for published multi-arch tags
-- [ ] Consider enforcing manifest inspection automatically after registry publish if CI/Docker Hub flow is later unified
+- [x] Add a separate scheduled/manual workflow to verify published manifests for maintained tags without changing the publish flow
 
 ## Phase 5 — dependency modernization preparation
 
-Status: **started conservatively on `8.5`**
+Status: **implemented conservatively across maintained branches where safe**
 
-- [x] Replace the Alpine edge community repository URL with HTTPS for the `gnu-libiconv` install step
-- [x] Normalize `ENV LD_PRELOAD=...` syntax to current Dockerfile style
+- [x] Replace the Alpine edge community repository URL with HTTPS for the `gnu-libiconv` install step on all maintained branches
+- [x] Normalize `ENV LD_PRELOAD=...` syntax to current Dockerfile style where the branch form allows a low-risk replacement
 - [x] Document that `imagick` / `iconv` changes beyond this point should be tested branch-by-branch before wider rollout
 - [ ] Evaluate pinning a known-good `imagick` PECL release across all supported PHP lines
 - [ ] Reassess whether the `gnu-libiconv` workaround can be reduced or replaced safely on newer PHP/Alpine combinations

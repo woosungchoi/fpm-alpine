@@ -1,0 +1,52 @@
+name: verify-published-manifest
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "Optional single published image ref to inspect (for example woosungchoi/fpm-alpine:8.5)"
+        required: false
+        type: string
+
+jobs:
+  verify-maintained-tags:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.image_ref == '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image_ref:
+          - woosungchoi/fpm-alpine:8.0
+          - woosungchoi/fpm-alpine:8.1
+          - woosungchoi/fpm-alpine:8.2
+          - woosungchoi/fpm-alpine:8.3
+          - woosungchoi/fpm-alpine:8.4
+          - woosungchoi/fpm-alpine:8.5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify published manifest
+        run: ./scripts/check-manifest.sh "${{ matrix.image_ref }}"
+
+  verify-single-input:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.image_ref != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify published manifest
+        run: ./scripts/check-manifest.sh "${{ inputs.image_ref }}"

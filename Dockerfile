@@ -1,4 +1,6 @@
+ARG IMAGICK_VERSION=3.8.1
 FROM php:8.4-fpm-alpine
+ARG IMAGICK_VERSION
 
 # persistent dependencies
 RUN set -eux; \
@@ -15,8 +17,8 @@ RUN set -eux; \
 		
 # fix work iconv library with alpine
 # Huge thanks to chodingsana!
-RUN apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
-ENV LD_PRELOAD /usr/lib/preloadable_libiconv.so php
+RUN apk add --no-cache --repository https://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
+ENV LD_PRELOAD=/usr/lib/preloadable_libiconv.so
 
 # install the PHP extensions we need (https://make.wordpress.org/hosting/handbook/handbook/server-environment/#php-extensions)
 RUN set -ex; \
@@ -48,13 +50,14 @@ RUN set -ex; \
 		pdo \
 		pdo_mysql \
 	; \
-# WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
-# https://pecl.php.net/package/imagick
-    	# install imagick
-    	mkdir -p /usr/src/php/ext/imagick; \
-    	curl -fsSL https://pecl.php.net/get/imagick | tar xvz -C "/usr/src/php/ext/imagick" --strip 1; \
-    	docker-php-ext-install imagick; \
-    	\
+# Imagick is built from a pinned PECL release tarball instead of the floating latest package.
+# Maintained PHP branches 8.0-8.5 currently standardize on imagick 3.8.1.
+# refs: https://pecl.php.net/package/imagick / https://github.com/Imagick/imagick/releases/tag/3.8.1
+	mkdir -p /usr/src/php/ext/imagick; \
+	curl -fsSL "https://pecl.php.net/get/imagick-${IMAGICK_VERSION}.tgz" \
+		| tar -xz -C /usr/src/php/ext/imagick --strip 1; \
+	docker-php-ext-install -j "$(nproc)" imagick; \
+	\
 	pecl install redis apcu; \
 	docker-php-ext-enable redis apcu; \
 	\

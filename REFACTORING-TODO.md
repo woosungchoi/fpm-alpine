@@ -57,7 +57,7 @@ Status: **implemented conservatively across maintained branches where safe**
 - [x] Replace the Alpine edge community repository URL with HTTPS for the `gnu-libiconv` install step on all maintained branches
 - [x] Normalize `ENV LD_PRELOAD=...` syntax to current Dockerfile style where the branch form allows a low-risk replacement
 - [x] Document that `imagick` / `iconv` changes beyond this point should be tested branch-by-branch before wider rollout
-- [ ] Evaluate pinning a known-good `imagick` PECL release across all supported PHP lines
+- [x] Standardize a known-good `imagick` PECL release across maintained branches (`3.8.1` on `8.0`–`8.5`)
 - [ ] Reassess whether the `gnu-libiconv` workaround can be reduced or replaced safely on newer PHP/Alpine combinations
 
 Notes:

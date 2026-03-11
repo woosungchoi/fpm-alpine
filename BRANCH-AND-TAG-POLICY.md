@@ -87,3 +87,14 @@ The repository-side policy is now:
 - treat `8.5` as the mainline in docs and internal references
 - avoid new work on legacy PHP 7.4 history
 - treat PHP 7.4 as frozen / unsupported here
+
+
+## Maintained Imagick baseline
+
+For the actively supported PHP branches **`8.0` through `8.5`**, the repository policy is now:
+
+- use **`imagick-3.8.1`** as the pinned release
+- install from the **PECL release tarball** into `/usr/src/php/ext/imagick`
+- compile with **`docker-php-ext-install imagick`**
+
+If a future branch needs a different Imagick version, document that as an explicit exception instead of expanding a version matrix in multiple files.

@@ -32,7 +32,7 @@ Implemented:
 
 Deferred on purpose:
 
-- **Pinning `imagick` to a specific PECL release:** beneficial for reproducibility, but should be tested across the active 8.0–8.5 lines before forcing a version on the mainline.
+- **Pinning `imagick` to a specific PECL release:** now standardized across maintained branches `8.0`–`8.5` using a pinned PECL tarball (`imagick-3.8.1`) plus `docker-php-ext-install imagick`.
 - **Changing the `gnu-libiconv` install source / approach:** the current edge-community workaround is operationally important; replacing it should only happen after branch-by-branch validation.
 - **Reworking multi-arch manifest validation in CI:** possible later, but not necessary for this first safe verification phase.
 
@@ -40,4 +40,4 @@ Deferred on purpose:
 
 1. Keep the smoke workflow green on this maintained branch and on the primary `8.5` branch after future image changes.
 2. Use the shared smoke/manifest helpers consistently across maintained version branches (`8.0`–`8.5`) when making low-risk updates.
-3. In a dedicated follow-up branch, test a pinned `imagick` PECL release across all supported branches before adopting it repo-wide.
+3. Keep the pinned `imagick-3.8.1` policy aligned across maintained branches and only introduce exceptions with branch-specific validation notes.

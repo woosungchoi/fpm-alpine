@@ -76,6 +76,15 @@ Compared with the upstream PHP Alpine FPM image, this repository adds / configur
 
 You can convert animated `gif` images to `mp4` or `webm` with `ffmpeg`.
 
+## Imagick policy
+
+For the maintained branches **`8.0` through `8.5`**, this repository now standardizes on:
+
+- pinned `imagick` release: **`3.8.1`**
+- install method: **PECL release tarball + `docker-php-ext-install imagick`**
+
+Treat that as the branch matrix unless a future branch-specific exception is documented explicitly.
+
 ## Verification
 
 For local validation after a Docker build, run:

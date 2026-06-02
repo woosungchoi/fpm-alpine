@@ -63,6 +63,17 @@ Safe rule for production use:
 
 For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 
+## Maintenance and security status
+
+This repository is maintained through version branches and lightweight verification workflows:
+
+- `smoke-test` builds the branch Dockerfile and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
+- `verify-published-manifest` runs on a schedule and verifies the published Docker Hub tags for maintained branches.
+- Maintained branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
+- Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
+
+GitHub Releases are intentionally optional for this Docker image repository. The operational release contract is the explicit Docker image tag for each maintained PHP version branch.
+
 ## What this image adds
 
 Compared with the upstream PHP Alpine FPM image, this repository adds / configures:

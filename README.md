@@ -76,10 +76,22 @@ Docker Hub hooks remain the publishing path for this repository. GitHub Actions 
 
 This keeps Docker Hub autobuild hooks in place while making the final published image state easier to inspect from GitHub Actions.
 
+### Dependency freshness reports
+
+`dependency-freshness` is a report-only workflow. It does not publish images or update pins automatically. It records:
+
+- the current Dockerfile base image digest,
+- the published Docker Hub tag digests for maintained branches `8.0` through `8.5`,
+- PECL latest-version observations for `imagick`, `redis`, and `apcu`, and
+- whether the Alpine `gnu-libiconv` / `LD_PRELOAD` workaround is still present and should be periodically reassessed.
+
+The workflow runs weekly and on manual dispatch, writes a GitHub Actions step summary, and uploads `freshness-reports/` artifacts for review.
+
 This repository is maintained through version branches and lightweight verification workflows:
 
 - `smoke-test` builds the branch Dockerfile and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
 - `verify-published-manifest` runs on a schedule and verifies the published Docker Hub tags for maintained branches.
+- `dependency-freshness` produces report-only dependency/source freshness observations for maintainers.
 - Maintained branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
 

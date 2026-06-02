@@ -65,6 +65,17 @@ For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRAN
 
 ## Maintenance and security status
 
+### Published manifest verification reports
+
+Docker Hub hooks remain the publishing path for this repository. GitHub Actions now provides the visibility layer around that publish path:
+
+- `verify-published-manifest` runs after maintained-branch pushes, on a daily schedule, and on manual dispatch.
+- The workflow verifies each maintained Docker Hub tag for the expected `linux/amd64` and `linux/arm64` platforms.
+- Each run writes a GitHub Actions step summary and uploads manifest report artifacts containing the observed tag digest, per-platform digests, and attestation/metadata manifest entries when present.
+- Branch-push runs make the current published Docker Hub state visible from GitHub Actions. Docker Hub autobuild can still lag behind the GitHub push, so the daily/manual verification remains the source of truth for the final published state.
+
+This keeps Docker Hub autobuild hooks in place while making the final published image state easier to inspect from GitHub Actions.
+
 This repository is maintained through version branches and lightweight verification workflows:
 
 - `smoke-test` builds the branch Dockerfile and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.

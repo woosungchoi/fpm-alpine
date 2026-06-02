@@ -1,6 +1,14 @@
 name: verify-published-manifest
 
 on:
+  push:
+    branches:
+      - '8.0'
+      - '8.1'
+      - '8.2'
+      - '8.3'
+      - '8.4'
+      - '8.5'
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
@@ -28,10 +36,19 @@ jobs:
           - woosungchoi/fpm-alpine:8.5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Verify published manifest
-        run: ./scripts/check-manifest.sh "${{ matrix.image_ref }}"
+        env:
+          IMAGE_REF: ${{ matrix.image_ref }}
+        run: ./scripts/report-manifest.sh "$IMAGE_REF"
+
+      - name: Upload manifest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: manifest-report-${{ strategy.job-index }}
+          path: manifest-reports/
 
   verify-single-input:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.image_ref != '' }}
@@ -40,7 +57,16 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Verify published manifest
-        run: ./scripts/check-manifest.sh "${{ inputs.image_ref }}"
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: ./scripts/report-manifest.sh "$IMAGE_REF"
+
+      - name: Upload manifest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: manifest-single-input
+          path: manifest-reports/

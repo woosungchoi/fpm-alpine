@@ -4,6 +4,8 @@ set -euo pipefail
 IMAGE_REF="${1:-}"
 shift || true
 EXPECTED_PLATFORMS=("$@")
+MANIFEST_RETRY_ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
+MANIFEST_RETRY_DELAY_SECONDS="${MANIFEST_RETRY_DELAY_SECONDS:-20}"
 
 if [ -z "$IMAGE_REF" ]; then
   echo "usage: $0 <registry-image-ref> [expected-platform ...]" >&2
@@ -20,15 +22,47 @@ mkdir -p "$report_dir"
 raw_file="$report_dir/${safe_name}.raw.json"
 json_file="$report_dir/${safe_name}.summary.json"
 md_file="$report_dir/${safe_name}.md"
+inspect_log="$report_dir/${safe_name}.inspect.log"
 
-inspect_text="$(docker buildx imagetools inspect "$IMAGE_REF")"
+inspect_text=""
+raw_status=""
+: > "$inspect_log"
+for attempt in $(seq 1 "$MANIFEST_RETRY_ATTEMPTS"); do
+  echo "manifest inspect attempt ${attempt}/${MANIFEST_RETRY_ATTEMPTS}: ${IMAGE_REF}" | tee -a "$inspect_log"
+  if inspect_text="$(docker buildx imagetools inspect "$IMAGE_REF" 2>&1)"; then
+    if docker buildx imagetools inspect --raw "$IMAGE_REF" > "$raw_file" 2>>"$inspect_log"; then
+      raw_status="ok"
+      break
+    fi
+  else
+    printf '%s\n' "$inspect_text" >> "$inspect_log"
+  fi
+
+  if [ "$attempt" -lt "$MANIFEST_RETRY_ATTEMPTS" ]; then
+    echo "manifest not available yet; retrying after ${MANIFEST_RETRY_DELAY_SECONDS}s" | tee -a "$inspect_log"
+    sleep "$MANIFEST_RETRY_DELAY_SECONDS"
+  fi
+done
+
+if [ "$raw_status" != "ok" ]; then
+  cat > "$md_file" <<EOF
+## \`${IMAGE_REF}\`
+
+- Status: ❌ manifest inspect failed after ${MANIFEST_RETRY_ATTEMPTS} attempt(s)
+- Expected platforms: $(printf '`%s` ' "${EXPECTED_PLATFORMS[@]}")
+
+This can be caused by Docker Hub propagation lag, registry/network failure, or a genuinely missing tag. Re-run the manual workflow after Docker Hub has finished publishing before changing publish hooks.
+EOF
+  cat "$md_file" >&2
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat "$md_file" >> "$GITHUB_STEP_SUMMARY"; fi
+  exit 1
+fi
+
 digest="$(awk '/^Digest:/ { print $2; exit }' <<< "$inspect_text")"
 if [ -z "$digest" ]; then
   echo "failed to resolve digest for $IMAGE_REF" >&2
   exit 1
 fi
-
-docker buildx imagetools inspect --raw "$IMAGE_REF" > "$raw_file"
 
 parser_file="$(mktemp)"
 trap 'rm -f "$parser_file"' EXIT
@@ -66,9 +100,7 @@ for item in manifest.get("manifests", []):
 
     if os_name and arch:
         base_value = f"{os_name}/{arch}"
-        value = base_value
-        if variant:
-            value = f"{value}/{variant}"
+        value = f"{base_value}/{variant}" if variant else base_value
         platforms.append({"platform": value, "digest": item_digest, "mediaType": media_type})
 
 found = {item["platform"] for item in platforms}
@@ -93,6 +125,7 @@ lines = [
     f"- Digest: `{digest}`",
     f"- Expected platforms: {', '.join(f'`{item}`' for item in expected)}",
     f"- Status: {'✅ passed' if not missing else '❌ missing ' + ', '.join(missing)}",
+    "- Publish path: Docker Hub hooks remain the source of published images; this workflow is observation only.",
     "",
     "### Platforms",
     "",
@@ -105,7 +138,13 @@ if attestations:
         ref = item.get("referenceDigest") or "unknown reference"
         rtype = item.get("referenceType") or "unknown type"
         lines.append(f"- `{rtype}` for `{ref}` — `{item.get('digest')}`")
-lines.append("")
+lines.extend([
+    "",
+    "### Triage note",
+    "",
+    "If this failed immediately after a push, first suspect Docker Hub propagation lag or registry/network issues. Re-run the manual manifest workflow before changing build or publish logic.",
+    "",
+])
 md_file.write_text("\n".join(lines))
 
 if missing:

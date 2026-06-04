@@ -26,7 +26,7 @@ jobs:
   verify-maintained-tags:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.image_ref == '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: read
     strategy:
@@ -46,6 +46,8 @@ jobs:
       - name: Verify published manifest
         env:
           IMAGE_REF: ${{ matrix.image_ref }}
+          MANIFEST_RETRY_ATTEMPTS: "5"
+          MANIFEST_RETRY_DELAY_SECONDS: "20"
         run: ./scripts/report-manifest.sh "$IMAGE_REF"
 
       - name: Upload manifest report
@@ -58,7 +60,7 @@ jobs:
   verify-single-input:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.image_ref != '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -68,6 +70,8 @@ jobs:
       - name: Verify published manifest
         env:
           IMAGE_REF: ${{ inputs.image_ref }}
+          MANIFEST_RETRY_ATTEMPTS: "5"
+          MANIFEST_RETRY_DELAY_SECONDS: "20"
         run: ./scripts/report-manifest.sh "$IMAGE_REF"
 
       - name: Upload manifest report

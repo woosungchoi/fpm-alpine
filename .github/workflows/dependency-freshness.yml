@@ -24,6 +24,10 @@ jobs:
         uses: docker/setup-buildx-action@v4.1.0
 
       - name: Generate dependency freshness report
+        env:
+          REPORT_DIR: freshness-reports
+          PHP_TAGS: "8.0 8.1 8.2 8.3 8.4 8.5"
+          PECL_PACKAGES: "imagick redis apcu"
         run: ./scripts/report-freshness.sh
 
       - name: Upload dependency freshness report

@@ -22,6 +22,7 @@ Non-required / report-only workflows:
 
 - `verify-published-manifest`
   - Observes already-published Docker Hub tags.
+  - On failure, opens or updates a `manifest-failure` issue with the failed image ref and report.
   - Can be affected by Docker Hub propagation or registry/network latency.
 - `dependency-freshness`
   - Report-only dependency/source freshness observations.
@@ -77,8 +78,9 @@ Triage:
 1. Check whether the failure happened immediately after a GitHub push.
 2. If yes, suspect Docker Hub propagation lag first.
 3. Re-run the workflow manually with the same image ref after Docker Hub finishes publishing.
-4. If the tag still fails, inspect Docker Hub build/publish logs and the generated manifest report artifact.
-5. Only change publish logic after repeated manual checks prove the manifest is genuinely missing or malformed.
+4. If a `manifest-failure` issue was opened, treat it as a triage queue item and close it only after the manifest is verified or the tag is intentionally unsupported.
+5. If the tag still fails, inspect Docker Hub build/publish logs and the generated manifest report artifact.
+6. Only change publish logic after repeated manual checks prove the manifest is genuinely missing or malformed.
 
 Rollback:
 

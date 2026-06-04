@@ -123,8 +123,19 @@ assert_contains scripts/smoke-test-image.sh "run_check \"extension: imagick\""
 assert_contains scripts/smoke-test-image.sh "GITHUB_STEP_SUMMARY"
 assert_contains scripts/report-manifest.sh "MANIFEST_RETRY_ATTEMPTS"
 assert_contains scripts/report-manifest.sh "Docker Hub propagation lag"
+assert_file scripts/create-manifest-failure-issue.sh
+assert_executable scripts/create-manifest-failure-issue.sh
+assert_contains scripts/create-manifest-failure-issue.sh "gh issue create"
+assert_contains scripts/create-manifest-failure-issue.sh "gh issue comment"
+assert_contains scripts/create-manifest-failure-issue.sh "manifest-failure"
+assert_contains .github/workflows/verify-published-manifest.yml "issues: write"
+assert_contains .github/workflows/verify-published-manifest.yml "Create issue on manifest verification failure"
+assert_contains .github/workflows/verify-published-manifest.yml "scripts/create-manifest-failure-issue.sh"
+assert_contains .github/workflows/verify-published-manifest.yml "manifest-failure"
+assert_contains docs/ci-operations.md 'opens or updates a `manifest-failure` issue'
 
 bash -n scripts/smoke-test-image.sh
+bash -n scripts/create-manifest-failure-issue.sh
 bash -n scripts/report-manifest.sh
 bash -n scripts/report-freshness.sh
 bash -n scripts/branch-drift-report.sh

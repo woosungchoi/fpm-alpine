@@ -1,0 +1,79 @@
+name: branch-sync-pr
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Optional single target branch"
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - '8.0'
+          - '8.1'
+          - '8.2'
+          - '8.3'
+          - '8.4'
+  schedule:
+    - cron: '37 5 * * 1'
+
+concurrency:
+  group: branch-sync-pr-${{ github.ref }}-${{ inputs.target_branch || 'all' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+jobs:
+  create-safe-sync-prs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BRANCH_SYNC_BASE: "8.5"
+      BRANCH_SYNC_TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch != 'all' && inputs.target_branch || '8.0 8.1 8.2 8.3 8.4' }}
+      BRANCH_SYNC_OUTPUT_DIR: branch-sync-plans
+      BRANCH_SYNC_PR_LABELS: "maintenance,branch-sync,safe-sync"
+      DRY_RUN: "0"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate target branch input
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch || 'all' }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_BRANCH" in
+            all|8.0|8.1|8.2|8.3|8.4) ;;
+            *) echo "Unsupported target_branch: $TARGET_BRANCH" >&2; exit 64 ;;
+          esac
+
+      - name: Checkout maintained branches
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch maintained branch refs
+        run: |
+          git fetch origin 8.0 8.1 8.2 8.3 8.4 8.5 --prune
+
+      - name: Plan safe branch sync
+        run: ./scripts/plan-branch-sync.sh
+
+      - name: Create or update branch sync PRs
+        run: ./scripts/create-branch-sync-prs.sh
+
+      - name: Upload branch sync plans
+        if: always()
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: branch-sync-plans
+          path: branch-sync-plans/

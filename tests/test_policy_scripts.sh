@@ -119,6 +119,102 @@ assert_contains "$fixture_dir/reports/dependency-freshness.md" "Installed packag
 assert_contains "$fixture_dir/reports/dependency-freshness.md" "Manual follow-up guide"
 assert_contains "$fixture_dir/reports/dependency-freshness.md" 'Pinned Imagick: `3.8.1`'
 
+assert_file scripts/create-dependency-freshness-issue.sh
+assert_executable scripts/create-dependency-freshness-issue.sh
+assert_contains scripts/create-dependency-freshness-issue.sh "gh issue create"
+assert_contains scripts/create-dependency-freshness-issue.sh "gh issue comment"
+assert_contains scripts/create-dependency-freshness-issue.sh "dependency-freshness"
+assert_contains .github/workflows/dependency-freshness.yml "issues: write"
+assert_contains .github/workflows/dependency-freshness.yml "Create issue when dependency updates are available"
+assert_contains .github/workflows/dependency-freshness.yml "scripts/create-dependency-freshness-issue.sh"
+assert_contains docs/ci-operations.md 'opens or updates a `dependency-freshness` issue'
+
+freshness_issue_dir="$fixture_dir/freshness-issue"
+mkdir -p "$freshness_issue_dir/bin" "$freshness_issue_dir/reports"
+cat > "$freshness_issue_dir/reports/dependency-freshness.json" <<'JSON'
+{
+  "dockerfile": "Dockerfile",
+  "baseImage": "php:8.5-fpm-alpine",
+  "pinnedImagickVersion": "3.8.1",
+  "pecl": [
+    {"package": "imagick", "pinned": "3.8.1", "latest": "3.8.2", "status": "ok", "updateAvailable": true},
+    {"package": "redis", "pinned": null, "latest": "6.2.0", "status": "ok", "updateAvailable": false}
+  ],
+  "images": []
+}
+JSON
+cat > "$freshness_issue_dir/reports/dependency-freshness.md" <<'MD'
+# fpm-alpine dependency freshness report
+
+- `imagick`: pinned `3.8.1`, latest `3.8.2` (ok, update available)
+MD
+cat > "$freshness_issue_dir/bin/gh" <<'GH'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$*" >> "$GH_FAKE_LOG"
+case "$*" in
+  "issue list"*) echo '' ;;
+  "label list"*) echo '' ;;
+  "label create"*) exit 0 ;;
+  "issue create"*) echo "https://github.com/woosungchoi/fpm-alpine/issues/123" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 64 ;;
+esac
+GH
+chmod +x "$freshness_issue_dir/bin/gh"
+GH_FAKE_LOG="$freshness_issue_dir/gh.log" \
+PATH="$freshness_issue_dir/bin:$PATH" \
+GITHUB_REPOSITORY="woosungchoi/fpm-alpine" \
+GITHUB_RUN_ID="123456" \
+FRESHNESS_REPORT_JSON="$freshness_issue_dir/reports/dependency-freshness.json" \
+FRESHNESS_REPORT_MD="$freshness_issue_dir/reports/dependency-freshness.md" \
+./scripts/create-dependency-freshness-issue.sh
+assert_contains "$freshness_issue_dir/gh.log" "issue create"
+assert_contains "$freshness_issue_dir/gh.log" "dependency-freshness"
+
+freshness_existing_dir="$fixture_dir/freshness-existing-issue"
+mkdir -p "$freshness_existing_dir/bin" "$freshness_existing_dir/reports"
+cp "$freshness_issue_dir/reports/dependency-freshness.json" "$freshness_existing_dir/reports/dependency-freshness.json"
+cp "$freshness_issue_dir/reports/dependency-freshness.md" "$freshness_existing_dir/reports/dependency-freshness.md"
+cat > "$freshness_existing_dir/bin/gh" <<'GH'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$*" >> "$GH_FAKE_LOG"
+case "$*" in
+  "issue list"*) echo '456' ;;
+  "label list"*) echo 'dependency-freshness' ;;
+  "issue comment"*) exit 0 ;;
+  *) echo "unexpected gh call: $*" >&2; exit 64 ;;
+esac
+GH
+chmod +x "$freshness_existing_dir/bin/gh"
+GH_FAKE_LOG="$freshness_existing_dir/gh.log" \
+PATH="$freshness_existing_dir/bin:$PATH" \
+GITHUB_REPOSITORY="woosungchoi/fpm-alpine" \
+GITHUB_RUN_ID="123456" \
+FRESHNESS_REPORT_JSON="$freshness_existing_dir/reports/dependency-freshness.json" \
+FRESHNESS_REPORT_MD="$freshness_existing_dir/reports/dependency-freshness.md" \
+./scripts/create-dependency-freshness-issue.sh
+assert_contains "$freshness_existing_dir/gh.log" "issue comment 456"
+if grep -Fq "issue create" "$freshness_existing_dir/gh.log"; then
+  fail "existing dependency-freshness issue should be commented on, not duplicated"
+fi
+
+freshness_no_signal_dir="$fixture_dir/freshness-no-signal"
+mkdir -p "$freshness_no_signal_dir/bin" "$freshness_no_signal_dir/reports"
+cat > "$freshness_no_signal_dir/reports/dependency-freshness.json" <<'JSON'
+{"pecl":[{"package":"imagick","pinned":"3.8.1","latest":"3.8.1","status":"ok","updateAvailable":false}],"images":[],"warnings":[]}
+JSON
+cat > "$freshness_no_signal_dir/bin/gh" <<'GH'
+#!/usr/bin/env bash
+echo "gh should not be called for no-signal freshness reports" >&2
+exit 99
+GH
+chmod +x "$freshness_no_signal_dir/bin/gh"
+PATH="$freshness_no_signal_dir/bin:$PATH" \
+GITHUB_REPOSITORY="woosungchoi/fpm-alpine" \
+FRESHNESS_REPORT_JSON="$freshness_no_signal_dir/reports/dependency-freshness.json" \
+./scripts/create-dependency-freshness-issue.sh
+
 assert_contains scripts/smoke-test-image.sh "run_check \"extension: imagick\""
 assert_contains scripts/smoke-test-image.sh "GITHUB_STEP_SUMMARY"
 assert_contains scripts/report-manifest.sh "MANIFEST_RETRY_ATTEMPTS"

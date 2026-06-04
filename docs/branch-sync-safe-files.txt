@@ -1,0 +1,18 @@
+# Safe files that branch-sync automation may copy from 8.5 to maintained version branches.
+# Dockerfile, hooks/*, image build contexts, and branch-protection settings are intentionally excluded.
+.github/workflows/branch-drift.yml
+.github/workflows/dependency-freshness.yml
+.github/workflows/verify-published-manifest.yml
+.github/workflows/smoke-test.yml
+.github/workflows/branch-sync-pr.yml
+scripts/branch-drift-report.sh
+scripts/plan-branch-sync.sh
+scripts/create-branch-sync-prs.sh
+scripts/report-freshness.sh
+scripts/report-manifest.sh
+scripts/check-manifest.sh
+scripts/smoke-test-image.sh
+docs/ci-operations.md
+docs/branch-drift-allowlist.tsv
+docs/branch-sync-safe-files.txt
+tests/test_policy_scripts.sh

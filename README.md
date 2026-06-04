@@ -93,6 +93,7 @@ This repository is maintained through version branches and lightweight verificat
 - `verify-published-manifest` runs on a schedule and verifies the published Docker Hub tags for maintained branches.
 - `dependency-freshness` produces report-only dependency/source freshness observations for maintainers.
 - `branch-drift` produces report-only workflow/script/policy drift reports across maintained branches.
+- `branch-sync-pr` can create safe-file sync PRs from `8.5` to maintained branches for workflow/script/docs/test guardrails only.
 - Maintained branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
 

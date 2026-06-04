@@ -29,6 +29,10 @@ Non-required / report-only workflows:
 - `branch-drift`
   - Report-only maintained-branch drift detection.
   - Does not sync branches automatically.
+- `branch-sync-pr`
+  - Creates safe-file sync PRs from `8.5` to maintained version branches.
+  - Only copies allowlisted workflow/script/docs/test guardrails.
+  - Never copies `Dockerfile`, Docker Hub hooks, or publish-sensitive files.
 
 ## Workflow responsibilities
 
@@ -115,12 +119,37 @@ Triage:
 1. Review `branch-drift-reports/branch-drift.md`.
 2. Ignore `allowed-drift` only if the allowlist reason still matches current policy.
 3. For unexpected `drift`, manually inspect the file difference before syncing.
-4. Open an explicit PR for any branch sync; do not auto-merge branch-wide drift fixes.
+4. Use `branch-sync-pr` only for allowlisted safe workflow/script/docs/test guardrails.
+5. Open an explicit PR for any non-safe branch sync; do not auto-merge branch-wide drift fixes.
 
 Rollback:
 
 - Disable or revert the `branch-drift` workflow if it is noisy.
 - Keep the allowlist narrow and reasoned.
+
+### `branch-sync-pr`
+
+Purpose: Create safe-file sync PRs from `8.5` to maintained branches `8.0` through `8.4` when report-only branch drift identifies missing guardrails.
+
+Automation boundary:
+
+- Allowed: files listed in `docs/branch-sync-safe-files.txt`.
+- Blocked/manual: `Dockerfile`, Docker Hub hooks, publish-sensitive files, PHP base image lines, `IMAGICK_VERSION`, `gnu-libiconv`, and branch protection settings.
+- Merge policy: generated PRs require human review; this workflow does not auto-merge.
+
+Triage:
+
+1. Run `branch-sync-pr` manually with a single `target_branch` first when testing changes.
+2. Review the generated PR body for synced files and blocked/manual files.
+3. Confirm the PR only touches workflow/script/docs/test guardrails.
+4. Wait for target-branch `docker-smoke` to pass.
+5. Close the PR if it includes an unexpected safe-file copy or if blocked/manual drift needs a separate human-authored PR.
+
+Rollback:
+
+- Close generated sync PRs without merging.
+- Delete `sync/branch-drift-*` branches if the generated diff is noisy.
+- Revert `.github/workflows/branch-sync-pr.yml` and the two branch-sync scripts if generation itself is faulty.
 
 ## Merge checklist
 

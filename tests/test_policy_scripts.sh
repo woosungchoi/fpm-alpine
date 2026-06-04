@@ -100,6 +100,7 @@ PY
 if grep -Fq "git add -A" scripts/create-branch-sync-prs.sh; then
   fail "create-branch-sync-prs.sh must stage only planned safe files, not git add -A"
 fi
+assert_contains scripts/create-branch-sync-prs.sh "git diff --cached --quiet"
 
 fixture_dir="$(mktemp -d)"
 cat > "$fixture_dir/Dockerfile" <<'DOCKERFILE'

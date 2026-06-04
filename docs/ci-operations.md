@@ -27,6 +27,7 @@ Non-required / report-only workflows:
 - `dependency-freshness`
   - Report-only dependency/source freshness observations.
   - Does not mutate Dockerfiles, open PRs, or publish images.
+  - When freshness signals require review, opens or updates a `dependency-freshness` issue.
 - `branch-drift`
   - Report-only maintained-branch drift detection.
   - Does not sync branches automatically.
@@ -104,8 +105,9 @@ Triage:
 
 1. Treat image `inspect_failed` as an observation, not an immediate CI failure.
 2. Treat PECL latest changes as manual review prompts.
-3. Keep `imagick-3.8.1` unless branch-specific smoke validation proves a different version is safe.
-4. Do not automatically update Dockerfiles from freshness output.
+3. If a `dependency-freshness` issue was opened, treat it as a manual review queue item and close it only after the candidate update is accepted, rejected, or no longer reported.
+4. Keep `imagick-3.8.1` unless branch-specific smoke validation proves a different version is safe.
+5. Do not automatically update Dockerfiles from freshness output.
 
 Rollback:
 

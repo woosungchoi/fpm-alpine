@@ -2,7 +2,7 @@
 
 Custom PHP-FPM Alpine images used for WordPress / Gnuboard / Rhymix deployments.
 
-See also: [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md)
+See also: [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md) and [docs/ci-operations.md](./docs/ci-operations.md).
 
 > [!IMPORTANT]
 > This repository's **actively supported image lines** are the version branches **`8.0` through `8.5`**.
@@ -92,6 +92,7 @@ This repository is maintained through version branches and lightweight verificat
 - `smoke-test` builds the branch Dockerfile and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
 - `verify-published-manifest` runs on a schedule and verifies the published Docker Hub tags for maintained branches.
 - `dependency-freshness` produces report-only dependency/source freshness observations for maintainers.
+- `branch-drift` produces report-only workflow/script/policy drift reports across maintained branches.
 - Maintained branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
 

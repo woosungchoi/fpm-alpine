@@ -87,6 +87,12 @@ The repository-side policy is now:
 - treat `8.5` as the mainline in docs and internal references
 - avoid new work on legacy PHP 7.4 history
 - treat PHP 7.4 as frozen / unsupported here
+- keep Docker Hub hooks as the publish path; use GitHub Actions for verification, observation, and report-only guardrails
+- keep `docker-smoke` as the required branch-protection check, while manifest/freshness/drift workflows remain non-required reports
+
+## CI / operations runbook
+
+See [docs/ci-operations.md](./docs/ci-operations.md) for the maintained branch protection model, workflow triage steps, report-only workflow policy, and rollback procedure.
 
 
 ## Maintained Imagick baseline

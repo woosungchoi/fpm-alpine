@@ -8,6 +8,7 @@ DRY_RUN="${DRY_RUN:-${BRANCH_SYNC_DRY_RUN:-1}}"
 LABELS="${BRANCH_SYNC_PR_LABELS:-maintenance,branch-sync,safe-sync}"
 LABELS_DISPLAY="$(printf '%s' "$LABELS" | sed 's/,/, /g')"
 BRANCH_PREFIX="${BRANCH_SYNC_BRANCH_PREFIX:-sync/branch-drift}"
+DISPATCH_WORKFLOW="${BRANCH_SYNC_DISPATCH_WORKFLOW:-}"
 REPO="${GITHUB_REPOSITORY:-woosungchoi/fpm-alpine}"
 
 usage() {
@@ -212,6 +213,11 @@ PY
       gh pr edit "$pr_url" --repo "$REPO" --add-label "$label" >/dev/null 2>&1 || true
     done
     echo "Created PR: $pr_url" >> "$prs_md"
+  fi
+
+  if [ -n "$DISPATCH_WORKFLOW" ]; then
+    gh workflow run "$DISPATCH_WORKFLOW" --repo "$REPO" --ref "$branch_name" >/dev/null
+    echo "Dispatched validation workflow $DISPATCH_WORKFLOW for $branch_name" >> "$prs_md"
   fi
 
   git checkout "$current_branch" >/dev/null

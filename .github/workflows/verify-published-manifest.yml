@@ -1,6 +1,14 @@
 name: verify-published-manifest
 
 on:
+  push:
+    branches:
+      - '8.0'
+      - '8.1'
+      - '8.2'
+      - '8.3'
+      - '8.4'
+      - '8.5'
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
@@ -10,10 +18,15 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: verify-published-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify-maintained-tags:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.image_ref == '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
     strategy:
@@ -28,25 +41,42 @@ jobs:
           - woosungchoi/fpm-alpine:8.5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: actions/checkout@v6.0.2
 
       - name: Verify published manifest
-        run: ./scripts/check-manifest.sh "${{ matrix.image_ref }}"
+        env:
+          IMAGE_REF: ${{ matrix.image_ref }}
+          MANIFEST_RETRY_ATTEMPTS: "5"
+          MANIFEST_RETRY_DELAY_SECONDS: "20"
+        run: ./scripts/report-manifest.sh "$IMAGE_REF"
+
+      - name: Upload manifest report
+        if: always()
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: manifest-report-${{ strategy.job-index }}
+          path: manifest-reports/
 
   verify-single-input:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.image_ref != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: actions/checkout@v6.0.2
 
       - name: Verify published manifest
-        run: ./scripts/check-manifest.sh "${{ inputs.image_ref }}"
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+          MANIFEST_RETRY_ATTEMPTS: "5"
+          MANIFEST_RETRY_DELAY_SECONDS: "20"
+        run: ./scripts/report-manifest.sh "$IMAGE_REF"
+
+      - name: Upload manifest report
+        if: always()
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: manifest-single-input
+          path: manifest-reports/

@@ -186,7 +186,7 @@ PY
     git checkout "origin/$BASE_BRANCH" -- "$path"
   done < "$OUTPUT_DIR/files-$target.txt"
 
-  if git diff --quiet; then
+  if git diff --quiet && git diff --cached --quiet; then
     echo "No changes after safe sync for $target" >> "$prs_md"
     git checkout "$current_branch" >/dev/null
     continue

@@ -11,6 +11,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   report:
@@ -36,3 +37,8 @@ jobs:
         with:
           name: dependency-freshness-report
           path: freshness-reports/
+
+      - name: Create issue when dependency updates are available
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/create-dependency-freshness-issue.sh

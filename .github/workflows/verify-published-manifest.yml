@@ -29,6 +29,7 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: read
+      issues: write
     strategy:
       fail-fast: false
       matrix:
@@ -57,12 +58,20 @@ jobs:
           name: manifest-report-${{ strategy.job-index }}
           path: manifest-reports/
 
+      - name: Create issue on manifest verification failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ${{ matrix.image_ref }}
+        run: scripts/create-manifest-failure-issue.sh
+
   verify-single-input:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.image_ref != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
       contents: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -80,3 +89,10 @@ jobs:
         with:
           name: manifest-single-input
           path: manifest-reports/
+
+      - name: Create issue on manifest verification failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: scripts/create-manifest-failure-issue.sh

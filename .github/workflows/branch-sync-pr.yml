@@ -26,7 +26,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
-  actions: read
+  actions: write
 
 jobs:
   create-safe-sync-prs:
@@ -37,6 +37,7 @@ jobs:
       BRANCH_SYNC_TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch != 'all' && inputs.target_branch || '8.0 8.1 8.2 8.3 8.4' }}
       BRANCH_SYNC_OUTPUT_DIR: branch-sync-plans
       BRANCH_SYNC_PR_LABELS: "maintenance,branch-sync,safe-sync"
+      BRANCH_SYNC_DISPATCH_WORKFLOW: "smoke-test.yml"
       DRY_RUN: "0"
       GH_TOKEN: ${{ github.token }}
     steps:

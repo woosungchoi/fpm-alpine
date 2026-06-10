@@ -23,10 +23,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  actions: write
+  contents: read
 
 jobs:
   create-safe-sync-prs:
@@ -38,8 +35,8 @@ jobs:
       BRANCH_SYNC_OUTPUT_DIR: branch-sync-plans
       BRANCH_SYNC_PR_LABELS: "maintenance,branch-sync,safe-sync"
       BRANCH_SYNC_DISPATCH_WORKFLOW: "smoke-test.yml"
+      BRANCH_SYNC_ENABLE_AUTO_MERGE: "1"
       DRY_RUN: "0"
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Validate target branch input
         env:
@@ -51,16 +48,29 @@ jobs:
             *) echo "Unsupported target_branch: $TARGET_BRANCH" >&2; exit 64 ;;
           esac
 
+      - name: Create branch-sync GitHub App token
+        id: branch-sync-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.BRANCH_SYNC_APP_ID }}
+          private-key: ${{ secrets.BRANCH_SYNC_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: fpm-alpine
+          permission-actions: write
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
       - name: Checkout maintained branches
         uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
-          token: ${{ github.token }}
+          token: ${{ steps.branch-sync-token.outputs.token }}
 
       - name: Configure git author
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "fpm-alpine-branch-sync[bot]"
+          git config user.email "fpm-alpine-branch-sync[bot]@users.noreply.github.com"
 
       - name: Fetch maintained branch refs
         run: |
@@ -70,6 +80,8 @@ jobs:
         run: ./scripts/plan-branch-sync.sh
 
       - name: Create or update branch sync PRs
+        env:
+          GH_TOKEN: ${{ steps.branch-sync-token.outputs.token }}
         run: ./scripts/create-branch-sync-prs.sh
 
       - name: Upload branch sync plans

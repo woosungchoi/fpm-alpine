@@ -270,7 +270,7 @@ PY
     git add -- "$path"
   done < "$OUTPUT_DIR/files-$target.txt"
   git commit -m "ci: sync safe branch guardrails from $BASE_BRANCH"
-  git push origin "HEAD:$branch_name"
+  git push --force-with-lease origin "HEAD:$branch_name"
 
   existing_pr="$(gh pr list --repo "$REPO" --head "$branch_name" --base "$target" --state open --json number --jq '.[0].number // empty')"
   pr_ref=""

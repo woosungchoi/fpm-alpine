@@ -106,6 +106,7 @@ if grep -Fq "git add -A" scripts/create-branch-sync-prs.sh; then
 fi
 assert_contains scripts/create-branch-sync-prs.sh "git diff --cached --quiet"
 assert_contains scripts/create-branch-sync-prs.sh "gh workflow run"
+assert_contains scripts/create-branch-sync-prs.sh "git push --force-with-lease origin"
 
 fixture_dir="$(mktemp -d)"
 cat > "$fixture_dir/Dockerfile" <<'DOCKERFILE'

@@ -34,7 +34,7 @@ jobs:
       BRANCH_SYNC_TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch != 'all' && inputs.target_branch || '8.0 8.1 8.2 8.3 8.4' }}
       BRANCH_SYNC_OUTPUT_DIR: branch-sync-plans
       BRANCH_SYNC_PR_LABELS: "maintenance,branch-sync,safe-sync"
-      BRANCH_SYNC_DISPATCH_WORKFLOW: "smoke-test.yml"
+      BRANCH_SYNC_DISPATCH_WORKFLOW: ""
       BRANCH_SYNC_ENABLE_AUTO_MERGE: "1"
       DRY_RUN: "0"
     steps:

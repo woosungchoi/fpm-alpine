@@ -142,6 +142,7 @@ Automation boundary:
 - Blocked/manual: `Dockerfile`, Docker Hub hooks, publish-sensitive files, PHP base image lines, `IMAGICK_VERSION`, `gnu-libiconv`, and branch protection settings.
 - Merge policy: generated PRs are auto-merge candidates only when the workflow validates branch name, base branch, labels, and changed files against the safe-sync plan; branch protection still requires `docker-smoke` before GitHub performs the merge.
 - Token policy: `branch-sync-pr` must use a GitHub App installation token, not the default `GITHUB_TOKEN`, so PR creation/update events can trigger required checks normally.
+- Check policy: generated PR branch pushes trigger `docker-smoke` normally; `branch-sync-pr` should not manually dispatch `smoke-test`, because duplicate check runs can leave a cancelled `docker-smoke` in the PR rollup and block native auto-merge.
 
 GitHub App setup:
 

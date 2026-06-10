@@ -16,7 +16,7 @@ on:
           - '8.3'
           - '8.4'
   schedule:
-    - cron: '37 5 * * 1'
+    - cron: '37 5 * * *'
 
 concurrency:
   group: branch-sync-pr-${{ github.ref }}-${{ inputs.target_branch || 'all' }}

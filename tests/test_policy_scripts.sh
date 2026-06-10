@@ -40,9 +40,11 @@ assert_executable scripts/plan-branch-sync.sh
 assert_file scripts/create-branch-sync-prs.sh
 assert_executable scripts/create-branch-sync-prs.sh
 assert_file .github/workflows/branch-sync-pr.yml
-assert_contains .github/workflows/branch-sync-pr.yml "pull-requests: write"
-assert_contains .github/workflows/branch-sync-pr.yml "actions: write"
-assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_DISPATCH_WORKFLOW: \"smoke-test.yml\""
+assert_contains .github/workflows/branch-sync-pr.yml "actions/create-github-app-token@v2"
+assert_contains .github/workflows/branch-sync-pr.yml "permission-pull-requests: write"
+assert_contains .github/workflows/branch-sync-pr.yml "permission-actions: write"
+assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_ENABLE_AUTO_MERGE: \"1\""
+assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_DISPATCH_WORKFLOW: \"\""
 assert_contains .github/workflows/branch-sync-pr.yml "actions/checkout@v6.0.2"
 assert_contains .github/workflows/branch-sync-pr.yml "type: choice"
 assert_contains .github/workflows/branch-sync-pr.yml "TARGET_BRANCH:"
@@ -104,6 +106,7 @@ if grep -Fq "git add -A" scripts/create-branch-sync-prs.sh; then
 fi
 assert_contains scripts/create-branch-sync-prs.sh "git diff --cached --quiet"
 assert_contains scripts/create-branch-sync-prs.sh "gh workflow run"
+assert_contains scripts/create-branch-sync-prs.sh "git push --force-with-lease origin"
 
 fixture_dir="$(mktemp -d)"
 cat > "$fixture_dir/Dockerfile" <<'DOCKERFILE'

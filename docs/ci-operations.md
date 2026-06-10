@@ -35,6 +35,7 @@ Non-required / report-only workflows:
   - Creates safe-file sync PRs from `8.5` to maintained version branches.
   - Only copies allowlisted workflow/script/docs/test guardrails.
   - Never copies `Dockerfile`, Docker Hub hooks, or publish-sensitive files.
+  - Uses a repository-scoped GitHub App installation token and enables PR auto-merge only after validating the generated PR shape and changed files.
 
 ## Workflow responsibilities
 
@@ -139,7 +140,19 @@ Automation boundary:
 
 - Allowed: files listed in `docs/branch-sync-safe-files.txt`.
 - Blocked/manual: `Dockerfile`, Docker Hub hooks, publish-sensitive files, PHP base image lines, `IMAGICK_VERSION`, `gnu-libiconv`, and branch protection settings.
-- Merge policy: generated PRs require human review; this workflow does not auto-merge.
+- Merge policy: generated PRs are auto-merge candidates only when the workflow validates branch name, base branch, labels, and changed files against the safe-sync plan; branch protection still requires `docker-smoke` before GitHub performs the merge.
+- Token policy: `branch-sync-pr` must use a GitHub App installation token, not the default `GITHUB_TOKEN`, so PR creation/update events can trigger required checks normally.
+- Check policy: generated PR branch pushes trigger `docker-smoke` normally; `branch-sync-pr` should not manually dispatch `smoke-test`, because duplicate check runs can leave a cancelled `docker-smoke` in the PR rollup and block native auto-merge.
+- Branch policy: `sync/branch-drift-*` branches are generated output and may be updated with `--force-with-lease`; protected maintained branches are updated only through PR merge.
+
+GitHub App setup:
+
+1. Create a GitHub App installed only on `woosungchoi/fpm-alpine`.
+2. Grant repository permissions: Contents read/write, Pull requests read/write, Issues read/write, and Actions read/write.
+3. Generate a private key for the app.
+4. Add repository variable `BRANCH_SYNC_APP_ID` with the numeric App ID.
+5. Add repository secret `BRANCH_SYNC_APP_PRIVATE_KEY` with the full PEM private key.
+6. Enable repository setting **Allow auto-merge** so `gh pr merge --auto --squash` can arm auto-merge while `docker-smoke` is pending.
 
 Triage:
 

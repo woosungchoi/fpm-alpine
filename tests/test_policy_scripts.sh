@@ -44,7 +44,7 @@ assert_contains .github/workflows/branch-sync-pr.yml "actions/create-github-app-
 assert_contains .github/workflows/branch-sync-pr.yml "permission-pull-requests: write"
 assert_contains .github/workflows/branch-sync-pr.yml "permission-actions: write"
 assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_ENABLE_AUTO_MERGE: \"1\""
-assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_DISPATCH_WORKFLOW: \"smoke-test.yml\""
+assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_DISPATCH_WORKFLOW: \"\""
 assert_contains .github/workflows/branch-sync-pr.yml "actions/checkout@v6.0.2"
 assert_contains .github/workflows/branch-sync-pr.yml "type: choice"
 assert_contains .github/workflows/branch-sync-pr.yml "TARGET_BRANCH:"

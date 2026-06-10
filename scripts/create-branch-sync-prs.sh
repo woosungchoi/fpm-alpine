@@ -9,6 +9,9 @@ LABELS="${BRANCH_SYNC_PR_LABELS:-maintenance,branch-sync,safe-sync}"
 LABELS_DISPLAY="$(printf '%s' "$LABELS" | sed 's/,/, /g')"
 BRANCH_PREFIX="${BRANCH_SYNC_BRANCH_PREFIX:-sync/branch-drift}"
 DISPATCH_WORKFLOW="${BRANCH_SYNC_DISPATCH_WORKFLOW:-}"
+ENABLE_AUTO_MERGE="${BRANCH_SYNC_ENABLE_AUTO_MERGE:-0}"
+AUTO_MERGE_SUBJECT="${BRANCH_SYNC_AUTO_MERGE_SUBJECT:-ci: sync safe branch guardrails}"
+AUTO_MERGE_BODY="${BRANCH_SYNC_AUTO_MERGE_BODY:-Automated safe branch-sync merge after required checks pass.}"
 REPO="${GITHUB_REPOSITORY:-woosungchoi/fpm-alpine}"
 
 usage() {
@@ -113,6 +116,75 @@ is_blocked_path() {
   return 1
 }
 
+validate_pr_for_auto_merge() {
+  local pr_ref="$1"
+  local expected_target="$2"
+  local expected_head="$3"
+  local allowed_files="$4"
+  local pr_json
+  pr_json="$(mktemp)"
+  gh pr view "$pr_ref" --repo "$REPO" --json number,baseRefName,headRefName,files,labels,url > "$pr_json"
+  python3 - "$pr_json" "$expected_target" "$expected_head" "$LABELS" "$allowed_files" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+pr_path, expected_target, expected_head, labels_csv, allowed_path = sys.argv[1:]
+pr = json.loads(Path(pr_path).read_text())
+required_labels = {item.strip() for item in labels_csv.split(',') if item.strip()}
+actual_labels = {item.get('name') for item in pr.get('labels', [])}
+allowed_files = {line.strip() for line in Path(allowed_path).read_text().splitlines() if line.strip()}
+changed_files = [item['path'] for item in pr.get('files', [])]
+blocked_exact = {'Dockerfile', '.dockerignore', 'hooks', 'branch-sync-plans'}
+blocked_suffixes = ('.secret', '.pem', '.key')
+
+errors = []
+if pr.get('baseRefName') != expected_target:
+    errors.append(f"unexpected base {pr.get('baseRefName')} != {expected_target}")
+if pr.get('headRefName') != expected_head:
+    errors.append(f"unexpected head {pr.get('headRefName')} != {expected_head}")
+missing = required_labels - actual_labels
+if missing:
+    errors.append(f"missing labels: {sorted(missing)}")
+if not changed_files:
+    errors.append('no changed files')
+for path in changed_files:
+    if path in blocked_exact or path.startswith('hooks/') or path.startswith('branch-sync-plans/') or path.endswith(blocked_suffixes):
+        errors.append(f"blocked path changed: {path}")
+    if path not in allowed_files:
+        errors.append(f"path is not in this safe-sync plan: {path}")
+if errors:
+    raise SystemExit('; '.join(errors))
+print(pr['number'])
+PY
+  rm -f "$pr_json"
+}
+
+enable_auto_merge() {
+  local pr_ref="$1"
+  local expected_target="$2"
+  local expected_head="$3"
+  local allowed_files="$4"
+  [ "$ENABLE_AUTO_MERGE" = "1" ] || return 0
+
+  local pr_number
+  pr_number="$(validate_pr_for_auto_merge "$pr_ref" "$expected_target" "$expected_head" "$allowed_files")"
+  local output
+  if ! output="$(gh pr merge "$pr_number" --repo "$REPO" --squash --auto --subject "$AUTO_MERGE_SUBJECT" --body "$AUTO_MERGE_BODY" 2>&1)"; then
+    case "$output" in
+      *already*auto*merge*|*Auto-merge*already*)
+        echo "Auto-merge already enabled for PR #$pr_number" >> "$prs_md"
+        ;;
+      *)
+        printf '%s\n' "$output" >&2
+        return 1
+        ;;
+    esac
+  else
+    echo "Enabled auto-merge for PR #$pr_number" >> "$prs_md"
+  fi
+}
+
 for target in $TARGETS; do
   plan_json="$OUTPUT_DIR/$target.json"
   if [ ! -f "$plan_json" ]; then
@@ -201,8 +273,10 @@ PY
   git push origin "HEAD:$branch_name"
 
   existing_pr="$(gh pr list --repo "$REPO" --head "$branch_name" --base "$target" --state open --json number --jq '.[0].number // empty')"
+  pr_ref=""
   if [ -n "$existing_pr" ]; then
     gh pr comment "$existing_pr" --repo "$REPO" --body-file "$body_file" >/dev/null || true
+    pr_ref="$existing_pr"
     echo "Updated existing PR #$existing_pr for $target" >> "$prs_md"
   else
     pr_url="$(gh pr create --repo "$REPO" --base "$target" --head "$branch_name" --title "ci: sync safe branch guardrails to $target" --body-file "$body_file")"
@@ -212,8 +286,11 @@ PY
       [ -n "$label" ] || continue
       gh pr edit "$pr_url" --repo "$REPO" --add-label "$label" >/dev/null 2>&1 || true
     done
+    pr_ref="$pr_url"
     echo "Created PR: $pr_url" >> "$prs_md"
   fi
+
+  enable_auto_merge "$pr_ref" "$target" "$branch_name" "$OUTPUT_DIR/files-$target.txt"
 
   if [ -n "$DISPATCH_WORKFLOW" ]; then
     gh workflow run "$DISPATCH_WORKFLOW" --repo "$REPO" --ref "$branch_name" >/dev/null

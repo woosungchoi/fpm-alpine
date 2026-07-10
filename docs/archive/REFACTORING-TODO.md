@@ -1,5 +1,9 @@
 # fpm-alpine refactoring roadmap
 
+> **ARCHIVED — NON-AUTHORITATIVE — SUPERSEDED:** This completed roadmap is historical evidence only. **All support, branch, tag, `latest`, branch-sync, and publisher instructions below are historical only and MUST NOT be followed.** Current policy and operations supersede them: [SUPPORT.md](../../SUPPORT.md), [BRANCH-AND-TAG-POLICY.md](../../BRANCH-AND-TAG-POLICY.md), and [CI operations](../ci-operations.md).
+>
+> Superseded assumptions: `8.0`/`8.1` are frozen EOL artifacts that are never rebuilt; no `latest` tag is published; the old single-trunk migration target for `8.2`–`8.5` is not current policy.
+
 This document records the cleanup direction used to reduce branch/version drift without mixing legacy PHP 7.4 implementation history into the active lines.
 
 ## Goals

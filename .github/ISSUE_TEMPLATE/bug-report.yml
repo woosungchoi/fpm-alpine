@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible non-security problem with an image
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose vulnerabilities or secrets here. Use the private reporting route in SECURITY.md instead.
+  - type: input
+    id: image
+    attributes:
+      label: Image tag
+      description: Use an explicit tag, for example woosungchoi/fpm-alpine:8.5.
+      placeholder: woosungchoi/fpm-alpine:8.5
+    validations:
+      required: true
+  - type: input
+    id: architecture
+    attributes:
+      label: Architecture
+      placeholder: linux/amd64 or linux/arm64
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe reproducer. Remove credentials and other sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste only non-sensitive log excerpts.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I confirmed this tag is supported according to SUPPORT.md.
+          required: true
+        - label: This report contains no vulnerability details, credentials, tokens, or other secrets.
+          required: true

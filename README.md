@@ -2,12 +2,10 @@
 
 Custom PHP-FPM Alpine images used for WordPress / Gnuboard / Rhymix deployments.
 
-See also: [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md) and [docs/ci-operations.md](./docs/ci-operations.md).
+See also: [SUPPORT.md](./SUPPORT.md), [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md), and [docs/ci-operations.md](./docs/ci-operations.md).
 
 > [!IMPORTANT]
-> This repository's **actively supported image lines** are the version branches **`8.0` through `8.5`**.
->
-> **PHP 7.4 / legacy `master` is no longer actively maintained or updated.**
+> PHP `8.0` and `8.1` images are frozen, unsupported legacy artifacts and are never rebuilt. See [SUPPORT.md](./SUPPORT.md) for the canonical lifecycle policy.
 >
 > The repository's current primary/default branch is **`8.5`**.
 >
@@ -15,16 +13,16 @@ See also: [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md) and [docs/ci-op
 
 ## Current branch / version map
 
-### Active supported branches
+### Version branches
 
 | Branch | Base image | Status |
 | --- | --- | --- |
-| `8.0` | `php:8.0-fpm-alpine` | supported |
-| `8.1` | `php:8.1-fpm-alpine` | supported |
-| `8.2` | `php:8.2-fpm-alpine` | supported |
-| `8.3` | `php:8.3-fpm-alpine` | supported |
-| `8.4` | `php:8.4-fpm-alpine` | supported |
-| `8.5` | `php:8.5-fpm-alpine` | supported / primary branch |
+| `8.0` | `php:8.0-fpm-alpine` | EOL / frozen / unsupported |
+| `8.1` | `php:8.1-fpm-alpine` | EOL / frozen / unsupported |
+| `8.2` | `php:8.2-fpm-alpine` | security-only |
+| `8.3` | `php:8.3-fpm-alpine` | security-only |
+| `8.4` | `php:8.4-fpm-alpine` | active / security support |
+| `8.5` | `php:8.5-fpm-alpine` | active / security support; primary branch |
 
 ### Legacy branch
 
@@ -34,27 +32,20 @@ See also: [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md) and [docs/ci-op
 
 ## Support and branch policy
 
-This repository now follows a simple policy:
-
-- actively maintained PHP lines live on version branches **`8.0` through `8.5`**
-- **`8.5` is the current primary/default branch** for the repository
-- legacy `master` is a **PHP 7.4 historical line** and is no longer part of the active remote branch set
-- **PHP 7.4 is no longer updated in this repository**
-- Docker Hub automated builds are intended for the supported branches **`8.0` through `8.5`**
+The canonical support matrix and definitions are in [SUPPORT.md](./SUPPORT.md). `8.5` is the primary/default branch. PHP 7.4 / legacy `master`, PHP 8.0, and PHP 8.1 are unsupported frozen history.
 
 What that means in practice:
 
 - browse and document the repo as if **`8.5` is the mainline**
-- use older version branches only when you intentionally need that exact PHP line
+- use only a supported version branch for new deployments
 - do **not** start new work from the legacy PHP 7.4 branch history
 - do **not** expect PHP 7.4 fixes or refreshes going forward
 
 ## Docker tags / Docker Hub notes
 
-- Supported automated branch builds should target **`8.0`, `8.1`, `8.2`, `8.3`, `8.4`, `8.5`**
-- The legacy PHP 7.4 `master` line is no longer part of the active remote branch set
+- PHP 8.0 and 8.1 tags are retained but never rebuilt
 - Explicit version tags remain the safest production contract
-- If Docker Hub publishes `latest`, it should follow the same image line as the primary/default branch: **`8.5`**
+- No `latest` tag is intentionally published
 
 Safe rule for production use:
 
@@ -81,7 +72,7 @@ This keeps Docker Hub autobuild hooks in place while making the final published 
 `dependency-freshness` is a report-only workflow. It does not publish images or update pins automatically. It records:
 
 - the current Dockerfile base image digest,
-- the published Docker Hub tag digests for maintained branches `8.0` through `8.5`,
+- the published Docker Hub tag digests covered by the workflow configuration,
 - PECL latest-version observations for `imagick`, `redis`, and `apcu`, and
 - whether the Alpine `gnu-libiconv` / `LD_PRELOAD` workaround is still present and should be periodically reassessed.
 
@@ -90,14 +81,14 @@ The workflow runs weekly and on manual dispatch, writes a GitHub Actions step su
 This repository is maintained through version branches and lightweight verification workflows:
 
 - `smoke-test` builds the branch Dockerfile and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
-- `verify-published-manifest` runs on a schedule and verifies the published Docker Hub tags for maintained branches.
+- `verify-published-manifest` runs on a schedule and verifies the configured published Docker Hub tags.
 - `dependency-freshness` produces report-only dependency/source freshness observations for maintainers.
-- `branch-drift` produces report-only workflow/script/policy drift reports across maintained branches.
-- `branch-sync-pr` can create safe-file sync PRs from `8.5` to maintained branches for workflow/script/docs/test guardrails only.
-- Maintained branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
+- `branch-drift` produces report-only workflow/script/policy drift reports across configured branches.
+- `branch-sync-pr` can create safe-file sync PRs from `8.5` for workflow/script/docs/test guardrails only; operational coverage does not imply lifecycle support.
+- Supported branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
 
-GitHub Releases are intentionally optional for this Docker image repository. The operational release contract is the explicit Docker image tag for each maintained PHP version branch.
+GitHub Releases are intentionally optional for this Docker image repository. The operational release contract is the explicit Docker image tag for each supported PHP version branch.
 
 ## What this image adds
 
@@ -114,7 +105,7 @@ You can convert animated `gif` images to `mp4` or `webm` with `ffmpeg`.
 
 ## Imagick policy
 
-For the maintained branches **`8.0` through `8.5`**, this repository now standardizes on:
+For supported branches, this repository standardizes on:
 
 - pinned `imagick` release: **`3.8.1`**
 - install method: **PECL release tarball + `docker-php-ext-install imagick`**

@@ -5,14 +5,14 @@ This runbook explains how `woosungchoi/fpm-alpine` uses GitHub Actions around th
 ## One-screen summary
 
 - Default branch: `8.5`
-- Maintained branches: `8.0`, `8.1`, `8.2`, `8.3`, `8.4`, `8.5`
-- Legacy `master` / PHP 7.4: not active
+- Lifecycle policy: [SUPPORT.md](../SUPPORT.md) is canonical; workflow coverage does not imply support
+- Frozen legacy lines are not release targets
 - Docker Hub hooks remain the publish path. GitHub Actions verifies, observes, and reports; it does not replace Docker Hub publishing.
 - Production users should pin explicit image tags such as `woosungchoi/fpm-alpine:8.5`.
 
 ## Required status check
 
-The branch protection required check for maintained branches is the `smoke-test` workflow job named:
+The branch protection required check for branches accepting changes is the `smoke-test` workflow job named:
 
 - `docker-smoke`
 
@@ -96,7 +96,7 @@ Purpose: Report dependency freshness without automatic mutation.
 The report includes:
 
 - Dockerfile base image digest
-- maintained Docker Hub tag digests
+- configured Docker Hub tag digests
 - PECL latest observations for `imagick`, `redis`, and `apcu`
 - installed package signals parsed from the Dockerfile
 - `gnu-libiconv` workaround status
@@ -117,7 +117,7 @@ Rollback:
 
 ### `branch-drift`
 
-Purpose: Detect missing workflow/script/policy changes across maintained branches.
+Purpose: Detect missing workflow/script/policy changes across configured branches. This operational coverage does not imply lifecycle support.
 
 Triage:
 
@@ -134,7 +134,7 @@ Rollback:
 
 ### `branch-sync-pr`
 
-Purpose: Create safe-file sync PRs from `8.5` to maintained branches `8.0` through `8.4` when report-only branch drift identifies missing guardrails.
+Purpose: Create safe-file sync PRs from `8.5` to configured version branches when report-only branch drift identifies missing guardrails. This operational coverage does not imply lifecycle support.
 
 Automation boundary:
 
@@ -176,7 +176,7 @@ Before merging CI/workflow changes:
 - Workflow YAML has explicit minimal permissions.
 - Report-only workflows are not marked as required checks.
 - Docker Hub publish hooks are unchanged unless the task is explicitly a publish migration.
-- README, branch policy, and this runbook agree on the maintained branch set.
+- README, branch policy, and this runbook defer lifecycle status to `SUPPORT.md`.
 - Rollback is limited to GitHub Actions/docs/scripts when publish behavior is untouched.
 
 ## Manual commands

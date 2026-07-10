@@ -1,5 +1,9 @@
 # Phase 4 / Phase 5 progress notes
 
+> **ARCHIVED — NON-AUTHORITATIVE — SUPERSEDED:** This progress note is historical evidence only. **All support, branch, tag, `latest`, branch-sync, and publisher instructions below are historical only and MUST NOT be followed.** Current policy and operations supersede them: [SUPPORT.md](../../SUPPORT.md), [BRANCH-AND-TAG-POLICY.md](../../BRANCH-AND-TAG-POLICY.md), and [CI operations](../ci-operations.md).
+>
+> Superseded assumptions: `8.0`/`8.1` are frozen EOL artifacts that are never rebuilt; no `latest` tag is published; the old single-trunk migration target for `8.2`–`8.5` is not current policy.
+
 ## Phase 4 — build verification / smoke coverage
 
 Implemented:

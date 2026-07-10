@@ -16,7 +16,10 @@ The branch protection required check for branches accepting changes is the `smok
 
 - `docker-smoke`
 
-This is the only check that should block regular PR merges by default because it builds the branch Dockerfile and runs runtime checks in the built container.
+This lightweight aggregate gate is the only check that should block regular PR
+merges by default. It succeeds only when all eight `docker-smoke-matrix` jobs
+(PHP 8.2–8.5 × amd64/arm64) succeed; the matrix jobs build the branch Dockerfile
+and run runtime checks in the built containers.
 
 Non-required / report-only workflows:
 
@@ -41,7 +44,25 @@ Non-required / report-only workflows:
 
 ### `smoke-test`
 
-Purpose: PR/push build validation.
+Purpose: build validation once per pull request and again after integration into
+the protected `8.5` branch. Feature-branch pushes do not start a duplicate
+eight-job matrix; `workflow_dispatch` remains available for explicit reruns.
+
+The prepare job validates `build/versions.json`, the canonical build and matrix
+input for PHP and source-archive pins, then derives the PHP 8.2–8.5 ×
+amd64/arm64 matrix. `scripts/validate-versions.py` and literal policy fixtures
+independently enforce the approved pin and lifecycle baseline; intentional pin
+or lifecycle changes therefore require coordinated JSON, validator, and test
+approval updates. Matrix
+jobs build with `push: false` and run the resulting target-platform image under
+the GitHub-hosted runner's QEMU support. No registry login, secrets, or image
+publishing are involved.
+
+Each build explicitly passes OCI source, commit revision, PHP patch version,
+and an RFC3339 creation timestamp. `OCI_CREATED` is intentionally an input: a
+different creation value changes image identity even when source and dependency
+pins are unchanged. These labels are provenance for source-only CI, not a
+publishing step.
 
 Checks:
 
@@ -50,16 +71,16 @@ Checks:
 - `php-fpm -t`
 - extension loading for `imagick`, `redis`, `apcu`
 - `ffmpeg`
-- `iconv` runtime behavior
+- official `gnu-libiconv-libs=1.18-r0` ownership and link target, exact `ICONV_IMPL=libiconv` / `ICONV_VERSION=1.18`, clean APK audit, direct linkage, and transliteration
 - `Imagick` class instantiation
 
 Triage:
 
-1. Open the failed `docker-smoke` job.
-2. Find the named smoke check that failed.
+1. Open the failed `docker-smoke` aggregate gate.
+2. Find the failed `docker-smoke-matrix` leg and its named smoke check.
 3. If `php-fpm -t` failed, inspect the `php-fpm` config error and the emitted `/tmp/php-fpm.log` section.
 4. If an extension failed, first check Dockerfile extension install/build logs for that extension.
-5. If `iconv` failed, reassess the `gnu-libiconv` / `LD_PRELOAD` workaround on that branch only.
+5. If `iconv` failed, verify the pinned base still owns `/usr/lib/libiconv.so.2` through `gnu-libiconv-libs=1.18-r0`, resolves it to `/usr/lib/libiconv.so.2.7.0`, has a clean APK audit, and that `ldd /usr/local/bin/php` has no unresolved library.
 
 Rollback:
 
@@ -93,13 +114,13 @@ Rollback:
 
 Purpose: Report dependency freshness without automatic mutation.
 
-The report includes:
+The workflow first validates and then reads `build/versions.json`. Invalid JSON
+or schema metadata fails clearly before any remote freshness query. The report includes:
 
-- Dockerfile base image digest
+- every exact matrix base image and digest
 - configured Docker Hub tag digests
 - PECL latest observations for `imagick`, `redis`, and `apcu`
-- installed package signals parsed from the Dockerfile
-- `gnu-libiconv` workaround status
+- exact pinned versions, URLs, and checksums for source dependencies
 - manual follow-up guidance
 
 Triage:

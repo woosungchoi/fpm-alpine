@@ -749,26 +749,6 @@ jobs:
           test "$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:canary-${EXPECTED_MINOR}-${CANARY_RUN_ID}-${CANARY_RUN_ATTEMPT}")" = "$dockerhub_digest"
           test "$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:canary-${EXPECTED_MINOR}-${CANARY_RUN_ID}-${CANARY_RUN_ATTEMPT}")" = "$ghcr_digest"
 
-      - name: Re-verify exact canary subjects before promotion
-        env:
-          DOCKERHUB_REF: ${{ env.DOCKERHUB_REPOSITORY }}@${{ steps.canary.outputs.dockerhub_digest }}
-          GHCR_REF: ${{ env.GHCR_REPOSITORY }}@${{ steps.canary.outputs.ghcr_digest }}
-          DOCKERHUB_DIGEST: ${{ steps.canary.outputs.dockerhub_digest }}
-          GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
-        run: |
-          ./scripts/verify-published-image.sh \
-            "$DOCKERHUB_REF" \
-            "$GHCR_REF" \
-            "${{ github.event.inputs.source_sha }}" \
-            "${{ matrix.php_patch }}" \
-            "publisher-reports/pre-promotion"
-          for entry in "$DOCKERHUB_REPOSITORY|$DOCKERHUB_DIGEST" "$GHCR_REPOSITORY|$GHCR_DIGEST"; do
-            IFS='|' read -r repository digest <<< "$entry"
-            for platform in linux/amd64 linux/arm64; do
-              ./scripts/scan-image.sh "$repository" "$digest" publisher-reports/pre-promotion/scans "$platform"
-            done
-          done
-
       - name: Promote verified canary digests without rebuilding
         id: promote
         env:

@@ -24,7 +24,21 @@ fi
 
 safe_name="${IMAGE_REF//[^A-Za-z0-9_.-]/_}"
 report_file="$REPORT_DIR/${safe_name}.md"
+summary_file="$REPORT_DIR/${safe_name}.summary.json"
 title="Manifest verification failed: ${IMAGE_REF}"
+registry="${IMAGE_REF%%/*}"
+digest="${IMAGE_DIGEST:-unknown}"
+if [ "$digest" = unknown ] && [ -f "$summary_file" ]; then
+  digest="$(python3 - "$summary_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+value = json.loads(Path(sys.argv[1]).read_text()).get("digest")
+print(value if isinstance(value, str) and value.startswith("sha256:") else "unknown")
+PY
+)"
+fi
 
 report_body="Manifest report artifact was not found at \`${report_file}\`. Check the failed workflow logs and artifacts."
 if [ -f "$report_file" ]; then
@@ -37,7 +51,9 @@ cat > "$body_file" <<EOF
 The published Docker image manifest verification failed for \`${IMAGE_REF}\`.
 
 - Workflow run: ${RUN_URL}
+- Registry: \`${registry}\`
 - Image ref: \`${IMAGE_REF}\`
+- Digest: \`${digest}\`
 - Report path: \`${report_file}\`
 
 ## Triage

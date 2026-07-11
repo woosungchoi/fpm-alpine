@@ -27,8 +27,7 @@ jobs:
       - name: Generate dependency freshness report
         env:
           REPORT_DIR: freshness-reports
-          PHP_TAGS: "8.0 8.1 8.2 8.3 8.4 8.5"
-          PECL_PACKAGES: "imagick redis apcu"
+          VERSIONS_PATH: build/versions.json
         run: ./scripts/report-freshness.sh
 
       - name: Upload dependency freshness report

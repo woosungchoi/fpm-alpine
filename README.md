@@ -91,7 +91,10 @@ This repository is maintained through one `main` source trunk and verification w
 - `smoke-test` builds the active PHP matrix from `main` and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
 - `verify-published-manifest` runs on a schedule and verifies the configured published Docker Hub tags.
 - `dependency-freshness` produces report-only dependency/source freshness observations for maintainers.
-- Supported branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
+- `php-lifecycle` checks the active matrix monthly against configured EOL dates and upstream PHP release availability.
+- `published-runtime-smoke` verifies Docker Hub/GHCR manifests, provenance, SBOM, signatures, runtime behavior, and semantic parity weekly and after a successful production publisher run.
+- Dependabot proposes reviewed full-SHA GitHub Actions updates while source dependencies remain report-only.
+- Active matrix entries use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
 
 GitHub Releases are intentionally optional for this Docker image repository. The operational release contract is the explicit Docker image tag for each supported PHP minor.

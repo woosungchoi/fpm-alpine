@@ -185,6 +185,48 @@ assert_not_regex .github/workflows/verify-published-manifest.yml "^[[:space:]]+-
 assert_not_regex README.md 'branch-(sync|drift)'
 assert_not_regex docs/ci-operations.md 'branch-(sync|drift)'
 
+assert_file .github/dependabot.yml
+assert_contains .github/dependabot.yml 'package-ecosystem: github-actions'
+assert_contains .github/dependabot.yml 'interval: weekly'
+assert_file .github/workflows/php-lifecycle.yml
+assert_file .github/workflows/published-runtime-smoke.yml
+assert_file scripts/check-php-lifecycle.py
+assert_executable scripts/check-php-lifecycle.py
+assert_file scripts/create-php-lifecycle-issue.sh
+assert_executable scripts/create-php-lifecycle-issue.sh
+assert_contains .github/workflows/php-lifecycle.yml "cron: '19 5 1 * *'"
+assert_contains .github/workflows/php-lifecycle.yml 'workflow_dispatch:'
+assert_contains .github/workflows/php-lifecycle.yml 'scripts/check-php-lifecycle.py'
+assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["publish"]'
+assert_contains .github/workflows/published-runtime-smoke.yml 'branches: ["main"]'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-image.sh'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/scan-image.sh'
+assert_contains .github/workflows/published-runtime-smoke.yml 'git merge-base --is-ancestor'
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+uses = []
+for path in sorted(Path('.github/workflows').glob('*.yml')):
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        match = re.match(r'^\s*uses:\s*([^\s#]+)(?:\s+#\s+(.+))?$', line)
+        if not match:
+            continue
+        ref, comment = match.groups()
+        if ref.startswith('./'):
+            continue
+        if '@' not in ref:
+            raise SystemExit(f'{path}:{number}: action has no ref')
+        revision = ref.rsplit('@', 1)[1]
+        if not re.fullmatch(r'[0-9a-f]{40}', revision):
+            raise SystemExit(f'{path}:{number}: action is not pinned to a full SHA: {ref}')
+        if not comment or not re.fullmatch(r'v\d+(?:\.\d+){1,2}', comment.strip()):
+            raise SystemExit(f'{path}:{number}: pinned action lacks a release-tag comment')
+        uses.append(ref)
+if not uses:
+    raise SystemExit('no action uses found')
+PY
+
 fixture_dir="$(mktemp -d)"
 mkdir -p "$fixture_dir/bin"
 cat > "$fixture_dir/bin/docker" <<'EOF'
@@ -365,5 +407,6 @@ bash -n scripts/report-freshness.sh
 ./tests/test_reproducible_build_policy.sh
 ./tests/test_smoke_script.sh
 ./tests/test_publisher_policy.sh
+./tests/test_php_lifecycle.py
 
 echo "policy script tests passed"

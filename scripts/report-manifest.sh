@@ -7,6 +7,18 @@ EXPECTED_PLATFORMS=("$@")
 MANIFEST_RETRY_ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
 MANIFEST_RETRY_DELAY_SECONDS="${MANIFEST_RETRY_DELAY_SECONDS:-20}"
 
+PUBLISHER_MODE="${PUBLISHER_MODE:-legacy-observation}"
+
+if [ "$PUBLISHER_MODE" = "github-actions" ]; then
+  publish_path_note="GitHub Actions publisher subject; verification is digest-qualified."
+  propagation_note="This can be caused by registry propagation or network failure, or a genuinely missing tag. Re-run the manual publisher verification before promotion."
+  triage_note="If this failed immediately after a publish, first suspect bounded registry propagation or network issues. Re-run exact-subject verification before changing build or promotion logic."
+else
+  publish_path_note="Legacy Docker Hub published subject; this workflow is observation only."
+  propagation_note="This can be caused by Docker Hub propagation lag, registry/network failure, or a genuinely missing tag. Re-run the manual workflow after Docker Hub has finished publishing before changing publish hooks."
+  triage_note="If this failed immediately after a push, first suspect Docker Hub propagation lag or registry/network issues. Re-run the manual manifest workflow before changing build or publish logic."
+fi
+
 if [ -z "$IMAGE_REF" ]; then
   echo "usage: $0 <registry-image-ref> [expected-platform ...]" >&2
   exit 64
@@ -51,18 +63,14 @@ if [ "$raw_status" != "ok" ]; then
 - Status: ❌ manifest inspect failed after ${MANIFEST_RETRY_ATTEMPTS} attempt(s)
 - Expected platforms: $(printf '`%s` ' "${EXPECTED_PLATFORMS[@]}")
 
-This can be caused by Docker Hub propagation lag, registry/network failure, or a genuinely missing tag. Re-run the manual workflow after Docker Hub has finished publishing before changing publish hooks.
+${propagation_note}
 EOF
   cat "$md_file" >&2
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat "$md_file" >> "$GITHUB_STEP_SUMMARY"; fi
   exit 1
 fi
 
-digest="$(awk '/^Digest:/ { print $2; exit }' <<< "$inspect_text")"
-if [ -z "$digest" ]; then
-  echo "failed to resolve digest for $IMAGE_REF" >&2
-  exit 1
-fi
+digest="$(printf '%s\n' "$inspect_text" | "$(dirname "$0")/extract-image-digest.sh")"
 
 parser_file="$(mktemp)"
 trap 'rm -f "$parser_file"' EXIT
@@ -75,7 +83,9 @@ image_ref = sys.argv[1]
 digest = sys.argv[2]
 json_file = Path(sys.argv[3])
 md_file = Path(sys.argv[4])
-expected = sys.argv[5:]
+publish_path_note = sys.argv[5]
+triage_note = sys.argv[6]
+expected = sys.argv[7:]
 manifest = json.load(sys.stdin)
 
 platforms = []
@@ -125,7 +135,7 @@ lines = [
     f"- Digest: `{digest}`",
     f"- Expected platforms: {', '.join(f'`{item}`' for item in expected)}",
     f"- Status: {'✅ passed' if not missing else '❌ missing ' + ', '.join(missing)}",
-    "- Publish path: Docker Hub hooks remain the source of published images; this workflow is observation only.",
+    f"- Publish path: {publish_path_note}",
     "",
     "### Platforms",
     "",
@@ -142,7 +152,7 @@ lines.extend([
     "",
     "### Triage note",
     "",
-    "If this failed immediately after a push, first suspect Docker Hub propagation lag or registry/network issues. Re-run the manual manifest workflow before changing build or publish logic.",
+    triage_note,
     "",
 ])
 md_file.write_text("\n".join(lines))
@@ -154,7 +164,8 @@ else:
     print(f"manifest report passed for {image_ref}: {', '.join(expected)}")
 print(f"digest: {digest}")
 PY
-python3 "$parser_file" "$IMAGE_REF" "$digest" "$json_file" "$md_file" "${EXPECTED_PLATFORMS[@]}" < "$raw_file"
+python3 "$parser_file" "$IMAGE_REF" "$digest" "$json_file" "$md_file" \
+  "$publish_path_note" "$triage_note" "${EXPECTED_PLATFORMS[@]}" < "$raw_file"
 rm -f "$parser_file"
 
 cat "$md_file"

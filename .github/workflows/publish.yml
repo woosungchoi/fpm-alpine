@@ -335,8 +335,9 @@ jobs:
           trap 'rm -rf "$anonymous_config"' EXIT
           DOCKER_CONFIG="$anonymous_config" docker buildx imagetools inspect "$GHCR_SUBJECT" >/dev/null
           for platform in linux/amd64 linux/arm64; do
+            platform_subject="$(DOCKER_CONFIG="$anonymous_config" ./scripts/resolve-platform-image.py "$GHCR_SUBJECT" "$platform")"
             DOCKER_CONFIG="$anonymous_config" docker run --rm --platform "$platform" \
-              --entrypoint php "$GHCR_SUBJECT" -r 'exit(PHP_VERSION_ID > 0 ? 0 : 1);'
+              --entrypoint php "$platform_subject" -r 'exit(PHP_VERSION_ID > 0 ? 0 : 1);'
           done
 
       - name: Verify canary subjects

@@ -11,7 +11,7 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 assert_file .github/workflows/publish.yml
-for script in scripts/verify-published-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py; do
+for script in scripts/verify-published-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py; do
   assert_file "$script"
   assert_executable "$script"
 done
@@ -113,6 +113,14 @@ assert '"security-only"' in text
 assert 'production-preflight' in jobs['production']['needs']
 assert 'bootstrap-ghcr-rollback' in jobs['production']['needs']
 assert 'Require anonymous GHCR manifest and runtime access' in canary
+anonymous_run = next(step['run'] for step in jobs['canary']['steps'] if step.get('name') == 'Require anonymous GHCR manifest and runtime access')
+assert 'DOCKER_CONFIG="$anonymous_config" ./scripts/resolve-platform-image.py "$GHCR_SUBJECT" "$platform"' in anonymous_run
+assert '--entrypoint php "$platform_subject"' in anonymous_run
+assert '--entrypoint php "$GHCR_SUBJECT"' not in anonymous_run
+for verifier in ('scripts/verify-published-image.sh', 'scripts/verify-rollback-image.sh'):
+    verifier_text = Path(verifier).read_text()
+    assert 'resolve-platform-image.py' in verifier_text
+    assert '"$platform_subject"' in verifier_text
 preflight_run = next(step['run'] for step in jobs['production-preflight']['steps'] if step.get('name') == 'Require verified canary evidence for every production target')
 assert 'build/versions.json' in preflight_run
 assert 'active-production-targets.tsv' in preflight_run
@@ -837,5 +845,74 @@ assert_contains .github/workflows/publish.yml 'LEGACY_DISABLED_VARIABLE'
 assert_contains .github/workflows/publish.yml 'legacy_publisher_disabled'
 assert_contains scripts/verify-rollback-image.sh 'fsockopen'
 assert_contains README.md 'GitHub Actions publisher'
+
+platform_resolver_dir="$fixture_dir/platform-resolver"
+platform_resolver_bin="$platform_resolver_dir/bin"
+mkdir -p "$platform_resolver_bin"
+python3 - "$platform_resolver_dir/index.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = {
+    "schemaVersion": 2,
+    "manifests": [
+        {"digest": "sha256:" + "a" * 64, "platform": {"os": "linux", "architecture": "amd64"}},
+        {"digest": "sha256:" + "b" * 64, "platform": {"os": "linux", "architecture": "arm64", "variant": "v8"}},
+        {"digest": "sha256:" + "c" * 64, "platform": {"os": "unknown", "architecture": "unknown"}},
+    ],
+}
+Path(sys.argv[1]).write_text(json.dumps(payload))
+PY
+cat > "$platform_resolver_bin/docker" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$*" = 'buildx imagetools inspect --raw registry.example/fpm@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' ]
+status="${MOCK_INSPECT_STATUS:-0}"
+if [ "$status" -ne 0 ]; then
+  echo 'inspect transport failed' >&2
+  exit "$status"
+fi
+python3 - "$MOCK_INDEX_FILE" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).read_text(), end="")
+PY
+SH
+chmod +x "$platform_resolver_bin/docker"
+index_subject="registry.example/fpm@sha256:$(printf 'd%.0s' {1..64})"
+amd64_subject="$(MOCK_INDEX_FILE="$platform_resolver_dir/index.json" PATH="$platform_resolver_bin:$PATH" ./scripts/resolve-platform-image.py "$index_subject" linux/amd64)"
+arm64_subject="$(MOCK_INDEX_FILE="$platform_resolver_dir/index.json" PATH="$platform_resolver_bin:$PATH" ./scripts/resolve-platform-image.py "$index_subject" linux/arm64)"
+[ "$amd64_subject" = "registry.example/fpm@sha256:$(printf 'a%.0s' {1..64})" ] || fail "wrong amd64 platform subject"
+[ "$arm64_subject" = "registry.example/fpm@sha256:$(printf 'b%.0s' {1..64})" ] || fail "wrong arm64 platform subject"
+[ "$amd64_subject" != "$arm64_subject" ] || fail "multi-platform resolver reused the index digest"
+python3 - "$platform_resolver_dir/index.json" "$platform_resolver_dir/duplicate.json" "$platform_resolver_dir/missing.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source = json.loads(Path(sys.argv[1]).read_text())
+duplicate = json.loads(json.dumps(source))
+duplicate["manifests"].append(duplicate["manifests"][0])
+Path(sys.argv[2]).write_text(json.dumps(duplicate))
+missing = json.loads(json.dumps(source))
+missing["manifests"] = [item for item in missing["manifests"] if (item.get("platform") or {}).get("architecture") != "amd64"]
+Path(sys.argv[3]).write_text(json.dumps(missing))
+PY
+for invalid_index in duplicate missing; do
+  if MOCK_INDEX_FILE="$platform_resolver_dir/${invalid_index}.json" PATH="$platform_resolver_bin:$PATH" \
+      ./scripts/resolve-platform-image.py "$index_subject" linux/amd64 >/dev/null 2>&1; then
+    fail "platform resolver accepted ${invalid_index} descriptor set"
+  fi
+done
+printf '{not-json' > "$platform_resolver_dir/malformed.json"
+if MOCK_INDEX_FILE="$platform_resolver_dir/malformed.json" PATH="$platform_resolver_bin:$PATH" \
+    ./scripts/resolve-platform-image.py "$index_subject" linux/amd64 >/dev/null 2>&1; then
+  fail "platform resolver accepted malformed index JSON"
+fi
+if MOCK_INSPECT_STATUS=7 MOCK_INDEX_FILE="$platform_resolver_dir/index.json" PATH="$platform_resolver_bin:$PATH" \
+    ./scripts/resolve-platform-image.py "$index_subject" linux/amd64 >/dev/null 2>&1; then
+  fail "platform resolver ignored inspect transport failure"
+fi
 
 echo "publisher policy tests passed"

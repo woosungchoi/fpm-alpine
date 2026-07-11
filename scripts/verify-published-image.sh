@@ -182,9 +182,10 @@ for entry in "dockerhub|$DOCKERHUB_REF|$dockerhub_digest" "ghcr|$GHCR_REF|$ghcr_
   IFS='|' read -r registry ref digest <<< "$entry"
   repository="$(repository_from_ref "$ref")"
   for platform in "${EXPECTED_PLATFORMS[@]}"; do
+    platform_subject="$(./scripts/resolve-platform-image.py "${repository}@${digest}" "$platform")"
     EXPECTED_PLATFORM="$platform" \
     SMOKE_REPORT_MD="$REPORT_DIR/smoke/${registry}-${platform//\//-}.md" \
-      ./scripts/smoke-test-image.sh "${repository}@${digest}"
+      ./scripts/smoke-test-image.sh "$platform_subject"
   done
 done
 

@@ -153,6 +153,14 @@ assert_contains docs/ci-operations.md "Lifecycle policy: [SUPPORT.md](../SUPPORT
 assert_not_contains README.md "future target is version branches"
 assert_not_contains BRANCH-AND-TAG-POLICY.md "future target is version branches"
 assert_contains docs/ci-operations.md "Required status check"
+assert_contains README.md "canonical machine-readable build and matrix input"
+assert_contains README.md "coordinated JSON,"
+assert_contains README.md "validator, and test approval changes"
+assert_contains docs/ci-operations.md "canonical build and matrix"
+assert_contains docs/ci-operations.md "independently enforce the approved pin and lifecycle baseline"
+assert_contains docs/ci-operations.md 'all eight `docker-smoke-matrix` jobs'
+assert_not_contains README.md "single machine-readable source"
+assert_not_contains docs/ci-operations.md "single source for PHP"
 assert_contains docs/ci-operations.md "Docker Hub hooks remain the publish path"
 assert_contains docs/ci-operations.md "Rollback"
 
@@ -235,18 +243,61 @@ assert_contains scripts/create-branch-sync-prs.sh "gh workflow run"
 assert_contains scripts/create-branch-sync-prs.sh "git push --force-with-lease origin"
 
 fixture_dir="$(mktemp -d)"
-cat > "$fixture_dir/Dockerfile" <<'DOCKERFILE'
-ARG IMAGICK_VERSION=3.8.1
-FROM php:8.5-fpm-alpine
-RUN apk add --no-cache bash ffmpeg imagemagick ghostscript
-RUN pecl install redis apcu
-RUN apk add --no-cache --repository https://dl-cdn.alpinelinux.org/alpine/edge/community/ --allow-untrusted gnu-libiconv
-ENV LD_PRELOAD=/usr/lib/preloadable_libiconv.so
-DOCKERFILE
-REPORT_DIR="$fixture_dir/reports" DOCKERFILE_PATH="$fixture_dir/Dockerfile" PHP_TAGS="" PECL_PACKAGES="" ./scripts/report-freshness.sh
-assert_contains "$fixture_dir/reports/dependency-freshness.md" "Installed package signals"
+mkdir -p "$fixture_dir/bin"
+cat > "$fixture_dir/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+: > "$REMOTE_MARKER"
+exit 99
+EOF
+cat > "$fixture_dir/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+: > "$REMOTE_MARKER"
+exit 99
+EOF
+chmod +x "$fixture_dir/bin/docker" "$fixture_dir/bin/curl"
+printf '{invalid json\n' > "$fixture_dir/invalid.json"
+if REMOTE_MARKER="$fixture_dir/remote-called" PATH="$fixture_dir/bin:$PATH" \
+  REPORT_DIR="$fixture_dir/invalid-reports" VERSIONS_PATH="$fixture_dir/invalid.json" \
+  ./scripts/report-freshness.sh >"$fixture_dir/invalid.out" 2>&1; then
+  fail "freshness report accepted invalid versions JSON"
+fi
+assert_contains "$fixture_dir/invalid.out" "freshness report aborted: invalid versions metadata"
+assert_not_file "$fixture_dir/remote-called"
+assert_not_file "$fixture_dir/invalid-reports/dependency-freshness.json"
+assert_not_file "$fixture_dir/invalid-reports/dependency-freshness.md"
+
+cat > "$fixture_dir/validator" <<'EOF'
+#!/usr/bin/env python3
+raise SystemExit(0)
+EOF
+chmod +x "$fixture_dir/validator"
+cat > "$fixture_dir/versions.json" <<'JSON'
+{
+  "schemaVersion": 2,
+  "dependencies": {
+    "imagick": {"version":"91.92.93","url":"https://fixture.invalid/imagick-obvious.tgz","sha256":"imagick-fixture-sha"},
+    "redis": {"version":"81.82.83","url":"https://fixture.invalid/redis-obvious.tgz","sha256":"redis-fixture-sha"},
+    "apcu": {"version":"71.72.73","url":"https://fixture.invalid/apcu-obvious.tgz","sha256":"apcu-fixture-sha"}
+  },
+  "runtimeContracts": {
+    "libiconv": {"implementation":"libiconv","version":"1.18","package":"gnu-libiconv-libs","packageVersion":"1.18-r0","ownerPath":"/usr/lib/libiconv.so.2","target":"/usr/lib/libiconv.so.2.7.0"}
+  },
+  "versions": {
+    "9.9": {"minor":"9.9","patch":"9.9.99","base_image":"fixture.invalid/php:9.9@sha256:obvious-base-ref","support":"fixture-support","eol":"2099-09-09"}
+  }
+}
+JSON
+REPORT_DIR="$fixture_dir/reports" VERSIONS_PATH="$fixture_dir/versions.json" \
+  VALIDATOR_PATH="$fixture_dir/validator" REPORT_SKIP_REMOTE=1 ./scripts/report-freshness.sh >/dev/null
+for value in 9.9.99 fixture.invalid/php:9.9@sha256:obvious-base-ref 91.92.93 https://fixture.invalid/imagick-obvious.tgz imagick-fixture-sha 81.82.83 https://fixture.invalid/redis-obvious.tgz redis-fixture-sha 71.72.73 https://fixture.invalid/apcu-obvious.tgz apcu-fixture-sha gnu-libiconv-libs 1.18-r0 /usr/lib/libiconv.so.2.7.0; do
+  assert_contains "$fixture_dir/reports/dependency-freshness.json" "$value"
+  assert_contains "$fixture_dir/reports/dependency-freshness.md" "$value"
+done
+assert_contains "$fixture_dir/reports/dependency-freshness.md" "Validated matrix pins"
 assert_contains "$fixture_dir/reports/dependency-freshness.md" "Manual follow-up guide"
-assert_contains "$fixture_dir/reports/dependency-freshness.md" 'Pinned Imagick: `3.8.1`'
+assert_not_contains "$fixture_dir/reports/dependency-freshness.md" "Alpine edge"
+assert_not_contains "$fixture_dir/reports/dependency-freshness.md" "--allow-untrusted"
+assert_not_contains "$fixture_dir/reports/dependency-freshness.md" "not pinned here"
 
 assert_file scripts/create-dependency-freshness-issue.sh
 assert_executable scripts/create-dependency-freshness-issue.sh
@@ -344,7 +395,9 @@ GITHUB_REPOSITORY="woosungchoi/fpm-alpine" \
 FRESHNESS_REPORT_JSON="$freshness_no_signal_dir/reports/dependency-freshness.json" \
 ./scripts/create-dependency-freshness-issue.sh
 
-assert_contains scripts/smoke-test-image.sh "run_check \"extension: imagick\""
+assert_contains scripts/smoke-test-image.sh 'run_check "extension: ${extension} ${expected_version}"'
+assert_contains scripts/smoke-test-image.sh "EXPECTED_PLATFORM"
+assert_contains scripts/smoke-test-image.sh "php-fpm process alive"
 assert_contains scripts/smoke-test-image.sh "GITHUB_STEP_SUMMARY"
 assert_contains scripts/report-manifest.sh "MANIFEST_RETRY_ATTEMPTS"
 assert_contains scripts/report-manifest.sh "Docker Hub propagation lag"
@@ -366,6 +419,8 @@ bash -n scripts/report-freshness.sh
 bash -n scripts/branch-drift-report.sh
 bash -n scripts/plan-branch-sync.sh
 bash -n scripts/create-branch-sync-prs.sh
+./tests/test_reproducible_build_policy.sh
+./tests/test_smoke_script.sh
 python3 - <<'PY'
 from pathlib import Path
 import yaml

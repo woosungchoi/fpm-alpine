@@ -69,12 +69,12 @@ This keeps Docker Hub autobuild hooks in place while making the final published 
 
 ### Dependency freshness reports
 
-`dependency-freshness` is a report-only workflow. It does not publish images or update pins automatically. It records:
+`dependency-freshness` validates and reads `build/versions.json`; it is a report-only workflow and does not publish images or update pins automatically. It records:
 
-- the current Dockerfile base image digest,
+- every exact matrix base-image digest and source dependency pin,
 - the published Docker Hub tag digests covered by the workflow configuration,
 - PECL latest-version observations for `imagick`, `redis`, and `apcu`, and
-- whether the Alpine `gnu-libiconv` / `LD_PRELOAD` workaround is still present and should be periodically reassessed.
+- the currently pinned PECL releases versus upstream observations.
 
 The workflow runs weekly and on manual dispatch, writes a GitHub Actions step summary, and uploads `freshness-reports/` artifacts for review.
 
@@ -98,7 +98,7 @@ Compared with the upstream PHP Alpine FPM image, this repository adds / configur
 - `redis` extension
 - `apcu`
 - `pdo`, `pdo_mysql`, `intl`
-- iconv compatibility fix for Alpine
+- official pinned-base `gnu-libiconv-libs=1.18-r0` runtime, with exact package ownership and `libiconv.so.2` target validation
 - other PHP extensions needed by the maintained app stacks
 
 You can convert animated `gif` images to `mp4` or `webm` with `ffmpeg`.
@@ -114,10 +114,35 @@ Treat that as the branch matrix unless a future branch-specific exception is doc
 
 ## Verification
 
+`build/versions.json` is the canonical machine-readable build and matrix input for
+the supported PHP 8.2–8.5 patch versions, lifecycle metadata (`support`/`eol`),
+digest-pinned base images, and verified source archives. Independently,
+`scripts/validate-versions.py` and literal policy fixtures enforce the approved
+pin and lifecycle baseline, so an intentional update requires coordinated JSON,
+validator, and test approval changes. The `smoke-test` workflow validates that file, derives its
+PHP/platform matrix from it, and only builds and runs local CI images; it does
+not log in to a registry or publish images.
+
+To select a version locally, pass its exact `base_image` value as
+`PHP_BASE_IMAGE`. Validate all pins before building:
+
+```bash
+./scripts/validate-versions.py
+docker build \
+  --build-arg PHP_BASE_IMAGE="$(./scripts/validate-versions.py --get-base 8.5)" \
+  --build-arg OCI_SOURCE="https://github.com/woosungchoi/fpm-alpine" \
+  --build-arg OCI_REVISION="$(git rev-parse HEAD)" \
+  --build-arg OCI_VERSION="8.5.8" \
+  --build-arg OCI_CREATED="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+  -t fpm-alpine:8.5-local .
+```
+
 For local validation after a Docker build, run:
 
 ```bash
-./scripts/smoke-test-image.sh <built-image-tag>
+EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 \
+EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0 \
+  ./scripts/smoke-test-image.sh <built-image-tag> [expected-php-minor] [expected-platform]
 ```
 
 This smoke test checks:
@@ -127,7 +152,7 @@ This smoke test checks:
 - `php-fpm -t`
 - `imagick`, `redis`, `apcu` extension loading
 - `ffmpeg` availability
-- minimal `iconv` / `Imagick` runtime behavior
+- exact official-base iconv implementation/version/package/owner/target contract, transliteration, and `Imagick` runtime behavior
 
 For a published multi-arch image, you can also inspect the manifest explicitly:
 

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 2,
+  "dependencies": {
+    "imagick": {
+      "version": "3.8.1",
+      "url": "https://pecl.php.net/get/imagick-3.8.1.tgz",
+      "sha256": "3a3587c0a524c17d0dad9673a160b90cd776e836838474e173b549ed864352ee"
+    },
+    "redis": {
+      "version": "6.3.0",
+      "url": "https://pecl.php.net/get/redis-6.3.0.tgz",
+      "sha256": "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5"
+    },
+    "apcu": {
+      "version": "5.1.28",
+      "url": "https://pecl.php.net/get/apcu-5.1.28.tgz",
+      "sha256": "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf"
+    }
+  },
+  "runtimeContracts": {
+    "libiconv": {
+      "implementation": "libiconv",
+      "version": "1.18",
+      "package": "gnu-libiconv-libs",
+      "packageVersion": "1.18-r0",
+      "ownerPath": "/usr/lib/libiconv.so.2",
+      "target": "/usr/lib/libiconv.so.2.7.0"
+    }
+  },
+  "versions": {
+    "8.2": {
+      "minor": "8.2",
+      "patch": "8.2.32",
+      "base_image": "php:8.2-fpm-alpine@sha256:41ddda74d95c43518c3e4414e6c1c99f9c062d397f0c7a2d8cadf8d1f035d196",
+      "support": "security-only",
+      "eol": "2026-12-31"
+    },
+    "8.3": {
+      "minor": "8.3",
+      "patch": "8.3.32",
+      "base_image": "php:8.3-fpm-alpine@sha256:9fcec48321d890240d700ccdc2b475420c87d398826e68c3d8830b8fca663e5c",
+      "support": "security-only",
+      "eol": "2027-12-31"
+    },
+    "8.4": {
+      "minor": "8.4",
+      "patch": "8.4.23",
+      "base_image": "php:8.4-fpm-alpine@sha256:913ddd6934a805429618a16aa36da47cd8a8aec8b2f111c294936ba4003fded6",
+      "support": "active",
+      "eol": "2028-12-31"
+    },
+    "8.5": {
+      "minor": "8.5",
+      "patch": "8.5.8",
+      "base_image": "php:8.5-fpm-alpine@sha256:79def1d16ece3ab1a6656c46a23bfd80ad33887fbd33626e7bd743cef54ef9c6",
+      "support": "active",
+      "eol": "2029-12-31"
+    }
+  }
+}

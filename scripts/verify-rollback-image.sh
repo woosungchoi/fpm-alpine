@@ -69,9 +69,10 @@ PY
 for entry in "dockerhub|$DOCKERHUB_SUBJECT" "ghcr|$GHCR_SUBJECT"; do
   IFS='|' read -r registry subject <<< "$entry"
   for platform in "${PLATFORMS[@]}"; do
+    platform_subject="$(./scripts/resolve-platform-image.py "$subject" "$platform")"
     docker run --rm --platform "$platform" \
       -e EXPECTED_PHP_MINOR="$PHP_MINOR" \
-      --entrypoint sh "$subject" -ec '
+      --entrypoint sh "$platform_subject" -ec '
         test "$(php -r '\''echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;'\'')" = "$EXPECTED_PHP_MINOR"
         php -r '\''foreach (["imagick", "redis", "apcu"] as $extension) { if (!extension_loaded($extension)) { fwrite(STDERR, "missing extension: $extension\n"); exit(1); } }'\''
         php -r '\''$output = iconv("UTF-8", "ASCII//TRANSLIT", "café"); if ($output === false || preg_match("/[^\\x20-\\x7E]/", $output)) { fwrite(STDERR, "iconv transliteration failed\n"); exit(1); }'\''
@@ -103,7 +104,8 @@ for entry in "dockerhub|$DOCKERHUB_SUBJECT" "ghcr|$GHCR_SUBJECT"; do
     cat > "$REPORT_DIR/smoke/${registry}-${platform//\//-}.md" <<EOF
 # Rollback compatibility smoke
 
-- Subject: \`$subject\`
+- Index subject: \`$subject\`
+- Platform subject: \`$platform_subject\`
 - Platform: \`$platform\`
 - PHP minor: \`$PHP_MINOR\`
 - Required extensions: imagick, redis, apcu

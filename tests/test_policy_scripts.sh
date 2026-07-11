@@ -398,6 +398,9 @@ FRESHNESS_REPORT_JSON="$freshness_no_signal_dir/reports/dependency-freshness.jso
 assert_contains scripts/smoke-test-image.sh 'run_check "extension: ${extension} ${expected_version}"'
 assert_contains scripts/smoke-test-image.sh "EXPECTED_PLATFORM"
 assert_contains scripts/smoke-test-image.sh "php-fpm process alive"
+assert_contains scripts/smoke-test-image.sh 'while ! pgrep -x php-fpm'
+assert_contains scripts/smoke-test-image.sh '"$attempt" -lt 40'
+assert_contains scripts/smoke-test-image.sh 'sleep 0.25'
 assert_contains scripts/smoke-test-image.sh "GITHUB_STEP_SUMMARY"
 assert_contains scripts/report-manifest.sh "MANIFEST_RETRY_ATTEMPTS"
 assert_contains scripts/report-manifest.sh "Docker Hub propagation lag"

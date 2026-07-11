@@ -89,7 +89,7 @@ if [ -n "$EXPECTED_PLATFORM" ]; then
 fi
 container_id="$(docker run -d --rm "${docker_platform_args[@]}" --entrypoint sh "$IMAGE_NAME" -c 'php-fpm -F >/tmp/php-fpm.log 2>&1 & while :; do sleep 3600; done')"
 
-run_check "php-fpm process alive" 'pgrep -x php-fpm >/dev/null'
+run_check "php-fpm process alive" 'attempt=0; while ! pgrep -x php-fpm >/dev/null; do attempt=$((attempt + 1)); [ "$attempt" -lt 40 ] || exit 1; sleep 0.25; done'
 run_check "php -v" 'php -v'
 if [ -n "$EXPECTED_PHP_MINOR" ]; then
   run_check "PHP minor: ${EXPECTED_PHP_MINOR}" "php -r 'if (PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION !== \"${EXPECTED_PHP_MINOR}\") { fwrite(STDERR, \"unexpected PHP minor: \" . PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION . PHP_EOL); exit(1); }'"

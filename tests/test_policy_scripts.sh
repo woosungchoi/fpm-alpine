@@ -421,6 +421,7 @@ bash -n scripts/plan-branch-sync.sh
 bash -n scripts/create-branch-sync-prs.sh
 ./tests/test_reproducible_build_policy.sh
 ./tests/test_smoke_script.sh
+./tests/test_publisher_policy.sh
 python3 - <<'PY'
 from pathlib import Path
 import yaml

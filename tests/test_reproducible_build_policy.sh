@@ -188,6 +188,9 @@ assert_not_contains .dockerignore "scripts/"
 assert_contains .github/workflows/dependency-freshness.yml 'VERSIONS_PATH: build/versions.json'
 assert_not_contains .github/workflows/dependency-freshness.yml 'PHP_TAGS:'
 assert_contains scripts/report-freshness.sh 'python3 "$VALIDATOR_PATH" "$VERSIONS_PATH"'
+assert_contains scripts/report-freshness.sh 'DIGEST_RESOLVER_PATH="${DIGEST_RESOLVER_PATH:-scripts/resolve-image-digest.sh}"'
+assert_contains scripts/report-freshness.sh '"$DIGEST_RESOLVER_PATH" "$1"'
+assert_not_contains scripts/report-freshness.sh "awk '/^Digest:/"
 assert_not_contains scripts/report-freshness.sh 'IMAGICK_VERSION'
 assert_not_contains scripts/report-freshness.sh 'allow-untrusted'
 assert_not_contains scripts/report-freshness.sh 'alpine/edge'

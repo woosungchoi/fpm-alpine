@@ -56,6 +56,18 @@ For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRAN
 
 ## Maintenance and security status
 
+### Manual-only GitHub Actions publisher
+
+The repository includes a manual-only GitHub Actions publisher for PHP 8.2–8.5. During the migration, Docker Hub hooks remain active through the canary shadow period only. After two replacement canary successes, the legacy build rule and webhook must be disabled and read back before any production dispatch.
+
+- Canary tags are non-moving per workflow attempt: `canary-<minor>-<run-id>-<run-attempt>` on Docker Hub and GHCR. Existing canary tags are rejected before push.
+- Production promotion requires one explicit PHP minor per dispatch, downloaded and content-validated evidence from the immediately preceding PHP 8.5 canary and every current 8.2–8.5 canary artifact, repository variable `LEGACY_PUBLISHER_DISABLED=true`, explicit dispatch input `legacy_publisher_disabled=true`, and a matching fresh 15-minute cutover-evidence hash proving inactive build rule, strict integer zero in-flight builds, and absent webhook. The lease is revalidated immediately before bootstrap creation and production promotion. It re-tags the verified full-matrix canary digest without rebuilding, so a failed run cannot leave a partially updated multi-minor release or race an enabled legacy publisher.
+- Release and source tags include the full verified digest (`<patch>-<date>-<digest64>` and `sha-<minor>-<commit12>-<digest64>`) so different content cannot claim the same immutable tag name.
+- Every publisher subject is checked by exact digest for amd64/arm64 manifests, runtime behavior, BuildKit SBOM/provenance, keyless Cosign signatures, Trivy fixable-CRITICAL findings, and cross-registry semantic parity.
+- PHP 8.0 and 8.1 are excluded from publication, and no `latest` tag is created.
+
+See [docs/ci-operations.md](./docs/ci-operations.md) for dispatch, verification, promotion, and rollback gates. The presence of this workflow does not mean the legacy publisher has already been removed.
+
 ### Published manifest verification reports
 
 Docker Hub hooks remain the publishing path for this repository. GitHub Actions now provides the visibility layer around that publish path:

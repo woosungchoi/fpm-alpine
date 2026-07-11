@@ -7,6 +7,7 @@ REPORT_JSON="${REPORT_DIR}/dependency-freshness.json"
 VERSIONS_PATH="${VERSIONS_PATH:-build/versions.json}"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-woosungchoi/fpm-alpine}"
 VALIDATOR_PATH="${VALIDATOR_PATH:-scripts/validate-versions.py}"
+DIGEST_RESOLVER_PATH="${DIGEST_RESOLVER_PATH:-scripts/resolve-image-digest.sh}"
 REPORT_SKIP_REMOTE="${REPORT_SKIP_REMOTE:-0}"
 
 mkdir -p "$REPORT_DIR"
@@ -34,9 +35,7 @@ out.write_text(json.dumps(report, indent=2) + "\n")
 PY
 
 inspect_digest() {
-  local output
-  output="$(docker buildx imagetools inspect "$1" 2>&1)" || return 1
-  awk '/^Digest:/ { print $2; exit }' <<< "$output"
+  "$DIGEST_RESOLVER_PATH" "$1"
 }
 append_image() {
   python3 - "$tmp_json" "$1" "$2" "$3" "$4" <<'PY'

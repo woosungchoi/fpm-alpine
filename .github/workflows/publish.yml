@@ -840,13 +840,27 @@ jobs:
           if [ -n "$REQUESTED_VERSION" ]; then
             printf '%s\n' "$REQUESTED_VERSION" > /tmp/failure-minors.txt
           else
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" > /tmp/failure-jobs.json
             python3 - <<'PY' > /tmp/failure-minors.txt
           import json
+          import re
 
-          payload = json.load(open("build/versions.json"))
-          for minor, row in payload["versions"].items():
-              if row["support"] in {"active", "security-only"}:
+          jobs = json.load(open("/tmp/failure-jobs.json")).get("jobs") or []
+          failed = []
+          for job in jobs:
+              if job.get("conclusion") != "failure":
+                  continue
+              match = re.fullmatch(r"(?:canary|production) \((8\.[2-5]),.*", str(job.get("name", "")))
+              if match:
+                  failed.append(match.group(1))
+          if failed:
+              for minor in sorted(set(failed)):
                   print(minor)
+          else:
+              payload = json.load(open("build/versions.json"))
+              for minor, row in payload["versions"].items():
+                  if row["support"] in {"active", "security-only"}:
+                      print(minor)
           PY
           fi
           if [ "$CHANNEL" = canary ]; then

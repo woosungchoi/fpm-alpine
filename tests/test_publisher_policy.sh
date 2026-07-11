@@ -112,6 +112,9 @@ assert "github.ref == 'refs/heads/8.5'" in failure
 assert "needs.prepare.result == 'success'" in failure
 assert 'active-matrix' not in failure
 assert 'failure-minors.txt' in failure
+assert 'failure-jobs.json' in failure
+assert 'job.get("conclusion") != "failure"' in text
+assert 're.fullmatch(r"(?:canary|production) \\((8\\.[2-5]),.*"' in text
 assert 'payload["versions"].items()' in text
 assert '"security-only"' in text
 assert 'production-preflight' in jobs['production']['needs']
@@ -131,6 +134,33 @@ assert 'active-production-targets.tsv' in preflight_run
 assert preflight_run.count('./scripts/validate-canary-metadata.py') == 2
 assert 'PRIOR_CANARY_RUN_ID' in preflight_run
 assert 'prior-8.5' in preflight_run
+PY
+
+python3 - <<'PY'
+import json
+import subprocess
+import sys
+import tempfile
+import textwrap
+from pathlib import Path
+
+workflow = Path('.github/workflows/publish.yml').read_text()
+marker = 'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" > /tmp/failure-jobs.json'
+tail = workflow.split(marker, 1)[1].split("python3 - <<'PY' > /tmp/failure-minors.txt\n", 1)[1]
+code = textwrap.dedent(tail.split("\n          PY", 1)[0])
+compile(code, 'failure-minor-selection.py', 'exec')
+with tempfile.TemporaryDirectory() as tmp:
+    jobs_path = Path(tmp) / 'jobs.json'
+    code = code.replace('/tmp/failure-jobs.json', str(jobs_path))
+    jobs_path.write_text(json.dumps({'jobs': [
+        {'name': 'canary (8.2, fixture)', 'conclusion': 'success'},
+        {'name': 'canary (8.3, fixture)', 'conclusion': 'success'},
+        {'name': 'canary (8.4, fixture)', 'conclusion': 'success'},
+        {'name': 'canary (8.5, fixture)', 'conclusion': 'failure'},
+        {'name': 'prepare', 'conclusion': 'success'},
+    ]}))
+    result = subprocess.run([sys.executable, '-c', code], check=True, text=True, stdout=subprocess.PIPE)
+    assert result.stdout.splitlines() == ['8.5'], result.stdout
 PY
 
 python3 - <<'PY'

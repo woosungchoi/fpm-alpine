@@ -8,11 +8,11 @@ Production users should pin an explicit version tag, for example `woosungchoi/fp
 
 ## Security maintenance
 
-The maintained image lines are validated with repository smoke tests and published-manifest checks:
+The active image lines are validated from the single `main` source trunk with repository smoke tests and published-manifest checks:
 
-- `smoke-test` builds the branch Dockerfile and verifies PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
+- `smoke-test` builds the `main` active matrix and verifies PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
 - `verify-published-manifest` checks the published Docker Hub tags for required multi-arch manifest entries.
-- The repository policy standardizes supported branches on the documented Imagick release baseline unless a branch-specific exception is documented.
+- The repository policy standardizes active matrix entries on the documented Imagick release baseline unless an explicit exception is documented.
 
 ## Reporting a vulnerability
 
@@ -20,7 +20,7 @@ Report suspected vulnerabilities through [GitHub private vulnerability reporting
 
 Please include:
 
-- affected image tag or branch
+- affected image tag and source revision
 - affected architecture, if architecture-specific
 - reproduction steps or a minimal proof of concept
 - expected impact
@@ -30,4 +30,4 @@ If private vulnerability reporting is unavailable, use the maintainer contact in
 
 ## Maintainer response
 
-The maintainer will triage reports against the relevant PHP branch, Dockerfile, bundled Alpine packages, PECL extensions, and Docker Hub published image tags. Confirmed vulnerabilities are fixed by updating the affected version branch, adjusting build configuration, or documenting mitigations as appropriate.
+The maintainer will triage reports against the relevant `main` matrix entry, Dockerfile, bundled Alpine packages, PECL extensions, and published image tags. Confirmed vulnerabilities are fixed on `main` by updating the affected matrix entry, adjusting build configuration, or documenting mitigations as appropriate.

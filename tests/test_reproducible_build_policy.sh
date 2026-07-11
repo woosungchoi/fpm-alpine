@@ -82,8 +82,10 @@ from pathlib import Path
 import re
 workflow=Path('.github/workflows/smoke-test.yml').read_text()
 trigger=workflow.split('\npermissions:',1)[0]
-assert '  push:\n    branches: ["8.5"]\n' in trigger
-assert '  pull_request:\n' in trigger and '  workflow_dispatch:\n' in trigger
+assert '  push:\n    branches: ["main"]\n' in trigger
+assert '  pull_request:\n' in trigger
+assert '  pull_request:\n    branches:' not in trigger
+assert '  workflow_dispatch:\n' in trigger
 assert trigger.count('  push:\n') == 1
 def steps(text):
     starts=list(re.finditer(r'^\s{6}- name:\s*(.+?)\s*$', text, re.M))

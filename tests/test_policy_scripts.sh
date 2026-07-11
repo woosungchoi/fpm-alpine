@@ -54,7 +54,7 @@ assert_regex SUPPORT.md '^\| PHP 8\.1 \(`8\.1`\) \| EOL, frozen, unsupported \| 
 assert_regex SUPPORT.md '^\| PHP 8\.2 \(`8\.2`\) \| security-only \| 2026-12-31 \|$'
 assert_regex SUPPORT.md '^\| PHP 8\.3 \(`8\.3`\) \| security-only \| 2027-12-31 \|$'
 assert_regex SUPPORT.md '^\| PHP 8\.4 \(`8\.4`\) \| active support, then security support \| 2028-12-31 \|$'
-assert_regex SUPPORT.md '^\| PHP 8\.5 \(`8\.5`\) \| active support, then security support; primary branch \| 2029-12-31 \|$'
+assert_regex SUPPORT.md '^\| PHP 8\.5 \(`8\.5`\) \| active support, then security support \| 2029-12-31 \|$'
 assert_regex SUPPORT.md 'The `8\.0` and `8\.1` tags are retained.*frozen and \*\*never rebuilt\*\*'
 assert_contains SUPPORT.md "Running these tags is unsupported legacy use"
 assert_contains SUPPORT.md 'The Docker Hub `this` tag is an unsupported legacy/accidental tag; it is not a supported version contract, receives no rebuilds, updates, or support, and must not be used.'
@@ -79,7 +79,7 @@ private_advisory_url="https://github.com/woosungchoi/fpm-alpine/security/advisor
 support_url="https://github.com/woosungchoi/fpm-alpine/blob/HEAD/SUPPORT.md"
 security_policy_url="https://github.com/woosungchoi/fpm-alpine/security/policy"
 assert_file .github/PULL_REQUEST_TEMPLATE.md
-assert_contains .github/PULL_REQUEST_TEMPLATE.md "Docker Hub hooks and publishing behavior are unchanged"
+assert_contains .github/PULL_REQUEST_TEMPLATE.md "Registry credentials remain unreachable from pull requests"
 assert_contains .github/PULL_REQUEST_TEMPLATE.md "No vulnerability details or secrets are included"
 assert_contains .github/PULL_REQUEST_TEMPLATE.md "$private_advisory_url"
 assert_contains .github/PULL_REQUEST_TEMPLATE.md "$support_url"
@@ -161,86 +161,29 @@ assert_contains docs/ci-operations.md "independently enforce the approved pin an
 assert_contains docs/ci-operations.md 'all eight `docker-smoke-matrix` jobs'
 assert_not_contains README.md "single machine-readable source"
 assert_not_contains docs/ci-operations.md "single source for PHP"
-assert_contains docs/ci-operations.md "Docker Hub hooks remain the publish path"
+assert_contains docs/ci-operations.md "GitHub Actions is the sole publisher"
 assert_contains docs/ci-operations.md "Rollback"
 
-assert_file docs/branch-drift-allowlist.tsv
-assert_contains docs/branch-drift-allowlist.tsv "path"
-
-assert_file scripts/branch-drift-report.sh
-assert_executable scripts/branch-drift-report.sh
-assert_file scripts/plan-branch-sync.sh
-assert_executable scripts/plan-branch-sync.sh
-assert_file scripts/create-branch-sync-prs.sh
-assert_executable scripts/create-branch-sync-prs.sh
-assert_file .github/workflows/branch-sync-pr.yml
-assert_contains .github/workflows/branch-sync-pr.yml "actions/create-github-app-token@v2"
-assert_contains .github/workflows/branch-sync-pr.yml "permission-pull-requests: write"
-assert_contains .github/workflows/branch-sync-pr.yml "permission-actions: write"
-assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_ENABLE_AUTO_MERGE: \"1\""
-assert_contains .github/workflows/branch-sync-pr.yml "BRANCH_SYNC_DISPATCH_WORKFLOW: \"\""
-assert_contains .github/workflows/branch-sync-pr.yml "actions/checkout@v6.0.2"
-assert_contains .github/workflows/branch-sync-pr.yml "type: choice"
-assert_contains .github/workflows/branch-sync-pr.yml "TARGET_BRANCH:"
-
-branch_report_dir="$(mktemp -d)"
-branch_sync_dir="$(mktemp -d)"
-trap 'rm -rf "$branch_report_dir" "$branch_sync_dir"' EXIT
-BRANCH_DRIFT_BRANCHES="8.5" BRANCH_DRIFT_REPORT_DIR="$branch_report_dir" ./scripts/branch-drift-report.sh
-assert_file "$branch_report_dir/branch-drift.md"
-assert_file "$branch_report_dir/branch-drift.json"
-assert_contains "$branch_report_dir/branch-drift.md" "# fpm-alpine branch drift report"
-assert_contains "$branch_report_dir/branch-drift.md" "report-only"
-assert_contains "$branch_report_dir/branch-drift.md" "8.5"
-
-BRANCH_SYNC_TARGETS="8.4" BRANCH_SYNC_OUTPUT_DIR="$branch_sync_dir" BRANCH_SYNC_DRY_RUN=1 ./scripts/plan-branch-sync.sh
-assert_file "$branch_sync_dir/8.4.json"
-assert_file "$branch_sync_dir/summary.md"
-assert_contains "$branch_sync_dir/summary.md" "safe-files-only"
-assert_contains "$branch_sync_dir/summary.md" "Blocked/manual files"
-assert_contains "$branch_sync_dir/summary.md" "Dockerfile"
-python3 - "$branch_sync_dir/8.4.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-plan = json.loads(Path(sys.argv[1]).read_text())
-assert plan["baseBranch"] == "8.5"
-assert plan["targetBranch"] == "8.4"
-assert plan["mode"] == "safe-files-only"
-assert "Dockerfile" not in plan["filesToSync"]
-assert any(item["path"] == "Dockerfile" for item in plan["blockedFiles"])
-PY
-
-BRANCH_SYNC_TARGETS="8.4" BRANCH_SYNC_OUTPUT_DIR="$branch_sync_dir" DRY_RUN=1 ./scripts/create-branch-sync-prs.sh
-assert_file "$branch_sync_dir/prs.md"
-assert_contains "$branch_sync_dir/prs.md" "Docker Hub hooks are unchanged"
-assert_contains "$branch_sync_dir/prs.md" 'Required check: `docker-smoke`'
-assert_contains "$branch_sync_dir/prs.md" "Blocked/manual files"
-assert_contains "$branch_sync_dir/prs.md" "maintenance, branch-sync, safe-sync"
-
-unsafe_allowlist="$branch_sync_dir/unsafe-safe-files.txt"
-cat > "$unsafe_allowlist" <<'EOF'
-Dockerfile
-hooks/build
-scripts/branch-drift-report.sh
-EOF
-unsafe_dir="$branch_sync_dir/unsafe"
-BRANCH_SYNC_TARGETS="8.4" BRANCH_SYNC_OUTPUT_DIR="$unsafe_dir" BRANCH_SYNC_SAFE_FILES_FILE="$unsafe_allowlist" BRANCH_SYNC_DRY_RUN=1 ./scripts/plan-branch-sync.sh
-python3 - "$unsafe_dir/8.4.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-plan = json.loads(Path(sys.argv[1]).read_text())
-assert "Dockerfile" not in plan["filesToSync"]
-assert "hooks/build" not in plan["filesToSync"]
-assert any(item["path"] == "Dockerfile" for item in plan["blockedFiles"])
-PY
-if grep -Fq "git add -A" scripts/create-branch-sync-prs.sh; then
-  fail "create-branch-sync-prs.sh must stage only planned safe files, not git add -A"
-fi
-assert_contains scripts/create-branch-sync-prs.sh "git diff --cached --quiet"
-assert_contains scripts/create-branch-sync-prs.sh "gh workflow run"
-assert_contains scripts/create-branch-sync-prs.sh "git push --force-with-lease origin"
+for removed in \
+  .github/workflows/branch-drift.yml \
+  .github/workflows/branch-sync-pr.yml \
+  scripts/branch-drift-report.sh \
+  scripts/plan-branch-sync.sh \
+  scripts/create-branch-sync-prs.sh \
+  docs/branch-drift-allowlist.tsv \
+  docs/branch-sync-safe-files.txt \
+  docs/branch-sync-auto-merge-policy.md \
+  hooks/build hooks/push; do
+  assert_not_file "$removed"
+done
+assert_contains .github/workflows/smoke-test.yml 'branches: ["main"]'
+assert_contains .github/workflows/verify-published-manifest.yml "- 'main'"
+assert_contains .github/workflows/publish.yml "refs/heads/main"
+assert_not_contains .github/workflows/publish.yml "refs/heads/8.5"
+assert_not_regex .github/workflows/smoke-test.yml 'branches:.*8\.5'
+assert_not_regex .github/workflows/verify-published-manifest.yml "^[[:space:]]+- '8\\.[0-5]'$"
+assert_not_regex README.md 'branch-(sync|drift)'
+assert_not_regex docs/ci-operations.md 'branch-(sync|drift)'
 
 fixture_dir="$(mktemp -d)"
 mkdir -p "$fixture_dir/bin"
@@ -419,21 +362,8 @@ bash -n scripts/smoke-test-image.sh
 bash -n scripts/create-manifest-failure-issue.sh
 bash -n scripts/report-manifest.sh
 bash -n scripts/report-freshness.sh
-bash -n scripts/branch-drift-report.sh
-bash -n scripts/plan-branch-sync.sh
-bash -n scripts/create-branch-sync-prs.sh
 ./tests/test_reproducible_build_policy.sh
 ./tests/test_smoke_script.sh
 ./tests/test_publisher_policy.sh
-python3 - <<'PY'
-from pathlib import Path
-import yaml
-p = Path('.github/workflows/branch-sync-pr.yml')
-data = yaml.safe_load(p.read_text())
-assert data.get('jobs')
-text = p.read_text()
-assert 'Dockerfile' not in text
-assert 'hooks/' not in text
-PY
 
 echo "policy script tests passed"

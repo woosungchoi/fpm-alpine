@@ -6,9 +6,9 @@ Describe the change and why it is needed.
 
 ## Scope
 
-- [ ] The target PHP branch is identified.
+- [ ] The affected `main` matrix entry or image tag is identified.
 - [ ] Image build or runtime behavior changes are called out explicitly.
-- [ ] Docker Hub hooks and publishing behavior are unchanged, or the change is clearly justified.
+- [ ] Registry credentials remain unreachable from pull requests and publishing changes are clearly justified.
 
 ## Verification
 

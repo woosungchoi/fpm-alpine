@@ -97,6 +97,10 @@ bootstrap_run = next(step['run'] for step in jobs['bootstrap-ghcr-rollback']['st
 assert bootstrap_run.index('./scripts/validate-legacy-cutover-evidence.py') < bootstrap_run.index('docker buildx imagetools create')
 promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified canary digests without rebuilding')
 assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh "$DOCKERHUB_REPOSITORY"')
+production_step_names = [step.get('name') for step in jobs['production']['steps']]
+assert 'Re-verify exact canary subjects before promotion' not in production_step_names
+assert production_step_names.index('Promote verified canary digests without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
+assert './scripts/scan-image.sh' not in promotion_run
 metadata_load_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Load and bind verified canary metadata')
 assert metadata_load_run.index('./scripts/validate-canary-metadata.py') < metadata_load_run.index('output.write(f"dockerhub_digest=')
 assert "imagetools inspect \"$1\" | awk '/^Digest:/" not in text

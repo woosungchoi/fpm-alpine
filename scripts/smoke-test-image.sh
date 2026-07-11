@@ -28,6 +28,21 @@ append_summary() {
   printf '%s\n' "$*" >> "$SMOKE_REPORT_MD"
 }
 
+update_check() {
+  local name="$1"
+  local marker="$2"
+  python3 - "$SMOKE_REPORT_MD" "$name" "$marker" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+name = sys.argv[2]
+marker = sys.argv[3]
+text = path.read_text()
+text = text.replace(f"- ⏳ {name}\n", f"- {marker} {name}\n", 1)
+path.write_text(text)
+PY
+}
+
 container_id=""
 cleanup() {
   if [ -n "$container_id" ]; then
@@ -35,6 +50,26 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+wait_for_fpm() {
+  local attempt=0
+  local running=""
+  printf '\n== php-fpm process ready ==\n'
+  append_summary "- ⏳ php-fpm process ready"
+  while [ "$attempt" -lt 40 ]; do
+    running="$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || true)"
+    if [ "$running" = true ] && docker logs "$container_id" 2>&1 | grep -Fq 'ready to handle connections'; then
+      update_check "php-fpm process ready" "✅"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.25
+  done
+  update_check "php-fpm process ready" "❌"
+  echo "smoke check failed: php-fpm process ready" >&2
+  docker logs "$container_id" >&2 || true
+  return 1
+}
 
 run_in_container() {
   docker exec "$container_id" sh -lc "$1"
@@ -46,29 +81,12 @@ run_check() {
   printf '\n== %s ==\n' "$name"
   append_summary "- ⏳ ${name}"
   if run_in_container "$command"; then
-    # Replace the pending marker with a passing marker while keeping order stable.
-    python3 - "$SMOKE_REPORT_MD" "$name" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-name = sys.argv[2]
-text = path.read_text()
-text = text.replace(f"- ⏳ {name}\n", f"- ✅ {name}\n", 1)
-path.write_text(text)
-PY
+    update_check "$name" "✅"
   else
-    python3 - "$SMOKE_REPORT_MD" "$name" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-name = sys.argv[2]
-text = path.read_text()
-text = text.replace(f"- ⏳ {name}\n", f"- ❌ {name}\n", 1)
-path.write_text(text)
-PY
+    update_check "$name" "❌"
     echo "smoke check failed: ${name}" >&2
-    echo "php-fpm log follows, if available:" >&2
-    docker exec "$container_id" sh -lc 'cat /tmp/php-fpm.log 2>/dev/null || true' >&2 || true
+    echo "container log follows, if available:" >&2
+    docker logs "$container_id" >&2 || true
     exit 1
   fi
 }
@@ -87,9 +105,9 @@ docker_platform_args=()
 if [ -n "$EXPECTED_PLATFORM" ]; then
   docker_platform_args=(--platform "$EXPECTED_PLATFORM")
 fi
-container_id="$(docker run -d --rm "${docker_platform_args[@]}" --entrypoint sh "$IMAGE_NAME" -c 'php-fpm -F >/tmp/php-fpm.log 2>&1 & while :; do sleep 3600; done')"
+container_id="$(docker run -d --rm "${docker_platform_args[@]}" --entrypoint php-fpm "$IMAGE_NAME" -F)"
 
-run_check "php-fpm process alive" 'attempt=0; while ! pgrep -x php-fpm >/dev/null; do attempt=$((attempt + 1)); [ "$attempt" -lt 40 ] || exit 1; sleep 0.25; done'
+wait_for_fpm
 run_check "php -v" 'php -v'
 if [ -n "$EXPECTED_PHP_MINOR" ]; then
   run_check "PHP minor: ${EXPECTED_PHP_MINOR}" "php -r 'if (PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION !== \"${EXPECTED_PHP_MINOR}\") { fwrite(STDERR, \"unexpected PHP minor: \" . PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION . PHP_EOL); exit(1); }'"

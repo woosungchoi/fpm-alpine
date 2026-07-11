@@ -2,56 +2,113 @@ name: smoke-test
 
 on:
   push:
+    branches: ["8.5"]
   pull_request:
   workflow_dispatch:
-    inputs:
-      manifest_image:
-        description: "Optional published image ref to inspect (for example woosungchoi/fpm-alpine:8.5)"
-        required: false
-        type: string
+
+permissions:
+  contents: read
 
 concurrency:
   group: smoke-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  docker-smoke:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      created: ${{ steps.metadata.outputs.created }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
+      - name: Validate pins and prepare matrix
+        id: matrix
+        run: |
+          ./scripts/validate-versions.py
+          matrix=$(python3 scripts/validate-versions.py --matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare explicit OCI creation time
+        id: metadata
+        run: echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+  docker-smoke-matrix:
+    name: docker-smoke-matrix (${{ matrix.php_minor }} / ${{ matrix.arch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3.7.0
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.1.0
 
-      - name: Build image for smoke test
+      - name: Build source-only smoke image
         uses: docker/build-push-action@v7.2.0
         with:
           context: .
           file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
           load: true
-          tags: fpm-alpine:smoke
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          push: false
+          tags: fpm-alpine:smoke-${{ matrix.php_minor }}-${{ matrix.arch }}
+          build-args: |
+            PHP_BASE_IMAGE=${{ matrix.php_base_image }}
+            IMAGICK_URL=${{ matrix.imagick_url }}
+            IMAGICK_SHA256=${{ matrix.imagick_sha256 }}
+            REDIS_URL=${{ matrix.redis_url }}
+            REDIS_SHA256=${{ matrix.redis_sha256 }}
+            APCU_URL=${{ matrix.apcu_url }}
+            APCU_SHA256=${{ matrix.apcu_sha256 }}
+            OCI_SOURCE=${{ github.server_url }}/${{ github.repository }}
+            OCI_REVISION=${{ github.sha }}
+            OCI_VERSION=${{ matrix.php_patch }}
+            OCI_CREATED=${{ needs.prepare.outputs.created }}
+          cache-from: type=gha,scope=php-${{ matrix.php_minor }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=php-${{ matrix.php_minor }}-${{ matrix.arch }}
 
-      - name: Run smoke test
+      - name: Run smoke test under target platform
         env:
+          EXPECTED_PHP_MINOR: ${{ matrix.php_minor }}
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_IMAGICK_VERSION: ${{ matrix.imagick_version }}
+          EXPECTED_REDIS_VERSION: ${{ matrix.redis_version }}
+          EXPECTED_APCU_VERSION: ${{ matrix.apcu_version }}
+          EXPECTED_ICONV_IMPLEMENTATION: ${{ matrix.iconv_implementation }}
+          EXPECTED_ICONV_VERSION: ${{ matrix.iconv_version }}
+          EXPECTED_ICONV_PACKAGE: ${{ matrix.iconv_package }}
+          EXPECTED_ICONV_PACKAGE_VERSION: ${{ matrix.iconv_package_version }}
+          EXPECTED_ICONV_OWNER_PATH: ${{ matrix.iconv_owner_path }}
+          EXPECTED_ICONV_TARGET: ${{ matrix.iconv_target }}
           SMOKE_REPORT_DIR: smoke-reports
-        run: ./scripts/smoke-test-image.sh fpm-alpine:smoke
+        run: ./scripts/smoke-test-image.sh "fpm-alpine:smoke-${{ matrix.php_minor }}-${{ matrix.arch }}"
 
       - name: Upload smoke report
         if: always()
         uses: actions/upload-artifact@v7.0.0
         with:
-          name: smoke-report
+          name: smoke-report-php-${{ matrix.php_minor }}-${{ matrix.arch }}
           path: smoke-reports/
 
-      - name: Inspect published multi-arch manifest (optional)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.manifest_image != '' }}
+  docker-smoke:
+    name: docker-smoke
+    if: ${{ always() }}
+    needs: docker-smoke-matrix
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require every smoke matrix job to pass
         env:
-          MANIFEST_RETRY_ATTEMPTS: "3"
-          MANIFEST_RETRY_DELAY_SECONDS: "20"
-        run: ./scripts/check-manifest.sh "${{ inputs.manifest_image }}"
+          MATRIX_RESULT: ${{ needs.docker-smoke-matrix.result }}
+        run: test "$MATRIX_RESULT" = success

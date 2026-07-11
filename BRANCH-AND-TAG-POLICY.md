@@ -4,8 +4,8 @@ This document defines branch and tag behavior. [SUPPORT.md](./SUPPORT.md) is the
 
 ## Branch roles
 
-- `8.5` is the current primary and GitHub default branch.
-- Version branches identify their matching PHP major/minor image line.
+- `main` is the only active source branch and the GitHub default branch.
+- Annotated `archive/php-<minor>-final-branch` tags preserve former version-branch tips.
 - A branch or tag existing in the repository or registry does not by itself mean that the line is supported.
 - PHP 7.4 / former `master` is frozen, unsupported history; the remote `master` branch has been removed.
 
@@ -15,21 +15,21 @@ Support, security-only, frozen, and unsupported status is defined only in [SUPPO
 
 - Production users should pin an explicit tag such as `woosungchoi/fpm-alpine:8.5`.
 - There is intentionally no `latest` tag. Consumers must select a PHP line explicitly.
-- Docker Hub hooks remain the publish path for supported release targets.
-- GitHub Actions verifies, observes, and reports; it does not replace Docker Hub publishing.
+- GitHub Actions is the sole publisher for supported release targets on Docker Hub and GHCR.
+- Docker Hub Automatic Builds and legacy publication hooks are removed.
 - Operational workflows may still inspect historical tags. Such inspection does not grant or imply support.
 
 ## Change policy
 
-- New development starts from the primary branch or the supported target branch that needs the change.
-- Security-only branches receive security fixes and only the minimum maintenance required to deliver them.
+- New development starts from `main`; `build/versions.json` selects the active matrix entry.
+- Security-only image lines receive security fixes and only the minimum maintenance required to deliver them.
 - Frozen branches receive no rebuilds, dependency refreshes, CVE remediation, or compatibility fixes.
-- Publish-sensitive changes, Dockerfiles, and Docker Hub hooks require explicit branch-specific review and image validation.
-- Safe workflow, script, test, and policy guardrails may be synchronized under the controls documented in the CI runbook.
+- Publish-sensitive changes and Dockerfiles require explicit review and image validation.
+- Frozen archive tags and EOL image tags are never used as source publication targets.
 
 ## Imagick baseline
 
-Supported branches use the following baseline unless a branch-specific, smoke-tested exception is documented:
+Active matrix entries use the following baseline unless a smoke-tested exception is documented:
 
 - pinned release: `imagick-3.8.1`
 - source: PECL release tarball copied to `/usr/src/php/ext/imagick`

@@ -7,37 +7,35 @@ See also: [SUPPORT.md](./SUPPORT.md), [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TA
 > [!IMPORTANT]
 > PHP `8.0` and `8.1` images are frozen, unsupported legacy artifacts and are never rebuilt. See [SUPPORT.md](./SUPPORT.md) for the canonical lifecycle policy.
 >
-> The repository's current primary/default branch is **`8.5`**.
+> The repository's primary/default branch is **`main`**, the only active source trunk.
 >
-> For production use, **pin an explicit image tag / version branch** such as `woosungchoi/fpm-alpine:8.5` instead of relying on `latest`.
+> For production use, **pin an explicit image tag** such as `woosungchoi/fpm-alpine:8.5` instead of relying on `latest`.
 
-## Current branch / version map
+## Source and image-tag map
 
-### Version branches
+The single `main` source trunk builds the active PHP matrix from `build/versions.json`.
 
-| Branch | Base image | Status |
+| Image tag | Base image | Status |
 | --- | --- | --- |
 | `8.0` | `php:8.0-fpm-alpine` | EOL / frozen / unsupported |
 | `8.1` | `php:8.1-fpm-alpine` | EOL / frozen / unsupported |
 | `8.2` | `php:8.2-fpm-alpine` | security-only |
 | `8.3` | `php:8.3-fpm-alpine` | security-only |
 | `8.4` | `php:8.4-fpm-alpine` | active / security support |
-| `8.5` | `php:8.5-fpm-alpine` | active / security support; primary branch |
+| `8.5` | `php:8.5-fpm-alpine` | active / security support |
 
-### Legacy branch
+### Archived source history
 
-| Branch | Base image | Status |
-| --- | --- | --- |
-| legacy `master` | `php:7.4-fpm-alpine` | legacy / frozen / archived locally only |
+Former version-branch tips are preserved by annotated `archive/php-<minor>-final-branch` tags. Legacy `master` / PHP 7.4 history is frozen and unsupported.
 
 ## Support and branch policy
 
-The canonical support matrix and definitions are in [SUPPORT.md](./SUPPORT.md). `8.5` is the primary/default branch. PHP 7.4 / legacy `master`, PHP 8.0, and PHP 8.1 are unsupported frozen history.
+The canonical support matrix and definitions are in [SUPPORT.md](./SUPPORT.md). `main` is the only active source branch. PHP 7.4 / legacy `master`, PHP 8.0, and PHP 8.1 are unsupported frozen history.
 
 What that means in practice:
 
-- browse and document the repo as if **`8.5` is the mainline**
-- use only a supported version branch for new deployments
+- start source changes from **`main`**
+- use only a supported explicit image tag for new deployments
 - do **not** start new work from the legacy PHP 7.4 branch history
 - do **not** expect PHP 7.4 fixes or refreshes going forward
 
@@ -58,7 +56,7 @@ For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRAN
 
 ### Manual-only GitHub Actions publisher
 
-The repository includes a manual-only GitHub Actions publisher for PHP 8.2–8.5. During the migration, Docker Hub hooks remain active through the canary shadow period only. After two replacement canary successes, the legacy build rule and webhook must be disabled and read back before any production dispatch.
+GitHub Actions is the sole publisher for PHP 8.2–8.5. Docker Hub Automatic Builds and the legacy publication webhook have been removed. The publisher remains manual-only so source merges cannot access registry credentials or publish images.
 
 - Canary tags are non-moving per workflow attempt: `canary-<minor>-<run-id>-<run-attempt>` on Docker Hub and GHCR. Existing canary tags are rejected before push.
 - Production promotion requires one explicit PHP minor per dispatch, downloaded and content-validated evidence from the immediately preceding PHP 8.5 canary and every current 8.2–8.5 canary artifact, repository variable `LEGACY_PUBLISHER_DISABLED=true`, explicit dispatch input `legacy_publisher_disabled=true`, and a matching fresh 15-minute cutover-evidence hash proving inactive build rule, strict integer zero in-flight builds, and absent webhook. The lease is revalidated immediately before bootstrap creation and production promotion. It re-tags the verified full-matrix canary digest without rebuilding, so a failed run cannot leave a partially updated multi-minor release or race an enabled legacy publisher.
@@ -66,18 +64,16 @@ The repository includes a manual-only GitHub Actions publisher for PHP 8.2–8.5
 - Every publisher subject is checked by exact digest for amd64/arm64 manifests, runtime behavior, BuildKit SBOM/provenance, keyless Cosign signatures, Trivy fixable-CRITICAL findings, and cross-registry semantic parity.
 - PHP 8.0 and 8.1 are excluded from publication, and no `latest` tag is created.
 
-See [docs/ci-operations.md](./docs/ci-operations.md) for dispatch, verification, promotion, and rollback gates. The presence of this workflow does not mean the legacy publisher has already been removed.
+See [docs/ci-operations.md](./docs/ci-operations.md) for dispatch, verification, promotion, and rollback gates.
 
 ### Published manifest verification reports
 
-Docker Hub hooks remain the publishing path for this repository. GitHub Actions now provides the visibility layer around that publish path:
+GitHub Actions publishes to Docker Hub and GHCR and verifies both registries by exact digest:
 
-- `verify-published-manifest` runs after maintained-branch pushes, on a daily schedule, and on manual dispatch.
+- `verify-published-manifest` runs after `main` pushes, on a schedule, and on manual dispatch.
 - The workflow verifies each maintained Docker Hub tag for the expected `linux/amd64` and `linux/arm64` platforms.
 - Each run writes a GitHub Actions step summary and uploads manifest report artifacts containing the observed tag digest, per-platform digests, and attestation/metadata manifest entries when present.
-- Branch-push runs make the current published Docker Hub state visible from GitHub Actions. Docker Hub autobuild can still lag behind the GitHub push, so the daily/manual verification remains the source of truth for the final published state.
-
-This keeps Docker Hub autobuild hooks in place while making the final published image state easier to inspect from GitHub Actions.
+- Scheduled/manual verification remains the source of truth for the final published state.
 
 ### Dependency freshness reports
 
@@ -90,17 +86,15 @@ This keeps Docker Hub autobuild hooks in place while making the final published 
 
 The workflow runs weekly and on manual dispatch, writes a GitHub Actions step summary, and uploads `freshness-reports/` artifacts for review.
 
-This repository is maintained through version branches and lightweight verification workflows:
+This repository is maintained through one `main` source trunk and verification workflows:
 
-- `smoke-test` builds the branch Dockerfile and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
+- `smoke-test` builds the active PHP matrix from `main` and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
 - `verify-published-manifest` runs on a schedule and verifies the configured published Docker Hub tags.
 - `dependency-freshness` produces report-only dependency/source freshness observations for maintainers.
-- `branch-drift` produces report-only workflow/script/policy drift reports across configured branches.
-- `branch-sync-pr` can create safe-file sync PRs from `8.5` for workflow/script/docs/test guardrails only; operational coverage does not imply lifecycle support.
 - Supported branches use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
 
-GitHub Releases are intentionally optional for this Docker image repository. The operational release contract is the explicit Docker image tag for each supported PHP version branch.
+GitHub Releases are intentionally optional for this Docker image repository. The operational release contract is the explicit Docker image tag for each supported PHP minor.
 
 ## What this image adds
 
@@ -180,7 +174,7 @@ A separate GitHub Actions workflow also performs scheduled/manual published-mani
 
 Historically this image started from the WordPress PHP-FPM Alpine Dockerfile lineage.
 
-Because this repository now has multiple version branches, the exact upstream base differs by branch. Check the `Dockerfile` in the branch you are using.
+The exact upstream base differs by active matrix entry. Check `build/versions.json` and the `main` Dockerfile.
 
 ## Repositories where this image is used
 

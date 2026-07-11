@@ -2,7 +2,7 @@ name: smoke-test
 
 on:
   push:
-    branches: ["8.5"]
+    branches: ["main"]
   pull_request:
   workflow_dispatch:
 

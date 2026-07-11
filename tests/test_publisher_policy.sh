@@ -78,7 +78,7 @@ for required in ('scripts/verify-published-image.sh', 'scripts/promote-image.sh'
                  'steps.canary.outputs.ghcr_digest'):
     assert required in production, required
 assert 'test "$SOURCE_SHA" = "$DISPATCH_SHA"' in text
-assert "test \"$DISPATCH_REF\" = 'refs/heads/8.5'" in text
+assert "test \"$DISPATCH_REF\" = 'refs/heads/main'" in text
 assert 'actions/runs/${CANARY_RUN_ID}' in text
 assert 'actions/runs/${PRIOR_CANARY_RUN_ID}' in text
 assert 'run.get("run_number") != prior.get("run_number", -2) + 1' in text
@@ -108,7 +108,7 @@ assert '[[ "$REQUESTED_VERSION" =~ ^8\\.[2-5]$ ]]' in text
 assert 'gh run download "$CANARY_RUN_ID" --repo "$GITHUB_REPOSITORY"' in text
 failure = yaml.safe_dump(jobs['report-failure'], sort_keys=False)
 assert 'scripts/create-manifest-failure-issue.sh' in failure
-assert "github.ref == 'refs/heads/8.5'" in failure
+assert "github.ref == 'refs/heads/main'" in failure
 assert "needs.prepare.result == 'success'" in failure
 assert 'active-matrix' not in failure
 assert 'failure-minors.txt' in failure
@@ -178,8 +178,8 @@ code = textwrap.dedent(tail.split("\n          PY", 1)[0])
 compile(code, "production-canary-contract.py", "exec")
 
 sha = "0123456789abcdef0123456789abcdef01234567"
-current = {"id": 102, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "8.5", "path": ".github/workflows/publish.yml", "run_attempt": 1, "run_number": 11}
-prior = {"id": 101, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "8.5", "path": ".github/workflows/publish.yml", "run_attempt": 2, "run_number": 10}
+current = {"id": 102, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 1, "run_number": 11}
+prior = {"id": 101, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 2, "run_number": 10}
 current_artifacts = {"artifacts": [{"name": f"publisher-canary-{minor}-102-1", "expired": False} for minor in ("8.2", "8.3", "8.4", "8.5")]}
 prior_artifacts = {"artifacts": [{"name": "publisher-canary-8.5-101-2", "expired": False}]}
 
@@ -580,7 +580,7 @@ assert_contains scripts/promote-image.sh 'immutable tag already points to anothe
 assert_contains scripts/promote-image.sh 'sha-${MINOR}-${short_sha}-${digest_hex}'
 assert_contains scripts/promote-image.sh 'docker buildx imagetools create'
 assert_not_contains scripts/promote-image.sh ':latest'
-assert_contains scripts/verify-published-image.sh '@refs/heads/8\.5$'
+assert_contains scripts/verify-published-image.sh '@refs/heads/main$'
 assert_contains scripts/verify-rollback-image.sh 'rollback registry platform config/layer parity verified'
 assert_not_contains scripts/verify-rollback-image.sh 'build/versions.json'
 assert_contains scripts/rollback-moving-aliases.sh 'both registries were attempted'

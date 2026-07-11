@@ -8,7 +8,7 @@ EXPECTED_VERSION="${4:-}"
 REPORT_DIR="${5:-publisher-reports}"
 EXPECTED_SOURCE="${EXPECTED_SOURCE:-https://github.com/woosungchoi/fpm-alpine}"
 EXPECTED_LICENSES="${EXPECTED_LICENSES:-GPL-2.0-only}"
-COSIGN_CERTIFICATE_IDENTITY_REGEXP="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/woosungchoi/fpm-alpine/.github/workflows/publish.yml@refs/heads/8\.5$}"
+COSIGN_CERTIFICATE_IDENTITY_REGEXP="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/woosungchoi/fpm-alpine/.github/workflows/publish.yml@refs/heads/main$}"
 COSIGN_CERTIFICATE_OIDC_ISSUER="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 EXPECTED_PLATFORMS=(linux/amd64 linux/arm64)
 

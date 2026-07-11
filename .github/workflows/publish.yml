@@ -92,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$DISPATCH_REF" = 'refs/heads/8.5'
+          test "$DISPATCH_REF" = 'refs/heads/main'
           test "$SOURCE_SHA" = "$DISPATCH_SHA"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           git cat-file -e "${SOURCE_SHA}^{commit}"
@@ -129,7 +129,7 @@ jobs:
                   "conclusion": candidate.get("conclusion") == "success",
                   "event": candidate.get("event") == "workflow_dispatch",
                   "head_sha": candidate.get("head_sha") == expected_sha,
-                  "head_branch": candidate.get("head_branch") == "8.5",
+                  "head_branch": candidate.get("head_branch") == "main",
                   "path": candidate.get("path") == ".github/workflows/publish.yml",
                   "run_attempt": candidate.get("run_attempt") == attempt,
               }
@@ -815,7 +815,7 @@ jobs:
           if-no-files-found: error
 
   report-failure:
-    if: ${{ always() && github.ref == 'refs/heads/8.5' && github.event.inputs.source_sha == github.sha && needs.prepare.result == 'success' && (needs.canary.result == 'failure' || needs.production-preflight.result == 'failure' || needs.bootstrap-ghcr-rollback.result == 'failure' || needs.production.result == 'failure') }}
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event.inputs.source_sha == github.sha && needs.prepare.result == 'success' && (needs.canary.result == 'failure' || needs.production-preflight.result == 'failure' || needs.bootstrap-ghcr-rollback.result == 'failure' || needs.production.result == 'failure') }}
     needs: [prepare, canary, production-preflight, bootstrap-ghcr-rollback, production]
     runs-on: ubuntu-latest
     permissions:

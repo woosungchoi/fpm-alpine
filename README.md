@@ -179,6 +179,10 @@ Historically this image started from the WordPress PHP-FPM Alpine Dockerfile lin
 
 The exact upstream base differs by active matrix entry. Check `build/versions.json` and the `main` Dockerfile.
 
+## License and attribution
+
+Repository source is licensed under GPL-2.0-only. See the canonical [LICENSE](./LICENSE) text and [NOTICE.md](./NOTICE.md) for upstream attribution and retained third-party license information.
+
 ## Repositories where this image is used
 
 ### docker-wordpress

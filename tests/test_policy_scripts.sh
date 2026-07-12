@@ -61,13 +61,18 @@ assert_contains SUPPORT.md 'The Docker Hub `this` tag is an unsupported legacy/a
 assert_contains SUPPORT.md 'There is intentionally no `latest` tag.'
 
 assert_file LICENSE
-license_sha256="c894d4253148e8ce9803b6a114a6bb330e65ac358afe03e1f39e851d3ebf03c6"
+license_sha256="8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
 actual_license_sha256="$(sha256sum -- LICENSE | cut -d ' ' -f 1)"
 [ "$actual_license_sha256" = "$license_sha256" ] || fail "LICENSE SHA-256 mismatch: expected $license_sha256, got $actual_license_sha256"
-assert_contains LICENSE "SPDX-License-Identifier: GPL-2.0-only"
-assert_regex LICENSE '^WordPress Docker Official Image\. docker-library/wordpress is licensed under$'
-assert_regex LICENSE '^GPL-2\.0\. It also builds on the PHP Docker Official Image packaging\.$'
-assert_regex LICENSE '^docker-library/php is licensed under the MIT License\.'
+assert_regex LICENSE '^[[:space:]]+GNU GENERAL PUBLIC LICENSE$'
+assert_not_contains LICENSE "Repository licensing and upstream attribution"
+assert_not_contains LICENSE "SPDX-License-Identifier"
+assert_file NOTICE.md
+assert_contains NOTICE.md "SPDX-License-Identifier: GPL-2.0-only"
+assert_contains NOTICE.md "docker-library/wordpress"
+assert_contains NOTICE.md "docker-library/php"
+assert_contains README.md "canonical [LICENSE](./LICENSE) text"
+assert_contains README.md "[NOTICE.md](./NOTICE.md)"
 assert_contains LICENSE "GNU GENERAL PUBLIC LICENSE"
 assert_contains LICENSE "Version 2, June 1991"
 assert_contains LICENSE "TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION"

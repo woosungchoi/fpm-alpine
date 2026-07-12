@@ -6,18 +6,23 @@ GHCR_REF="${2:-}"
 EXPECTED_REVISION="${3:-}"
 EXPECTED_VERSION="${4:-}"
 REPORT_DIR="${5:-publisher-reports}"
+EXPECTED_SIGNING_REF="${6:-main}"
 EXPECTED_SOURCE="${EXPECTED_SOURCE:-https://github.com/woosungchoi/fpm-alpine}"
 EXPECTED_LICENSES="${EXPECTED_LICENSES:-GPL-2.0-only}"
-COSIGN_CERTIFICATE_IDENTITY_REGEXP="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/woosungchoi/fpm-alpine/.github/workflows/publish.yml@refs/heads/main$}"
 COSIGN_CERTIFICATE_OIDC_ISSUER="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 EXPECTED_PLATFORMS=(linux/amd64 linux/arm64)
 
 if [ -z "$DOCKERHUB_REF" ] || [ -z "$GHCR_REF" ] || [ -z "$EXPECTED_VERSION" ]; then
-  echo "usage: $0 <dockerhub-ref> <ghcr-ref> <40-char-source-sha> <php-patch> [report-dir]" >&2
+  echo "usage: $0 <dockerhub-ref> <ghcr-ref> <40-char-source-sha> <php-patch> [report-dir] [main|8.5]" >&2
   exit 64
 fi
 [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo "expected revision must be an exact lowercase commit SHA" >&2; exit 64; }
 [[ "$EXPECTED_VERSION" =~ ^8\.[2-5]\.[0-9]+$ ]] || { echo "expected version must be an active PHP patch" >&2; exit 64; }
+case "$EXPECTED_SIGNING_REF" in
+  main|8.5) ;;
+  *) echo "expected signing ref must be main or 8.5" >&2; exit 64 ;;
+esac
+COSIGN_CERTIFICATE_IDENTITY_REGEXP="^https://github.com/woosungchoi/fpm-alpine/.github/workflows/publish.yml@refs/heads/${EXPECTED_SIGNING_REF}$"
 for command in docker cosign python3; do
   command -v "$command" >/dev/null 2>&1 || { echo "$command is required" >&2; exit 69; }
 done
@@ -198,6 +203,7 @@ cat > "$REPORT_DIR/verification-summary.md" <<EOF
 - GHCR: \`${ghcr_subject}\`
 - Source revision: \`${EXPECTED_REVISION}\`
 - PHP version: \`${EXPECTED_VERSION}\`
+- Signing ref: \`refs/heads/${EXPECTED_SIGNING_REF}\`
 - Platforms: \`${EXPECTED_PLATFORMS[*]}\`
 - Gates: manifest, provenance, SBOM, signature, runtime smoke, semantic cross-registry parity
 EOF

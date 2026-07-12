@@ -409,6 +409,45 @@ assert_contains .github/workflows/verify-published-manifest.yml "scripts/create-
 assert_contains .github/workflows/verify-published-manifest.yml "manifest-failure"
 assert_contains docs/ci-operations.md 'opens or updates a `manifest-failure` issue'
 
+assert_file .github/workflows/sync-dockerhub-metadata.yml
+assert_file scripts/sync_dockerhub_metadata.py
+assert_executable scripts/sync_dockerhub_metadata.py
+assert_file docs/dockerhub-description.md
+assert_contains docs/dockerhub-description.md 'Active and maintained tags: `8.2`, `8.3`, `8.4`, and `8.5`'
+assert_contains docs/dockerhub-description.md 'Frozen, unsupported compatibility tags: `8.0` and `8.1`'
+assert_contains docs/dockerhub-description.md 'There is intentionally no `latest` tag'
+assert_contains docs/dockerhub-description.md 'The Docker Hub `this` tag is unsupported legacy'
+assert_not_contains docs/dockerhub-description.md 'default branch is **`8.5`**'
+python3 - <<'PY'
+from pathlib import Path
+import re
+import yaml
+
+path = Path('.github/workflows/sync-dockerhub-metadata.yml')
+text = path.read_text()
+data = yaml.safe_load(text)
+trigger = data.get('on', data.get(True))
+assert set(trigger) == {'workflow_dispatch'}, trigger
+assert data['permissions'] == {}
+assert set(data['jobs']) == {'sync'}
+job = data['jobs']['sync']
+assert job['permissions'] == {'contents': 'read'}
+assert job['environment'] == 'fpm-production'
+uses = re.findall(r'^\s*uses:\s*([^\s#]+)(?:\s+#\s*(\S+))?\s*$', text, re.M)
+assert len(uses) == 1, uses
+ref, comment = uses[0]
+assert re.fullmatch(r'actions/checkout@[0-9a-f]{40}', ref), ref
+assert comment, ref
+run = '\n'.join(str(step.get('run', '')) for step in job['steps'])
+assert 'scripts/sync_dockerhub_metadata.py' in run
+assert job['steps'][-1]['env'] == {
+    'DOCKERHUB_USERNAME': '${{ secrets.DOCKERHUB_USERNAME }}',
+    'DOCKERHUB_TOKEN': '${{ secrets.DOCKERHUB_TOKEN }}',
+}
+assert 'pull_request' not in trigger
+assert 'push' not in trigger
+PY
+
 bash -n scripts/smoke-test-image.sh
 bash -n scripts/create-manifest-failure-issue.sh
 bash -n scripts/report-manifest.sh
@@ -417,5 +456,6 @@ bash -n scripts/report-freshness.sh
 ./tests/test_smoke_script.sh
 ./tests/test_publisher_policy.sh
 ./tests/test_php_lifecycle.py
+python3 ./tests/test_dockerhub_metadata.py
 
 echo "policy script tests passed"

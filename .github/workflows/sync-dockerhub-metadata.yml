@@ -1,0 +1,28 @@
+name: sync-dockerhub-metadata
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-dockerhub-metadata
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Docker Hub metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: fpm-production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Synchronize and read back Docker Hub metadata
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: python3 scripts/sync_dockerhub_metadata.py

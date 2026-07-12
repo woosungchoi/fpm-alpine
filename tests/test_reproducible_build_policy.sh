@@ -50,7 +50,7 @@ expect_mutation_invalid "boolean schemaVersion" 'data["schemaVersion"]=True'
 expect_mutation_invalid "extra version field" 'data["versions"]["8.4"]["extra"]=1'
 expect_mutation_invalid "extra dependency field" 'data["dependencies"]["imagick"]["extra"]=1'
 expect_mutation_invalid "wrong minor field" 'data["versions"]["8.4"]["minor"]="8.3"'
-expect_mutation_invalid "wrong approved patch" 'data["versions"]["8.4"]["patch"]="8.4.24"'
+expect_mutation_invalid "wrong patch minor" 'data["versions"]["8.4"]["patch"]="8.5.24"'
 expect_mutation_invalid "wrong dependency URL" 'data["dependencies"]["redis"]["url"]="https://example.com/redis-6.3.0.tgz"'
 expect_mutation_invalid "duplicate base ref" 'data["versions"]["8.3"]["base_image"]=data["versions"]["8.2"]["base_image"]'
 expect_mutation_invalid "wrong support" 'data["versions"]["8.4"]["support"]="security-only"'
@@ -95,7 +95,7 @@ def workflow_policy(text):
     aggregate=re.search(r'^  docker-smoke:\n(?P<body>(?:(?!^  \S).*(?:\n|$))*)', text, re.M)
     assert aggregate, 'docker-smoke aggregate job'
     aggregate=aggregate.group('body')
-    for value in ('name: docker-smoke','if: ${{ always() }}','needs: docker-smoke-matrix','permissions: {}','MATRIX_RESULT: ${{ needs.docker-smoke-matrix.result }}','run: test "$MATRIX_RESULT" = success'):
+    for value in ('name: docker-smoke','if: ${{ always() }}','needs: [dependency-safety, docker-smoke-matrix]','permissions: {}','SAFETY_RESULT: ${{ needs.dependency-safety.result }}','MATRIX_RESULT: ${{ needs.docker-smoke-matrix.result }}','test "$SAFETY_RESULT" = success','test "$MATRIX_RESULT" = success'):
         assert value in aggregate, value
     for forbidden in ('actions/checkout','docker/','secrets.','build','artifact','registry'):
         assert forbidden not in aggregate, forbidden
@@ -117,23 +117,30 @@ def workflow_policy(text):
     for value in ('EXPECTED_PHP_MINOR: ${{ matrix.php_minor }}','EXPECTED_PLATFORM: ${{ matrix.platform }}','EXPECTED_IMAGICK_VERSION: ${{ matrix.imagick_version }}','EXPECTED_REDIS_VERSION: ${{ matrix.redis_version }}','EXPECTED_APCU_VERSION: ${{ matrix.apcu_version }}','EXPECTED_ICONV_IMPLEMENTATION: ${{ matrix.iconv_implementation }}','EXPECTED_ICONV_VERSION: ${{ matrix.iconv_version }}','EXPECTED_ICONV_PACKAGE: ${{ matrix.iconv_package }}','EXPECTED_ICONV_PACKAGE_VERSION: ${{ matrix.iconv_package_version }}','EXPECTED_ICONV_OWNER_PATH: ${{ matrix.iconv_owner_path }}','EXPECTED_ICONV_TARGET: ${{ matrix.iconv_target }}'):
         assert value in smoke, value
     tag='fpm-alpine:smoke-${{ matrix.php_minor }}-${{ matrix.arch }}'
-    assert f'tags: {tag}' in build and f'./scripts/smoke-test-image.sh "{tag}"' in smoke
-    upload=one('Upload smoke report'); assert 'actions/upload-artifact@' in upload and re.search(r'^\s+path:\s*smoke-reports/\s*$',upload,re.M)
+    assert f'tags: {tag}' in build
+    assert f'SMOKE_IMAGE: {tag}' in smoke
+    assert './scripts/smoke-test-image.sh "$SMOKE_IMAGE"' in smoke
+    for required_step in ('Run policy and mutation tests','Replay pinned source checksums','Build reproducibility probe image','Require reproducible local image','Compare package and runtime contract with published baseline','Scan source-only image'):
+        one(required_step)
+    upload=one('Upload smoke and dependency-safety reports')
+    assert 'actions/upload-artifact@' in upload
+    for report_path in ('smoke-reports/','contract-reports/','scan-reports/','reproducibility-reports/'):
+        assert report_path in upload, report_path
 workflow_policy(workflow)
 mutations=[]
 def remove_step(name):
     blocks=steps(workflow); body=next(body for title,body in blocks if title==name); return workflow.replace(body,'',1)
-mutations += [remove_step('Set up QEMU'), remove_step('Upload smoke report')]
+mutations += [remove_step('Set up QEMU'), remove_step('Upload smoke and dependency-safety reports'), remove_step('Run policy and mutation tests'), remove_step('Require reproducible local image'), remove_step('Compare package and runtime contract with published baseline'), remove_step('Scan source-only image')]
 aggregate_start=workflow.index('  docker-smoke:\n')
 mutations.append(workflow[:aggregate_start])
-mutations.append(workflow.replace('needs: docker-smoke-matrix','needs: prepare',1))
+mutations.append(workflow.replace('needs: [dependency-safety, docker-smoke-matrix]','needs: prepare',1))
 mutations.append(workflow.replace('if: ${{ always() }}','if: ${{ success() }}',1))
-mutations.append(workflow.replace('run: test "$MATRIX_RESULT" = success','run: exit 0',1))
-for field in ('load: true','push: false','platforms: ${{ matrix.platform }}','path: smoke-reports/'):
+mutations.append(workflow.replace('test "$MATRIX_RESULT" = success','exit 0',1))
+for field in ('load: true','push: false','platforms: ${{ matrix.platform }}','smoke-reports/'):
  mutations.append(workflow.replace(field,'',1))
 for old,new in (
  ('load: true','load: false'),('push: false','push: true'),('platforms: ${{ matrix.platform }}','platforms: linux/amd64'),
- ('./scripts/smoke-test-image.sh "fpm-alpine:smoke-${{ matrix.php_minor }}-${{ matrix.arch }}"','./scripts/smoke-test-image.sh wrong-tag'),('path: smoke-reports/','path: elsewhere/')):
+ ('./scripts/smoke-test-image.sh "$SMOKE_IMAGE"','./scripts/smoke-test-image.sh wrong-tag'),('smoke-reports/','elsewhere/')):
  mutations.append(workflow.replace(old,new,1))
 for field in ('EXPECTED_PHP_MINOR: ${{ matrix.php_minor }}','EXPECTED_PLATFORM: ${{ matrix.platform }}','EXPECTED_IMAGICK_VERSION: ${{ matrix.imagick_version }}','EXPECTED_REDIS_VERSION: ${{ matrix.redis_version }}','EXPECTED_APCU_VERSION: ${{ matrix.apcu_version }}','EXPECTED_ICONV_IMPLEMENTATION: ${{ matrix.iconv_implementation }}','EXPECTED_ICONV_VERSION: ${{ matrix.iconv_version }}','EXPECTED_ICONV_PACKAGE: ${{ matrix.iconv_package }}','EXPECTED_ICONV_PACKAGE_VERSION: ${{ matrix.iconv_package_version }}','EXPECTED_ICONV_OWNER_PATH: ${{ matrix.iconv_owner_path }}','EXPECTED_ICONV_TARGET: ${{ matrix.iconv_target }}'):
  mutations.append(workflow.replace(field,'',1))

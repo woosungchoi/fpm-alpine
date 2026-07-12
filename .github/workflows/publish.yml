@@ -1,4 +1,5 @@
 name: publish
+run-name: publish-${{ github.event.inputs.channel }}-${{ github.event.inputs.correlation_id || github.run_id }}
 
 on:
   workflow_dispatch:
@@ -18,6 +19,10 @@ on:
       source_sha:
         description: Exact 40-character source commit SHA
         required: true
+        type: string
+      correlation_id:
+        description: Optional unique controller correlation ID
+        required: false
         type: string
       canary_run_id:
         description: Required for production; verified canary workflow run ID
@@ -69,12 +74,14 @@ jobs:
       - name: Checkout exact source revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event.inputs.source_sha }}
           fetch-depth: 0
 
       - name: Validate dispatch contract
         env:
           SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          CORRELATION_ID: ${{ github.event.inputs.correlation_id }}
           CHANNEL: ${{ github.event.inputs.channel }}
           REQUESTED_VERSION: ${{ github.event.inputs.version }}
           CANARY_RUN_ID: ${{ github.event.inputs.canary_run_id }}
@@ -96,6 +103,9 @@ jobs:
           test "$SOURCE_SHA" = "$DISPATCH_SHA"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           git cat-file -e "${SOURCE_SHA}^{commit}"
+          if [ -n "$CORRELATION_ID" ]; then
+            [[ "$CORRELATION_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+          fi
           if [ "$CHANNEL" = production ]; then
             [[ "$REQUESTED_VERSION" =~ ^8\.[2-5]$ ]]
             [[ "$CANARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
@@ -205,6 +215,7 @@ jobs:
       - name: Checkout exact source revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event.inputs.source_sha }}
 
       - name: Set up QEMU
@@ -293,6 +304,8 @@ jobs:
           DOCKERHUB_REF: ${{ env.DOCKERHUB_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
           GHCR_REF: ${{ env.GHCR_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          PHP_MINOR: ${{ matrix.php_minor }}
+          PHP_PATCH: ${{ matrix.php_patch }}
         run: |
           set -euo pipefail
           echo "Build output digest: $BUILD_DIGEST"
@@ -314,8 +327,8 @@ jobs:
           payload = {
               "channel": "canary",
               "source_sha": os.environ["GITHUB_SHA"],
-              "php_minor": "${{ matrix.php_minor }}",
-              "php_patch": "${{ matrix.php_patch }}",
+              "php_minor": os.environ["PHP_MINOR"],
+              "php_patch": os.environ["PHP_PATCH"],
               "run_id": int(os.environ["GITHUB_RUN_ID"]),
               "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
               "dockerhub_digest": sys.argv[1],
@@ -344,12 +357,14 @@ jobs:
         env:
           DOCKERHUB_REF: ${{ env.DOCKERHUB_REPOSITORY }}@${{ steps.subjects.outputs.dockerhub_digest }}
           GHCR_REF: ${{ env.GHCR_REPOSITORY }}@${{ steps.subjects.outputs.ghcr_digest }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          PHP_PATCH: ${{ matrix.php_patch }}
         run: |
           ./scripts/verify-published-image.sh \
             "$DOCKERHUB_REF" \
             "$GHCR_REF" \
-            "${{ github.event.inputs.source_sha }}" \
-            "${{ matrix.php_patch }}" \
+            "$EXPECTED_SOURCE_SHA" \
+            "$PHP_PATCH" \
             "publisher-reports"
 
       - name: Scan exact canary subjects
@@ -384,6 +399,7 @@ jobs:
       - name: Checkout trusted source revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event.inputs.source_sha }}
 
       - name: Require verified canary evidence for every production target
@@ -432,6 +448,7 @@ jobs:
       - name: Checkout trusted source revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event.inputs.source_sha }}
 
       - name: Set up QEMU
@@ -680,6 +697,7 @@ jobs:
       - name: Checkout exact source revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event.inputs.source_sha }}
 
       - name: Set up QEMU
@@ -755,55 +773,68 @@ jobs:
           DOCKERHUB_DIGEST: ${{ steps.canary.outputs.dockerhub_digest }}
           GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
           EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          PHP_MINOR: ${{ matrix.php_minor }}
+          PHP_PATCH: ${{ matrix.php_patch }}
+          RELEASE_DATE: ${{ needs.prepare.outputs.release_date }}
           LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.inputs.legacy_cutover_evidence_sha256 }}
           LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
         run: |
           set -euo pipefail
-          previous_dockerhub="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${{ matrix.php_minor }}")"
-          previous_ghcr="$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${{ matrix.php_minor }}")"
+          previous_dockerhub="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
+          previous_ghcr="$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")"
           [[ "$previous_dockerhub" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$previous_ghcr" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "previous_dockerhub=$previous_dockerhub" >> "$GITHUB_OUTPUT"
           echo "previous_ghcr=$previous_ghcr" >> "$GITHUB_OUTPUT"
 
           ./scripts/promote-image.sh --check-only "$DOCKERHUB_REPOSITORY" "$DOCKERHUB_DIGEST" \
-            "${{ matrix.php_minor }}" "${{ matrix.php_patch }}" "${{ github.event.inputs.source_sha }}" "${{ needs.prepare.outputs.release_date }}"
+            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
           ./scripts/promote-image.sh --check-only "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
-            "${{ matrix.php_minor }}" "${{ matrix.php_patch }}" "${{ github.event.inputs.source_sha }}" "${{ needs.prepare.outputs.release_date }}"
+            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
 
           test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
           ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
           mutated=0
-          trap 'rc=$?; if [ "$mutated" -eq 1 ]; then set +e; ./scripts/rollback-moving-aliases.sh "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" "$GHCR_REPOSITORY" "$previous_ghcr" "${{ matrix.php_minor }}" publisher-reports/rollback-trap; fi; exit "$rc"' EXIT
+          trap 'rc=$?; if [ "$mutated" -eq 1 ]; then set +e; ./scripts/rollback-moving-aliases.sh "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" "$GHCR_REPOSITORY" "$previous_ghcr" "$PHP_MINOR" publisher-reports/rollback-trap; fi; exit "$rc"' EXIT
           mutated=1
           echo "mutated=true" >> "$GITHUB_OUTPUT"
           ./scripts/promote-image.sh "$DOCKERHUB_REPOSITORY" "$DOCKERHUB_DIGEST" \
-            "${{ matrix.php_minor }}" "${{ matrix.php_patch }}" "${{ github.event.inputs.source_sha }}" "${{ needs.prepare.outputs.release_date }}"
+            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
           ./scripts/promote-image.sh "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
-            "${{ matrix.php_minor }}" "${{ matrix.php_patch }}" "${{ github.event.inputs.source_sha }}" "${{ needs.prepare.outputs.release_date }}"
+            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
           trap - EXIT
 
       - name: Verify production aliases resolve to verified subjects
+        env:
+          DOCKERHUB_DIGEST: ${{ steps.canary.outputs.dockerhub_digest }}
+          GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          PHP_MINOR: ${{ matrix.php_minor }}
+          PHP_PATCH: ${{ matrix.php_patch }}
         run: |
           ./scripts/verify-published-image.sh \
-            "${DOCKERHUB_REPOSITORY}@${{ steps.canary.outputs.dockerhub_digest }}" \
-            "${GHCR_REPOSITORY}@${{ steps.canary.outputs.ghcr_digest }}" \
-            "${{ github.event.inputs.source_sha }}" \
-            "${{ matrix.php_patch }}" \
+            "${DOCKERHUB_REPOSITORY}@${DOCKERHUB_DIGEST}" \
+            "${GHCR_REPOSITORY}@${GHCR_DIGEST}" \
+            "$EXPECTED_SOURCE_SHA" \
+            "$PHP_PATCH" \
             "publisher-reports/post-promotion"
-          test "$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${{ matrix.php_minor }}")" = "${{ steps.canary.outputs.dockerhub_digest }}"
-          test "$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${{ matrix.php_minor }}")" = "${{ steps.canary.outputs.ghcr_digest }}"
+          test "$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")" = "$DOCKERHUB_DIGEST"
+          test "$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")" = "$GHCR_DIGEST"
 
       - name: Roll back both moving aliases after promotion failure
         if: ${{ failure() && steps.promote.outputs.mutated == 'true' }}
+        env:
+          PREVIOUS_DOCKERHUB: ${{ steps.promote.outputs.previous_dockerhub }}
+          PREVIOUS_GHCR: ${{ steps.promote.outputs.previous_ghcr }}
+          PHP_MINOR: ${{ matrix.php_minor }}
         run: |
           ./scripts/rollback-moving-aliases.sh \
             "$DOCKERHUB_REPOSITORY" \
-            "${{ steps.promote.outputs.previous_dockerhub }}" \
+            "$PREVIOUS_DOCKERHUB" \
             "$GHCR_REPOSITORY" \
-            "${{ steps.promote.outputs.previous_ghcr }}" \
-            "${{ matrix.php_minor }}" \
+            "$PREVIOUS_GHCR" \
+            "$PHP_MINOR" \
             "publisher-reports/rollback"
 
       - name: Upload production verification evidence
@@ -826,6 +857,7 @@ jobs:
       - name: Checkout trusted dispatch revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
 
       - name: Create or update publisher failure issues

@@ -2,56 +2,26 @@
 """Validate the reproducible PHP build matrix and emit selected validated data."""
 
 from __future__ import annotations
+
 import argparse
 import json
 import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-EXPECTED_VERSIONS = {
-    "8.2": (
-        "8.2.32",
-        "php:8.2-fpm-alpine@sha256:41ddda74d95c43518c3e4414e6c1c99f9c062d397f0c7a2d8cadf8d1f035d196",
-        "security-only",
-        "2026-12-31",
-    ),
-    "8.3": (
-        "8.3.32",
-        "php:8.3-fpm-alpine@sha256:9fcec48321d890240d700ccdc2b475420c87d398826e68c3d8830b8fca663e5c",
-        "security-only",
-        "2027-12-31",
-    ),
-    "8.4": (
-        "8.4.23",
-        "php:8.4-fpm-alpine@sha256:913ddd6934a805429618a16aa36da47cd8a8aec8b2f111c294936ba4003fded6",
-        "active",
-        "2028-12-31",
-    ),
-    "8.5": (
-        "8.5.8",
-        "php:8.5-fpm-alpine@sha256:79def1d16ece3ab1a6656c46a23bfd80ad33887fbd33626e7bd743cef54ef9c6",
-        "active",
-        "2029-12-31",
-    ),
-}
-EXPECTED_DEPENDENCIES = {
-    "imagick": (
-        "3.8.1",
-        "https://pecl.php.net/get/imagick-3.8.1.tgz",
-        "3a3587c0a524c17d0dad9673a160b90cd776e836838474e173b549ed864352ee",
-    ),
-    "redis": (
-        "6.3.0",
-        "https://pecl.php.net/get/redis-6.3.0.tgz",
-        "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5",
-    ),
-    "apcu": (
-        "5.1.28",
-        "https://pecl.php.net/get/apcu-5.1.28.tgz",
-        "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf",
-    ),
-}
+DEFAULT_POLICY_PATH = Path("build/automation-policy.json")
+EXPECTED_MINORS = ("8.2", "8.3", "8.4", "8.5")
+EXPECTED_DEPENDENCIES = ("imagick", "redis", "apcu")
+EXPECTED_MANUAL_ONLY = (
+    "lifecycle",
+    "runtimeContracts",
+    "minorSet",
+    "dockerfileLogic",
+    "workflowPermissions",
+    "publisherPolicy",
+)
 ICONV_FIELDS = (
     "implementation",
     "version",
@@ -70,6 +40,7 @@ EXPECTED_ICONV = (
 )
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+DATE = re.compile(r"^20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$")
 
 
 def require(ok: bool, message: str, errors: list[str]) -> None:
@@ -77,8 +48,135 @@ def require(ok: bool, message: str, errors: list[str]) -> None:
         errors.append(message)
 
 
-def validate(data: Any) -> list[str]:
-    errors = []
+def load_json(path: Path) -> Any:
+    return json.loads(path.read_text())
+
+
+def validate_policy(policy: Any, errors: list[str]) -> bool:
+    if not isinstance(policy, dict):
+        errors.append("automation policy root must be an object")
+        return False
+    require(
+        list(policy)
+        == [
+            "schemaVersion",
+            "lifecycle",
+            "dependencies",
+            "baseImages",
+            "manualOnly",
+        ],
+        "automation policy root keys/order is invalid",
+        errors,
+    )
+    require(
+        type(policy.get("schemaVersion")) is int and policy.get("schemaVersion") == 1,
+        "automation policy schemaVersion must be integer 1",
+        errors,
+    )
+    lifecycle = policy.get("lifecycle")
+    dependencies = policy.get("dependencies")
+    base_images = policy.get("baseImages")
+    manual_only = policy.get("manualOnly")
+    if not isinstance(lifecycle, dict):
+        errors.append("automation policy lifecycle must be an object")
+    else:
+        require(
+            tuple(lifecycle) == EXPECTED_MINORS,
+            "automation policy lifecycle keys/order must be 8.2, 8.3, 8.4, 8.5",
+            errors,
+        )
+        for minor in EXPECTED_MINORS:
+            row = lifecycle.get(minor)
+            if not isinstance(row, dict):
+                errors.append(f"automation policy lifecycle {minor} must be an object")
+                continue
+            require(
+                tuple(row) == ("support", "eol"),
+                f"automation policy lifecycle {minor} fields/order is invalid",
+                errors,
+            )
+            require(
+                row.get("support") in {"active", "security-only"},
+                f"automation policy lifecycle {minor} support is invalid",
+                errors,
+            )
+            require(
+                isinstance(row.get("eol"), str) and bool(DATE.fullmatch(row["eol"])),
+                f"automation policy lifecycle {minor} eol is invalid",
+                errors,
+            )
+    if not isinstance(dependencies, dict):
+        errors.append("automation policy dependencies must be an object")
+    else:
+        require(
+            tuple(dependencies) == EXPECTED_DEPENDENCIES,
+            "automation policy dependency keys/order is invalid",
+            errors,
+        )
+        for name in EXPECTED_DEPENDENCIES:
+            row = dependencies.get(name)
+            if not isinstance(row, dict):
+                errors.append(f"automation policy dependency {name} must be an object")
+                continue
+            require(
+                tuple(row) == ("sourceHost", "autoBump"),
+                f"automation policy dependency {name} fields/order is invalid",
+                errors,
+            )
+            require(
+                row.get("sourceHost") == "pecl.php.net"
+                and row.get("autoBump") == "patch",
+                f"automation policy dependency {name} policy is invalid",
+                errors,
+            )
+    require(
+        isinstance(base_images, dict)
+        and base_images
+        == {
+            "repository": "php",
+            "hubRepository": "library/php",
+            "tagSuffix": "-fpm-alpine",
+            "tagApiBase": "https://hub.docker.com/v2/repositories/library/php/tags",
+            "officialImagesMetadata": "https://raw.githubusercontent.com/docker-library/official-images/master/library/php",
+            "autoBump": "same-minor-patch-or-digest",
+        },
+        "automation policy baseImages is invalid",
+        errors,
+    )
+    require(
+        isinstance(manual_only, list) and tuple(manual_only) == EXPECTED_MANUAL_ONLY,
+        "automation policy manualOnly is invalid",
+        errors,
+    )
+    return not errors
+
+
+def valid_dependency_url(name: str, version: str, url: Any, host: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    parsed = urlsplit(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == host
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.port is None
+        and parsed.path == f"/get/{name}-{version}.tgz"
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def validate(data: Any, policy: Any | None = None) -> list[str]:
+    errors: list[str] = []
+    if policy is None:
+        try:
+            policy = load_json(DEFAULT_POLICY_PATH)
+        except (OSError, json.JSONDecodeError) as exc:
+            return [f"automation policy load failed: {exc}"]
+    if not validate_policy(policy, errors):
+        return errors
+    assert isinstance(policy, dict)
     if not isinstance(data, dict):
         return ["root must be an object"]
     require(
@@ -96,15 +194,19 @@ def validate(data: Any) -> list[str]:
         data.get("runtimeContracts"),
         data.get("versions"),
     )
-    if not all(isinstance(x, dict) for x in (deps, contracts, versions)):
+    if (
+        not isinstance(deps, dict)
+        or not isinstance(contracts, dict)
+        or not isinstance(versions, dict)
+    ):
         return errors + ["dependencies, runtimeContracts, and versions must be objects"]
     require(
-        list(deps) == list(EXPECTED_DEPENDENCIES),
+        tuple(deps) == EXPECTED_DEPENDENCIES,
         "dependency keys/order must be imagick, redis, apcu",
         errors,
     )
     require(
-        list(contracts) == ["libiconv"],
+        tuple(contracts) == ("libiconv",),
         "runtime contract keys/order must be exactly libiconv",
         errors,
     )
@@ -116,18 +218,18 @@ def validate(data: Any) -> list[str]:
             errors,
         )
         require(
-            tuple(iconv.get(k) for k in ICONV_FIELDS) == EXPECTED_ICONV,
+            tuple(iconv.get(key) for key in ICONV_FIELDS) == EXPECTED_ICONV,
             "libiconv runtime contract does not match approved official base contract",
             errors,
         )
     else:
         errors.append("libiconv runtime contract must be an object")
     require(
-        list(versions) == list(EXPECTED_VERSIONS),
+        tuple(versions) == EXPECTED_MINORS,
         "version keys/order must be exactly 8.2, 8.3, 8.4, 8.5",
         errors,
     )
-    for name, expected in EXPECTED_DEPENDENCIES.items():
+    for name in EXPECTED_DEPENDENCIES:
         item = deps.get(name)
         if not isinstance(item, dict):
             errors.append(f"dependency {name} must be an object")
@@ -137,9 +239,17 @@ def validate(data: Any) -> list[str]:
             f"dependency {name} has missing/extra/reordered fields",
             errors,
         )
+        version = item.get("version")
         require(
-            tuple(item.get(k) for k in ("version", "url", "sha256")) == expected,
-            f"dependency {name} pin does not match approved version/url/checksum",
+            isinstance(version, str) and bool(SEMVER.fullmatch(version)),
+            f"dependency {name} version must be semantic x.y.z",
+            errors,
+        )
+        host = policy["dependencies"][name]["sourceHost"]
+        require(
+            isinstance(version, str)
+            and valid_dependency_url(name, version, item.get("url"), host),
+            f"dependency {name} URL must be exact official package/version URL",
             errors,
         )
         require(
@@ -148,8 +258,8 @@ def validate(data: Any) -> list[str]:
             f"dependency {name} sha256 must be 64 lowercase hex characters",
             errors,
         )
-    refs = []
-    for minor, expected in EXPECTED_VERSIONS.items():
+    refs: list[str] = []
+    for minor in EXPECTED_MINORS:
         item = versions.get(minor)
         if not isinstance(item, dict):
             errors.append(f"version {minor} must be an object")
@@ -171,9 +281,11 @@ def validate(data: Any) -> list[str]:
             f"version {minor} patch must be a corresponding semantic version",
             errors,
         )
+        lifecycle = policy["lifecycle"][minor]
         require(
-            (patch, ref, item.get("support"), item.get("eol")) == expected,
-            f"version {minor} patch/base image/support/eol does not match approved metadata",
+            item.get("support") == lifecycle["support"]
+            and item.get("eol") == lifecycle["eol"],
+            f"version {minor} lifecycle does not match automation policy",
             errors,
         )
         require(
@@ -183,7 +295,7 @@ def validate(data: Any) -> list[str]:
                     rf"php:{re.escape(minor)}-fpm-alpine@sha256:[0-9a-f]{{64}}", ref
                 )
             ),
-            f"version {minor} base_image must be an exact minor digest ref",
+            f"version {minor} base_image must be an exact official minor digest ref",
             errors,
         )
         if isinstance(ref, str):
@@ -193,42 +305,46 @@ def validate(data: Any) -> list[str]:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser()
-    p.add_argument("path", nargs="?", default="build/versions.json")
-    out = p.add_mutually_exclusive_group()
-    out.add_argument("--matrix", action="store_true")
-    out.add_argument("--get-base", metavar="MINOR")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("path", nargs="?", default="build/versions.json")
+    parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH))
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--matrix", action="store_true")
+    output.add_argument("--get-base", metavar="MINOR")
+    args = parser.parse_args()
     try:
-        data = json.loads(Path(args.path).read_text())
+        data = load_json(Path(args.path))
+        policy = load_json(Path(args.policy))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"versions validation failed: {exc}", file=sys.stderr)
         return 1
-    errors = validate(data)
+    errors = validate(data, policy)
     if errors:
-        for e in errors:
-            print(f"versions validation failed: {e}", file=sys.stderr)
+        for error in errors:
+            print(f"versions validation failed: {error}", file=sys.stderr)
         return 1
     if args.matrix:
         dep_args = {
-            f"{n}_{k}": v for n, d in data["dependencies"].items() for k, v in d.items()
+            f"{name}_{key}": value
+            for name, dependency in data["dependencies"].items()
+            for key, value in dependency.items()
         }
         iconv = {
-            f"iconv_{re.sub(r'(?<!^)(?=[A-Z])', '_', k).lower()}": v
-            for k, v in data["runtimeContracts"]["libiconv"].items()
+            f"iconv_{re.sub(r'(?<!^)(?=[A-Z])', '_', key).lower()}": value
+            for key, value in data["runtimeContracts"]["libiconv"].items()
         }
         include = [
             {
-                "php_minor": m,
-                "php_patch": i["patch"],
-                "php_base_image": i["base_image"],
-                "platform": p,
-                "arch": a,
+                "php_minor": minor,
+                "php_patch": item["patch"],
+                "php_base_image": item["base_image"],
+                "platform": platform,
+                "arch": arch,
                 **dep_args,
                 **iconv,
             }
-            for m, i in data["versions"].items()
-            for p, a in (("linux/amd64", "amd64"), ("linux/arm64", "arm64"))
+            for minor, item in data["versions"].items()
+            for platform, arch in (("linux/amd64", "amd64"), ("linux/arm64", "arm64"))
         ]
         print(json.dumps({"include": include}, separators=(",", ":")))
     elif args.get_base:
@@ -241,7 +357,8 @@ def main() -> int:
         print(data["versions"][args.get_base]["base_image"])
     else:
         print(
-            f"validated {len(data['versions'])} PHP versions, {len(data['dependencies'])} source dependencies, and 1 runtime contract"
+            f"validated {len(data['versions'])} PHP versions, "
+            f"{len(data['dependencies'])} source dependencies, and 1 runtime contract"
         )
     return 0
 

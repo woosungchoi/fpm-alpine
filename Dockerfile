@@ -83,7 +83,12 @@ RUN set -eux; \
 		| tr ',' '\n' \
 		| sort -u \
 		| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }')"; \
-	apk add --no-network $runDeps; \
+	apk add --no-network --virtual .wordpress-phpexts-rundeps=1 $runDeps; \
+	rundepsChecksum="$(printf '%s\n' '.wordpress-phpexts-rundeps=1' "$runDeps" | php -r 'echo base64_encode(sha1(stream_get_contents(STDIN), true));')"; \
+	awk -v checksum="Q1$rundepsChecksum" 'BEGIN { RS=""; ORS="\n\n" } { if ($0 ~ "(^|\n)P:[.]wordpress-phpexts-rundeps(\n|$)") sub(/^C:[^\n]*/, "C:" checksum); print }' /lib/apk/db/installed > /lib/apk/db/installed.tmp; \
+	mv /lib/apk/db/installed.tmp /lib/apk/db/installed; \
+	apk info -e .wordpress-phpexts-rundeps=1; \
+	grep -F "C:Q1$rundepsChecksum" /lib/apk/db/installed; \
 	apk del --no-network .build-deps; \
 	! { ldd "$extDir"/*.so | grep 'not found'; }; \
 	php -v; \

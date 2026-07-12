@@ -211,7 +211,11 @@ PY
 for key in source revision version created; do assert_contains Dockerfile "org.opencontainers.image.${key}"; done
 assert_contains Dockerfile 'ARG SOURCE_DATE_EPOCH=0'
 assert_contains Dockerfile 'touch -h -d "@${SOURCE_DATE_EPOCH}"'
-assert_not_contains Dockerfile '.wordpress-phpexts-rundeps'
+assert_contains Dockerfile 'apk add --no-network --virtual .wordpress-phpexts-rundeps=1 $runDeps'
+assert_contains Dockerfile 'rundepsChecksum="$(printf'
+assert_contains Dockerfile 'base64_encode(sha1(stream_get_contents(STDIN), true))'
+assert_contains Dockerfile 'awk -v checksum="Q1$rundepsChecksum"'
+assert_contains Dockerfile 'apk info -e .wordpress-phpexts-rundeps=1'
 assert_contains Dockerfile 'rm -f /var/log/apk.log'
 assert_contains .github/workflows/smoke-test.yml 'git show -s --format=%cI "$GITHUB_SHA"'
 assert_contains .github/workflows/smoke-test.yml 'git show -s --format=%ct "$GITHUB_SHA"'

@@ -163,6 +163,10 @@ assert_not_contains README.md "single machine-readable source"
 assert_not_contains docs/ci-operations.md "single source for PHP"
 assert_contains docs/ci-operations.md "GitHub Actions is the sole publisher"
 assert_contains docs/ci-operations.md "Rollback"
+assert_contains docs/ci-operations.md "External Snyk webhook"
+assert_contains docs/ci-operations.md "non-required external advisory signal"
+assert_contains docs/ci-operations.md "repository maintainer owns the integration"
+assert_contains docs/ci-operations.md "does not replace the exact-subject Trivy fixable-CRITICAL gate"
 
 for removed in \
   .github/workflows/branch-drift.yml \

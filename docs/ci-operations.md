@@ -148,6 +148,15 @@ Rollback:
 - Revert report formatting or parsing changes only.
 - No published images or dependency pins are changed by this workflow.
 
+### External Snyk webhook
+
+The active Snyk webhook receives `push` and `pull_request` events as a non-required external advisory signal. The repository maintainer owns the integration and its Snyk project configuration.
+
+- Snyk does not satisfy the required `docker-smoke` context.
+- Snyk does not replace the exact-subject Trivy fixable-CRITICAL gate or the scheduled runtime/supply-chain verification.
+- On delivery failures, inspect recent webhook deliveries and the linked Snyk project before changing repository policy.
+- Remove the webhook only after a 90-day audit finds no accepted deliveries, checks, or statuses and the Trivy replacement remains verified.
+
 ## Merge checklist
 
 Before merging CI/workflow changes:

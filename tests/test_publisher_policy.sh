@@ -11,7 +11,7 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 assert_file .github/workflows/publish.yml
-for script in scripts/verify-published-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py; do
+for script in scripts/verify-published-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh; do
   assert_file "$script"
   assert_executable "$script"
 done
@@ -580,7 +580,11 @@ assert_contains scripts/promote-image.sh 'immutable tag already points to anothe
 assert_contains scripts/promote-image.sh 'sha-${MINOR}-${short_sha}-${digest_hex}'
 assert_contains scripts/promote-image.sh 'docker buildx imagetools create'
 assert_not_contains scripts/promote-image.sh ':latest'
-assert_contains scripts/verify-published-image.sh '@refs/heads/main$'
+assert_contains scripts/verify-published-image.sh 'EXPECTED_SIGNING_REF'
+assert_contains scripts/verify-published-image.sh '@refs/heads/${EXPECTED_SIGNING_REF}$'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/resolve-publisher-signing-ref.sh'
+assert_contains .github/workflows/published-runtime-smoke.yml 'steps.source.outputs.signing_ref'
+assert_contains .github/workflows/published-runtime-smoke.yml 'fetch-tags: true'
 assert_contains scripts/verify-rollback-image.sh 'rollback registry platform config/layer parity verified'
 assert_not_contains scripts/verify-rollback-image.sh 'build/versions.json'
 assert_contains scripts/rollback-moving-aliases.sh 'both registries were attempted'
@@ -948,5 +952,50 @@ if MOCK_INSPECT_STATUS=7 MOCK_INDEX_FILE="$platform_resolver_dir/index.json" PAT
     ./scripts/resolve-platform-image.py "$index_subject" linux/amd64 >/dev/null 2>&1; then
   fail "platform resolver ignored inspect transport failure"
 fi
+
+signing_repo="$fixture_dir/signing-ref"
+mkdir -p "$signing_repo"
+git -C "$signing_repo" init -q
+git -C "$signing_repo" config user.name fixture
+git -C "$signing_repo" config user.email fixture@example.invalid
+printf 'pre\n' > "$signing_repo/state"
+git -C "$signing_repo" add state
+git -C "$signing_repo" commit -qm pre
+pre_cutover="$(git -C "$signing_repo" rev-parse HEAD)"
+printf 'boundary\n' > "$signing_repo/state"
+git -C "$signing_repo" commit -qam boundary
+boundary="$(git -C "$signing_repo" rev-parse HEAD)"
+git -C "$signing_repo" tag -a archive/php-8.5-final-branch -m 'final 8.5 control branch' "$boundary"
+printf 'post\n' > "$signing_repo/state"
+git -C "$signing_repo" commit -qam post
+post_cutover="$(git -C "$signing_repo" rev-parse HEAD)"
+[ "$(cd "$signing_repo" && EXPECTED_BOUNDARY_SHA="$boundary" "$repo_root/scripts/resolve-publisher-signing-ref.sh" "$pre_cutover")" = 8.5 ] || \
+  fail "pre-cutover signing identity was not 8.5"
+[ "$(cd "$signing_repo" && EXPECTED_BOUNDARY_SHA="$boundary" "$repo_root/scripts/resolve-publisher-signing-ref.sh" "$boundary")" = 8.5 ] || \
+  fail "cutover-boundary signing identity was not 8.5"
+[ "$(cd "$signing_repo" && EXPECTED_BOUNDARY_SHA="$boundary" "$repo_root/scripts/resolve-publisher-signing-ref.sh" "$post_cutover")" = main ] || \
+  fail "post-cutover signing identity was not main"
+git -C "$signing_repo" tag -f archive/php-8.5-final-branch "$pre_cutover" >/dev/null
+if (cd "$signing_repo" && EXPECTED_BOUNDARY_SHA="$boundary" "$repo_root/scripts/resolve-publisher-signing-ref.sh" "$pre_cutover") >/dev/null 2>&1; then
+  fail "signing identity resolver accepted a moved archive tag"
+fi
+git -C "$signing_repo" tag -fa archive/php-8.5-final-branch -m 'final 8.5 control branch' "$boundary" >/dev/null
+git -C "$signing_repo" switch --orphan unrelated >/dev/null
+printf 'unrelated\n' > "$signing_repo/state"
+git -C "$signing_repo" add state
+git -C "$signing_repo" commit -qm unrelated
+unrelated="$(git -C "$signing_repo" rev-parse HEAD)"
+if (cd "$signing_repo" && EXPECTED_BOUNDARY_SHA="$boundary" "$repo_root/scripts/resolve-publisher-signing-ref.sh" "$unrelated") >/dev/null 2>&1; then
+  fail "signing identity resolver accepted unrelated history"
+fi
+
+set +e
+./scripts/verify-published-image.sh \
+  docker.io/example/fpm:8.5 ghcr.io/example/fpm:8.5 \
+  "$(printf 'a%.0s' {1..40})" 8.5.8 "$fixture_dir/invalid-signing-ref" invalid-ref \
+  >/dev/null 2>&1
+invalid_signing_ref_status=$?
+set -e
+[ "$invalid_signing_ref_status" -eq 64 ] || fail "published verifier did not reject an invalid signing ref at input validation"
 
 echo "publisher policy tests passed"

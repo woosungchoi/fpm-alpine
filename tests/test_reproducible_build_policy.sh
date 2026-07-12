@@ -120,7 +120,9 @@ def workflow_policy(text):
     assert f'tags: {tag}' in build
     assert f'SMOKE_IMAGE: {tag}' in smoke
     assert './scripts/smoke-test-image.sh "$SMOKE_IMAGE"' in smoke
-    for required_step in ('Run policy and mutation tests','Replay pinned source checksums','Build reproducibility probe image','Require reproducible local image','Compare package and runtime contract with published baseline','Scan source-only image'):
+    repro=one('Build reproducibility probe image')
+    assert 'no-cache: true' in repro
+    for required_step in ('Run policy and mutation tests','Replay pinned source checksums','Require reproducible local image','Compare package and runtime contract with published baseline','Scan source-only image'):
         one(required_step)
     upload=one('Upload smoke and dependency-safety reports')
     assert 'actions/upload-artifact@' in upload
@@ -140,6 +142,7 @@ for field in ('load: true','push: false','platforms: ${{ matrix.platform }}','sm
  mutations.append(workflow.replace(field,'',1))
 for old,new in (
  ('load: true','load: false'),('push: false','push: true'),('platforms: ${{ matrix.platform }}','platforms: linux/amd64'),
+ ('no-cache: true','no-cache: false'),
  ('./scripts/smoke-test-image.sh "$SMOKE_IMAGE"','./scripts/smoke-test-image.sh wrong-tag'),('smoke-reports/','elsewhere/')):
  mutations.append(workflow.replace(old,new,1))
 for field in ('EXPECTED_PHP_MINOR: ${{ matrix.php_minor }}','EXPECTED_PLATFORM: ${{ matrix.platform }}','EXPECTED_IMAGICK_VERSION: ${{ matrix.imagick_version }}','EXPECTED_REDIS_VERSION: ${{ matrix.redis_version }}','EXPECTED_APCU_VERSION: ${{ matrix.apcu_version }}','EXPECTED_ICONV_IMPLEMENTATION: ${{ matrix.iconv_implementation }}','EXPECTED_ICONV_VERSION: ${{ matrix.iconv_version }}','EXPECTED_ICONV_PACKAGE: ${{ matrix.iconv_package }}','EXPECTED_ICONV_PACKAGE_VERSION: ${{ matrix.iconv_package_version }}','EXPECTED_ICONV_OWNER_PATH: ${{ matrix.iconv_owner_path }}','EXPECTED_ICONV_TARGET: ${{ matrix.iconv_target }}'):

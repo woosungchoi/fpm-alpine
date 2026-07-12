@@ -145,6 +145,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           load: true
           push: false
+          no-cache: true
           tags: fpm-alpine:repro-${{ matrix.php_minor }}-${{ matrix.arch }}
           build-args: |
             PHP_BASE_IMAGE=${{ matrix.php_base_image }}

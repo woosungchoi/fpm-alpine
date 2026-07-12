@@ -17,9 +17,11 @@ The required branch-protection context is exactly `docker-smoke`.
 - `docker-smoke`
 
 This lightweight aggregate gate is the only check that should block regular PR
-merges by default. It succeeds only when all eight `docker-smoke-matrix` jobs
-(PHP 8.2–8.5 × amd64/arm64) succeed; the matrix jobs build the `main` Dockerfile
-and run runtime checks in the built containers.
+merges by default. It succeeds only when `dependency-safety` and all eight
+`docker-smoke-matrix` jobs (PHP 8.2–8.5 × amd64/arm64) succeed. The safety job
+enforces policy/mutation tests and source checksum replay; matrix jobs build the
+Dockerfile twice, require reproducibility, compare package/module contracts,
+scan for fixable CRITICAL vulnerabilities, and run target-platform runtime checks.
 
 ## Manual-only publisher
 
@@ -55,7 +57,7 @@ Non-required / report-only workflows:
   - Uses the existing Docker Hub repository secrets to synchronize the short description and the reviewed `docs/dockerhub-description.md`, then requires exact public API read-back.
   - Never runs for pull requests or pushes, and never prints the repository PAT or temporary Docker Hub access token.
 
-All third-party Actions are pinned to full commit SHAs with release-tag comments. Dependabot is limited to the `github-actions` ecosystem; source image, PECL, and checksum changes remain reviewed freshness findings rather than automatic mutations.
+All third-party Actions are pinned to full commit SHAs with release-tag comments. Dependabot is limited to the `github-actions` ecosystem. The separate repository-scoped updater may propose only strictly classified official PHP same-minor patch/digest changes and PECL patch changes; checksum, lifecycle, runtime-contract, workflow-policy, and publisher changes remain manual-review operations.
 
 ## Workflow responsibilities
 
@@ -67,10 +69,9 @@ eight-job matrix; `workflow_dispatch` remains available for explicit reruns.
 
 The prepare job validates `build/versions.json`, the canonical build and matrix
 input for PHP and source-archive pins, then derives the PHP 8.2–8.5 ×
-amd64/arm64 matrix. `scripts/validate-versions.py` and literal policy fixtures
-independently enforce the approved pin and lifecycle baseline; intentional pin
-or lifecycle changes therefore require coordinated JSON, validator, and test
-approval updates. Matrix
+amd64/arm64 matrix. `build/automation-policy.json`, `scripts/validate-versions.py`,
+and mutation tests independently enforce lifecycle, source-host, runtime-contract,
+and allowed-bump boundaries without duplicating mutable patch pins. Matrix
 jobs build with `push: false` and run the resulting target-platform image under
 the GitHub-hosted runner's QEMU support. No registry login, secrets, or image
 publishing are involved.
@@ -152,6 +153,32 @@ Rollback:
 
 - Revert report formatting or parsing changes only.
 - No published images or dependency pins are changed by this workflow.
+
+### Guarded dependency updater and auto-canary
+
+All new automation is fail-closed when its activation variable is absent or not exactly `true`:
+
+- `dependency-update-pr`
+  - Discovery is report-only by default and uses public Docker Hub tag metadata, Docker Official Images metadata, and PECL archives.
+  - PR creation additionally requires a pre-created `dependency-updater` environment, `DEPENDENCY_UPDATE_APP_ID`, `DEPENDENCY_UPDATE_APP_PRIVATE_KEY`, and `DEPENDENCY_AUTOMATION_ENABLED=true`.
+  - The GitHub App must be repository-scoped with only Contents and Pull requests read/write permissions. It cannot merge or publish.
+- `dependency-auto-merge`
+  - Read-only selection always revalidates exact metadata, diff shape, Action release provenance or source classifier output, and exact-head `docker-smoke` from GitHub Actions App ID `15368`.
+  - Native auto-merge is requested only with `DEPENDENCY_AUTO_MERGE_ENABLED=true`; direct/admin merge is forbidden.
+- `dependency-auto-promote`
+  - Trusted-main eligibility binds the merge commit to exactly one updater-bot PR and its exact successful PR head.
+  - Two full active-matrix canaries are dispatched only with `DEPENDENCY_AUTO_CANARY_ENABLED=true`; their source SHA, run attempts, consecutive run numbers, and every artifact are validated.
+  - Canary evidence always records `productionAuthorized=false`. There is no auto-production workflow before the separate minimum-30-day and two-real-update-cycle bake gate is completed and reviewed.
+
+Activation order:
+
+1. Create the scoped App/environment and run `dependency-update-pr` manually with `dry_run=true`.
+2. Set `DEPENDENCY_AUTOMATION_ENABLED=true` only after a clean discovery run and one manually reviewed generated PR.
+3. Set `DEPENDENCY_AUTO_MERGE_ENABLED=true` only after exact-head classification and native auto-merge are observed on a real eligible PR.
+4. Set `DEPENDENCY_AUTO_CANARY_ENABLED=true` only after two manually dispatched full-matrix canaries pass for the same exact source contract.
+5. Keep auto-production absent until the bake gate is documented and approved in a separate change.
+
+Immediately disable the corresponding variable when a candidate is ambiguous, source metadata moves during observation, required check provenance is missing, package/module drift appears, canary runs are not consecutive, or any evidence cannot be rebound to the exact source SHA.
 
 ### External Snyk webhook
 

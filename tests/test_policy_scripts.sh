@@ -159,11 +159,12 @@ assert_not_contains README.md "future target is version branches"
 assert_not_contains BRANCH-AND-TAG-POLICY.md "future target is version branches"
 assert_contains docs/ci-operations.md "Required status check"
 assert_contains README.md "canonical machine-readable build and matrix input"
-assert_contains README.md "coordinated JSON,"
-assert_contains README.md "validator, and test approval changes"
+assert_contains README.md "build/automation-policy.json"
+assert_contains README.md "allowed-bump boundaries"
 assert_contains docs/ci-operations.md "canonical build and matrix"
-assert_contains docs/ci-operations.md "independently enforce the approved pin and lifecycle baseline"
-assert_contains docs/ci-operations.md 'all eight `docker-smoke-matrix` jobs'
+assert_contains docs/ci-operations.md "allowed-bump boundaries"
+assert_contains docs/ci-operations.md '`dependency-safety`'
+assert_contains docs/ci-operations.md '`docker-smoke-matrix` jobs'
 assert_not_contains README.md "single machine-readable source"
 assert_not_contains docs/ci-operations.md "single source for PHP"
 assert_contains docs/ci-operations.md "GitHub Actions is the sole publisher"
@@ -453,6 +454,7 @@ bash -n scripts/create-manifest-failure-issue.sh
 bash -n scripts/report-manifest.sh
 bash -n scripts/report-freshness.sh
 ./tests/test_reproducible_build_policy.sh
+python3 ./tests/test_reproducibility_archive.py
 ./tests/test_smoke_script.sh
 ./tests/test_publisher_policy.sh
 ./tests/test_php_lifecycle.py

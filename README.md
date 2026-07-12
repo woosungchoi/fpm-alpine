@@ -54,9 +54,9 @@ For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRAN
 
 ## Maintenance and security status
 
-### Manual-only GitHub Actions publisher
+### Protected GitHub Actions publisher
 
-GitHub Actions is the sole publisher for PHP 8.2–8.5. Docker Hub Automatic Builds and the legacy publication webhook have been removed. The publisher remains manual-only so source merges cannot access registry credentials or publish images.
+GitHub Actions is the sole publisher for PHP 8.2–8.5. Docker Hub Automatic Builds and the legacy publication webhook have been removed. Production promotion remains manual-only until the documented auto-production bake gate is completed. An explicitly enabled trusted-main controller may dispatch immutable canaries, but source pull requests cannot access registry credentials or publish images.
 
 - Canary tags are non-moving per workflow attempt: `canary-<minor>-<run-id>-<run-attempt>` on Docker Hub and GHCR. Existing canary tags are rejected before push.
 - Production promotion requires one explicit PHP minor per dispatch, downloaded and content-validated evidence from the immediately preceding PHP 8.5 canary and every current 8.2–8.5 canary artifact, repository variable `LEGACY_PUBLISHER_DISABLED=true`, explicit dispatch input `legacy_publisher_disabled=true`, and a matching fresh 15-minute cutover-evidence hash proving inactive build rule, strict integer zero in-flight builds, and absent webhook. The lease is revalidated immediately before bootstrap creation and production promotion. It re-tags the verified full-matrix canary digest without rebuilding, so a failed run cannot leave a partially updated multi-minor release or race an enabled legacy publisher.
@@ -75,9 +75,9 @@ GitHub Actions publishes to Docker Hub and GHCR and verifies both registries by 
 - Each run writes a GitHub Actions step summary and uploads manifest report artifacts containing the observed tag digest, per-platform digests, and attestation/metadata manifest entries when present.
 - Scheduled/manual verification remains the source of truth for the final published state.
 
-### Dependency freshness reports
+### Dependency freshness and guarded update automation
 
-`dependency-freshness` validates and reads `build/versions.json`; it is a report-only workflow and does not publish images or update pins automatically. It records:
+`dependency-freshness` remains report-only and records:
 
 - every exact matrix base-image digest and source dependency pin,
 - the published Docker Hub tag digests covered by the workflow configuration,
@@ -86,14 +86,18 @@ GitHub Actions publishes to Docker Hub and GHCR and verifies both registries by 
 
 The workflow runs weekly and on manual dispatch, writes a GitHub Actions step summary, and uploads `freshness-reports/` artifacts for review.
 
+`dependency-update-pr` is a separate, disabled-by-default updater. Once the repository-scoped GitHub App and `DEPENDENCY_AUTOMATION_ENABLED=true` are configured, it may open isolated pull requests for official PHP same-minor patch/digest updates and PECL patch updates. It cannot merge, publish, or modify lifecycle/runtime policy. `dependency-auto-merge` independently revalidates the exact diff and the GitHub Actions App-bound `docker-smoke` result before requesting native auto-merge. `dependency-auto-promote` may dispatch two exact full-matrix canaries only when explicitly enabled; production authorization remains false until the separate bake gate is completed.
+
+The human-owned policy is `build/automation-policy.json`. PHP minor membership, support/EOL state, runtime contracts, workflow permissions, publisher behavior, and exception policy always require manual review.
+
 This repository is maintained through one `main` source trunk and verification workflows:
 
 - `smoke-test` builds the active PHP matrix from `main` and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
 - `verify-published-manifest` runs on a schedule and verifies the configured published Docker Hub tags.
-- `dependency-freshness` produces report-only dependency/source freshness observations for maintainers.
+- `dependency-freshness` produces report-only observations; the separate updater may open strictly classified dependency-only pull requests when explicitly enabled.
 - `php-lifecycle` checks the active matrix monthly against configured EOL dates and upstream PHP release availability.
 - `published-runtime-smoke` verifies Docker Hub/GHCR manifests, provenance, SBOM, signatures, runtime behavior, and semantic parity weekly and after a successful production publisher run.
-- Dependabot proposes reviewed full-SHA GitHub Actions updates while source dependencies remain report-only.
+- Dependabot proposes full-SHA GitHub Actions updates, and the repository-scoped updater may propose strictly classified PHP base or PECL patch updates.
 - Active matrix entries use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
 
@@ -126,9 +130,9 @@ Treat that as the branch matrix unless a future branch-specific exception is doc
 `build/versions.json` is the canonical machine-readable build and matrix input for
 the supported PHP 8.2–8.5 patch versions, lifecycle metadata (`support`/`eol`),
 digest-pinned base images, and verified source archives. Independently,
-`scripts/validate-versions.py` and literal policy fixtures enforce the approved
-pin and lifecycle baseline, so an intentional update requires coordinated JSON,
-validator, and test approval changes. The `smoke-test` workflow validates that file, derives its
+`build/automation-policy.json`, `scripts/validate-versions.py`, and mutation tests enforce
+the lifecycle, source-host, runtime-contract, and allowed-bump boundaries without duplicating
+mutable patch pins in validator code. The `smoke-test` workflow validates those files, derives its
 PHP/platform matrix from it, and only builds and runs local CI images; it does
 not log in to a registry or publish images.
 

@@ -1,0 +1,116 @@
+name: dependency-auto-merge
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      report_only:
+        description: Evaluate candidates without enabling native auto-merge
+        required: true
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: dependency-auto-merge
+  cancel-in-progress: false
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      eligible_count: ${{ steps.evaluate.outputs.eligible_count }}
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: List and preselect open dependency PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p auto-merge-selection
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json number,author,baseRefName,headRefName,headRepository,isCrossRepository,isDraft,reviewDecision \
+            > auto-merge-selection/open-prs.json
+          python3 scripts/select-auto-merge-prs.py \
+            --input auto-merge-selection/open-prs.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --selected-output auto-merge-selection/preselected.txt \
+            --report-output auto-merge-selection/preselection.json
+
+      - name: Revalidate exact diffs and required check evidence
+        id: evaluate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          : > auto-merge-selection/eligible.tsv
+          while IFS= read -r pr; do
+            test -n "$pr" || continue
+            set +e
+            ./scripts/evaluate-auto-merge-pr.sh \
+              "$pr" "$GITHUB_REPOSITORY" auto-merge-selection/eligible.tsv
+            rc=$?
+            set -e
+            if [ "$rc" -eq 2 ]; then
+              continue
+            fi
+            [ "$rc" -eq 0 ] || exit "$rc"
+          done < auto-merge-selection/preselected.txt
+          count=$(wc -l < auto-merge-selection/eligible.tsv | tr -d ' ')
+          echo "eligible_count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Upload selection evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auto-merge-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-merge-selection/
+          if-no-files-found: error
+
+  enable-native-auto-merge:
+    if: >-
+      ${{ needs.select.outputs.eligible_count != '0' &&
+          vars.DEPENDENCY_AUTO_MERGE_ENABLED == 'true' &&
+          (github.event_name == 'schedule' || inputs.report_only == false) }}
+    needs: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+    steps:
+      - name: Download exact selection evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: auto-merge-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-merge-selection
+
+      - name: Rebind exact head and enable native auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r pr selected_sha; do
+            test -n "$pr" || continue
+            current=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr")
+            current_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])' <<< "$current")
+            current_state=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])' <<< "$current")
+            current_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["draft"]).lower())' <<< "$current")
+            test "$current_sha" = "$selected_sha"
+            test "$current_state" = open
+            test "$current_draft" = false
+            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash --match-head-commit "$selected_sha"
+          done < auto-merge-selection/eligible.tsv

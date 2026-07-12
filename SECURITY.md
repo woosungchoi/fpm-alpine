@@ -11,8 +11,13 @@ Production users should pin an explicit version tag, for example `woosungchoi/fp
 The active image lines are validated from the single `main` source trunk with repository smoke tests and published-manifest checks:
 
 - `smoke-test` builds the `main` active matrix and verifies PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
+- The same required `docker-smoke` aggregate also enforces source checksum replay, reproducibility, package/module contract drift, and fixable-CRITICAL vulnerability checks across PHP 8.2–8.5 on amd64/arm64.
 - `verify-published-manifest` checks the published Docker Hub tags for required multi-arch manifest entries.
 - The repository policy standardizes active matrix entries on the documented Imagick release baseline unless an explicit exception is documented.
+
+Dependency automation is fail-closed and disabled by default. The updater may propose only official PHP same-minor patch/digest changes and PECL patch changes allowed by `build/automation-policy.json`. Every generated pull request is reclassified from its exact diff; native auto-merge additionally requires the exact-head `docker-smoke` check from GitHub Actions App ID `15368`. Pull-request workflows have no registry credentials and cannot publish.
+
+Trusted-main auto-canary, when explicitly enabled, dispatches two immutable full-matrix canary runs and validates their exact source SHA, run attempts, consecutive run numbers, and evidence artifacts. It does not authorize production. PHP minor changes, support/EOL changes, runtime-contract changes, workflow permission changes, publisher changes, vulnerability exceptions, and production automation remain manual-review operations.
 
 ## Reporting a vulnerability
 

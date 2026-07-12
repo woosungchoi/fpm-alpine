@@ -1,0 +1,139 @@
+name: dependency-auto-promote
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact trusted main commit to evaluate
+        required: true
+        type: string
+      report_only:
+        description: Evaluate without dispatching canary runs
+        required: true
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: dependency-auto-promote
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      eligible: ${{ steps.contract.outputs.eligible }}
+      source_sha: ${{ steps.contract.outputs.source_sha }}
+    steps:
+      - name: Checkout trusted history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Evaluate exact merged-main diff
+        id: contract
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PUSH_SOURCE_SHA: ${{ github.sha }}
+          MANUAL_SOURCE_SHA: ${{ inputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p auto-promotion-evidence
+          if [ "$EVENT_NAME" = push ]; then
+            source_sha="$PUSH_SOURCE_SHA"
+            base_sha="$PUSH_BASE_SHA"
+          else
+            source_sha="$MANUAL_SOURCE_SHA"
+            [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin "$source_sha"
+            base_sha="$(git rev-parse "${source_sha}^")"
+          fi
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ && "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+          python3 scripts/evaluate-auto-promotion.py \
+            --base-sha "$base_sha" \
+            --head-sha "$source_sha" \
+            --output auto-promotion-evidence/eligibility.json
+          eligible=$(python3 -c 'import json; print(str(json.load(open("auto-promotion-evidence/eligibility.json"))["eligible"]).lower())')
+          if [ "$eligible" = true ]; then
+            ./scripts/validate-merged-dependency-pr.sh \
+              "$source_sha" \
+              auto-promotion-evidence/eligibility.json \
+              auto-promotion-evidence/merged-pr.json
+          fi
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Upload eligibility evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auto-promotion-eligibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-promotion-evidence/
+          if-no-files-found: error
+
+  auto-canary:
+    if: >-
+      ${{ needs.evaluate.outputs.eligible == 'true' &&
+          vars.DEPENDENCY_AUTO_CANARY_ENABLED == 'true' &&
+          (github.event_name == 'push' || inputs.report_only == false) }}
+    needs: evaluate
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout exact eligible source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.evaluate.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download eligibility evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: auto-promotion-eligibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-promotion-evidence
+
+      - name: Require source is still current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.evaluate.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          current_main=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          test "$current_main" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Dispatch and verify two exact full-matrix canaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.evaluate.outputs.source_sha }}
+        run: |
+          ./scripts/run-auto-canary.sh \
+            "$SOURCE_SHA" \
+            auto-promotion-evidence/eligibility.json \
+            "auto-${SOURCE_SHA:0:12}-${GITHUB_RUN_ID}" \
+            auto-promotion-evidence/canary-pair.json
+
+      - name: Upload run-bound canary evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auto-canary-${{ needs.evaluate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            auto-promotion-evidence/
+            auto-canary-evidence/
+          if-no-files-found: error

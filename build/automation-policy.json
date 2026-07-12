@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "lifecycle": {
+    "8.2": {
+      "support": "security-only",
+      "eol": "2026-12-31"
+    },
+    "8.3": {
+      "support": "security-only",
+      "eol": "2027-12-31"
+    },
+    "8.4": {
+      "support": "active",
+      "eol": "2028-12-31"
+    },
+    "8.5": {
+      "support": "active",
+      "eol": "2029-12-31"
+    }
+  },
+  "dependencies": {
+    "imagick": {
+      "sourceHost": "pecl.php.net",
+      "autoBump": "patch"
+    },
+    "redis": {
+      "sourceHost": "pecl.php.net",
+      "autoBump": "patch"
+    },
+    "apcu": {
+      "sourceHost": "pecl.php.net",
+      "autoBump": "patch"
+    }
+  },
+  "baseImages": {
+    "repository": "php",
+    "hubRepository": "library/php",
+    "tagSuffix": "-fpm-alpine",
+    "tagApiBase": "https://hub.docker.com/v2/repositories/library/php/tags",
+    "officialImagesMetadata": "https://raw.githubusercontent.com/docker-library/official-images/master/library/php",
+    "autoBump": "same-minor-patch-or-digest"
+  },
+  "manualOnly": [
+    "lifecycle",
+    "runtimeContracts",
+    "minorSet",
+    "dockerfileLogic",
+    "workflowPermissions",
+    "publisherPolicy"
+  ]
+}

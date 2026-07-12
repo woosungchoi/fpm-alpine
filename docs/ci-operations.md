@@ -50,6 +50,10 @@ Non-required / report-only workflows:
   - Weekly, manual, and post-publish exact-digest runtime/supply-chain verification for active PHP 8.2–8.5 tags.
   - Verifies Docker Hub/GHCR platform semantics, provenance, SBOM, Cosign identity, and amd64/arm64 runtime behavior.
   - Resolves the exact Cosign branch identity from the annotated `archive/php-8.5-final-branch` boundary pinned to commit `f941dde2ff8864e1b056c051d330eb4321afb916`: source revisions at or before the boundary must be signed by `refs/heads/8.5`, while descendants must be signed by `refs/heads/main`. A moved tag or unrelated history is rejected.
+- `sync-dockerhub-metadata`
+  - Manual-only and gated by the protected `fpm-production` environment.
+  - Uses the existing Docker Hub repository secrets to synchronize the short description and the reviewed `docs/dockerhub-description.md`, then requires exact public API read-back.
+  - Never runs for pull requests or pushes, and never prints the repository PAT or temporary Docker Hub access token.
 
 All third-party Actions are pinned to full commit SHAs with release-tag comments. Dependabot is limited to the `github-actions` ecosystem; source image, PECL, and checksum changes remain reviewed freshness findings rather than automatic mutations.
 

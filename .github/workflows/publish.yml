@@ -69,6 +69,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       created: ${{ steps.metadata.outputs.created }}
+      source_date_epoch: ${{ steps.metadata.outputs.source_date_epoch }}
       release_date: ${{ steps.metadata.outputs.release_date }}
     steps:
       - name: Checkout exact source revision
@@ -196,7 +197,8 @@ jobs:
       - name: Prepare immutable build metadata
         id: metadata
         run: |
-          echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
           echo "release_date=$(date -u +'%Y%m%d')" >> "$GITHUB_OUTPUT"
 
   canary:
@@ -263,6 +265,8 @@ jobs:
 
       - name: Build and push non-moving canary subjects
         id: build
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -284,6 +288,7 @@ jobs:
             OCI_REVISION=${{ github.event.inputs.source_sha }}
             OCI_VERSION=${{ matrix.php_patch }}
             OCI_CREATED=${{ needs.prepare.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.event.inputs.source_sha }}

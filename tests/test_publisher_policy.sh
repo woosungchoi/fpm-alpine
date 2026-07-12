@@ -78,6 +78,9 @@ for required in ('scripts/verify-published-image.sh', 'scripts/promote-image.sh'
                  'steps.canary.outputs.ghcr_digest'):
     assert required in production, required
 assert 'test "$SOURCE_SHA" = "$DISPATCH_SHA"' in text
+assert text.count('SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}') == 1
+assert text.count('SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}') == 1
+assert 'git show -s --format=%ct "$GITHUB_SHA"' in text
 assert "test \"$DISPATCH_REF\" = 'refs/heads/main'" in text
 assert 'actions/runs/${CANARY_RUN_ID}' in text
 assert 'actions/runs/${PRIOR_CANARY_RUN_ID}' in text

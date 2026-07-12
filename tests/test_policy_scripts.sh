@@ -454,6 +454,7 @@ bash -n scripts/create-manifest-failure-issue.sh
 bash -n scripts/report-manifest.sh
 bash -n scripts/report-freshness.sh
 ./tests/test_reproducible_build_policy.sh
+python3 ./tests/test_reproducibility_archive.py
 ./tests/test_smoke_script.sh
 ./tests/test_publisher_policy.sh
 ./tests/test_php_lifecycle.py

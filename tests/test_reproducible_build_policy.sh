@@ -111,7 +111,9 @@ def workflow_policy(text):
       'PHP_BASE_IMAGE=${{ matrix.php_base_image }}','IMAGICK_URL=${{ matrix.imagick_url }}','IMAGICK_SHA256=${{ matrix.imagick_sha256 }}',
       'REDIS_URL=${{ matrix.redis_url }}','REDIS_SHA256=${{ matrix.redis_sha256 }}','APCU_URL=${{ matrix.apcu_url }}','APCU_SHA256=${{ matrix.apcu_sha256 }}',
 
-      'OCI_SOURCE=${{ github.server_url }}/${{ github.repository }}','OCI_REVISION=${{ github.sha }}','OCI_VERSION=${{ matrix.php_patch }}','OCI_CREATED=${{ needs.prepare.outputs.created }}')
+      'OCI_SOURCE=${{ github.server_url }}/${{ github.repository }}','OCI_REVISION=${{ github.sha }}','OCI_VERSION=${{ matrix.php_patch }}','OCI_CREATED=${{ needs.prepare.outputs.created }}',
+      'SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}',
+      'SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}')
     for value in required: assert value in build, value
     smoke=one('Run smoke test under target platform')
     for value in ('EXPECTED_PHP_MINOR: ${{ matrix.php_minor }}','EXPECTED_PLATFORM: ${{ matrix.platform }}','EXPECTED_IMAGICK_VERSION: ${{ matrix.imagick_version }}','EXPECTED_REDIS_VERSION: ${{ matrix.redis_version }}','EXPECTED_APCU_VERSION: ${{ matrix.apcu_version }}','EXPECTED_ICONV_IMPLEMENTATION: ${{ matrix.iconv_implementation }}','EXPECTED_ICONV_VERSION: ${{ matrix.iconv_version }}','EXPECTED_ICONV_PACKAGE: ${{ matrix.iconv_package }}','EXPECTED_ICONV_PACKAGE_VERSION: ${{ matrix.iconv_package_version }}','EXPECTED_ICONV_OWNER_PATH: ${{ matrix.iconv_owner_path }}','EXPECTED_ICONV_TARGET: ${{ matrix.iconv_target }}'):
@@ -120,9 +122,20 @@ def workflow_policy(text):
     assert f'tags: {tag}' in build
     assert f'SMOKE_IMAGE: {tag}' in smoke
     assert './scripts/smoke-test-image.sh "$SMOKE_IMAGE"' in smoke
-    repro=one('Build reproducibility probe image')
-    assert 'no-cache: true' in repro
-    for required_step in ('Run policy and mutation tests','Replay pinned source checksums','Require reproducible local image','Compare package and runtime contract with published baseline','Scan source-only image'):
+    for suffix in ('A','B'):
+        repro=one(f'Build reproducibility probe archive {suffix}')
+        destination=f'/tmp/repro-{suffix.lower()}-${{{{ matrix.php_minor }}}}-${{{{ matrix.arch }}}}.tar'
+        for value in ('no-cache: true','push: false','provenance: false','sbom: false',
+                      'SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}',
+                      f'outputs: type=oci,dest={destination},rewrite-timestamp=true'):
+            assert value in repro, value
+        assert 'load: true' not in repro
+    require_repro=one('Require reproducible OCI manifest')
+    for value in ('FIRST_ARCHIVE: /tmp/repro-a-${{ matrix.php_minor }}-${{ matrix.arch }}.tar',
+                  'SECOND_ARCHIVE: /tmp/repro-b-${{ matrix.php_minor }}-${{ matrix.arch }}.tar',
+                  'EXPECTED_PLATFORM: ${{ matrix.platform }}', 'verify-local-reproducibility.sh'):
+        assert value in require_repro, value
+    for required_step in ('Run policy and mutation tests','Replay pinned source checksums','Compare package and runtime contract with published baseline','Scan source-only image'):
         one(required_step)
     upload=one('Upload smoke and dependency-safety reports')
     assert 'actions/upload-artifact@' in upload
@@ -132,7 +145,7 @@ workflow_policy(workflow)
 mutations=[]
 def remove_step(name):
     blocks=steps(workflow); body=next(body for title,body in blocks if title==name); return workflow.replace(body,'',1)
-mutations += [remove_step('Set up QEMU'), remove_step('Upload smoke and dependency-safety reports'), remove_step('Run policy and mutation tests'), remove_step('Require reproducible local image'), remove_step('Compare package and runtime contract with published baseline'), remove_step('Scan source-only image')]
+mutations += [remove_step('Set up QEMU'), remove_step('Upload smoke and dependency-safety reports'), remove_step('Run policy and mutation tests'), remove_step('Build reproducibility probe archive A'), remove_step('Build reproducibility probe archive B'), remove_step('Require reproducible OCI manifest'), remove_step('Compare package and runtime contract with published baseline'), remove_step('Scan source-only image')]
 aggregate_start=workflow.index('  docker-smoke:\n')
 mutations.append(workflow[:aggregate_start])
 mutations.append(workflow.replace('needs: [dependency-safety, docker-smoke-matrix]','needs: prepare',1))
@@ -143,11 +156,14 @@ for field in ('load: true','push: false','platforms: ${{ matrix.platform }}','sm
 for old,new in (
  ('load: true','load: false'),('push: false','push: true'),('platforms: ${{ matrix.platform }}','platforms: linux/amd64'),
  ('no-cache: true','no-cache: false'),
+ ('rewrite-timestamp=true','rewrite-timestamp=false'),
+ ('provenance: false','provenance: true'),('sbom: false','sbom: true'),
+ ('SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}','SOURCE_DATE_EPOCH: 0'),
  ('./scripts/smoke-test-image.sh "$SMOKE_IMAGE"','./scripts/smoke-test-image.sh wrong-tag'),('smoke-reports/','elsewhere/')):
  mutations.append(workflow.replace(old,new,1))
 for field in ('EXPECTED_PHP_MINOR: ${{ matrix.php_minor }}','EXPECTED_PLATFORM: ${{ matrix.platform }}','EXPECTED_IMAGICK_VERSION: ${{ matrix.imagick_version }}','EXPECTED_REDIS_VERSION: ${{ matrix.redis_version }}','EXPECTED_APCU_VERSION: ${{ matrix.apcu_version }}','EXPECTED_ICONV_IMPLEMENTATION: ${{ matrix.iconv_implementation }}','EXPECTED_ICONV_VERSION: ${{ matrix.iconv_version }}','EXPECTED_ICONV_PACKAGE: ${{ matrix.iconv_package }}','EXPECTED_ICONV_PACKAGE_VERSION: ${{ matrix.iconv_package_version }}','EXPECTED_ICONV_OWNER_PATH: ${{ matrix.iconv_owner_path }}','EXPECTED_ICONV_TARGET: ${{ matrix.iconv_target }}'):
  mutations.append(workflow.replace(field,'',1))
-for arg in ('PHP_BASE_IMAGE','IMAGICK_URL','IMAGICK_SHA256','REDIS_URL','REDIS_SHA256','APCU_URL','APCU_SHA256','OCI_SOURCE','OCI_REVISION','OCI_VERSION','OCI_CREATED'):
+for arg in ('PHP_BASE_IMAGE','IMAGICK_URL','IMAGICK_SHA256','REDIS_URL','REDIS_SHA256','APCU_URL','APCU_SHA256','OCI_SOURCE','OCI_REVISION','OCI_VERSION','OCI_CREATED','SOURCE_DATE_EPOCH'):
     mutations.append(re.sub(r'^\s+'+arg+r'=.*\n','',workflow,count=1,flags=re.M))
     mutations.append(re.sub(r'(^\s+'+arg+r'=).+$',r'\1changed',workflow,count=1,flags=re.M))
 for i,mutated in enumerate(mutations):
@@ -193,6 +209,12 @@ for pattern in (
     assert not re.search(pattern, active, re.I), pattern
 PY
 for key in source revision version created; do assert_contains Dockerfile "org.opencontainers.image.${key}"; done
+assert_contains Dockerfile 'ARG SOURCE_DATE_EPOCH=0'
+assert_contains Dockerfile 'touch -h -d "@${SOURCE_DATE_EPOCH}"'
+assert_not_contains Dockerfile '.wordpress-phpexts-rundeps'
+assert_contains Dockerfile 'rm -f /var/log/apk.log'
+assert_contains .github/workflows/smoke-test.yml 'git show -s --format=%cI "$GITHUB_SHA"'
+assert_contains .github/workflows/smoke-test.yml 'git show -s --format=%ct "$GITHUB_SHA"'
 for entry in .git worktrees/ reports/ artifacts/ smoke-reports/ '__pycache__' '*.swp'; do assert_contains .dockerignore "$entry"; done
 assert_not_contains .dockerignore "Dockerfile"
 assert_not_contains .dockerignore "build/"

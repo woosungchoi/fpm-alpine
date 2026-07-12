@@ -1,6 +1,7 @@
 ARG PHP_BASE_IMAGE=php:8.5-fpm-alpine@sha256:79def1d16ece3ab1a6656c46a23bfd80ad33887fbd33626e7bd743cef54ef9c6
 FROM ${PHP_BASE_IMAGE}
 
+ARG SOURCE_DATE_EPOCH=0
 ARG OCI_SOURCE=""
 ARG OCI_REVISION=""
 ARG OCI_VERSION=""
@@ -22,7 +23,11 @@ RUN set -eux; \
 		bash \
 		ffmpeg \
 		ghostscript \
-		imagemagick
+		imagemagick; \
+	find /etc/fonts /usr/share/fonts -exec touch -h -d "@${SOURCE_DATE_EPOCH}" '{}' +; \
+	rm -rf /var/cache/fontconfig/*; \
+	fc-cache -f; \
+	rm -f /var/log/apk.log
 
 # Fail closed on the official pinned-base libiconv runtime before compiling anything.
 RUN set -eux; \
@@ -78,7 +83,7 @@ RUN set -eux; \
 		| tr ',' '\n' \
 		| sort -u \
 		| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }')"; \
-	apk add --no-network --virtual .wordpress-phpexts-rundeps $runDeps; \
+	apk add --no-network $runDeps; \
 	apk del --no-network .build-deps; \
 	! { ldd "$extDir"/*.so | grep 'not found'; }; \
 	php -v; \
@@ -86,7 +91,8 @@ RUN set -eux; \
 	php-fpm -t; \
 	phpLdd="$(ldd /usr/local/bin/php)"; printf '%s\n' "$phpLdd"; \
 	! printf '%s\n' "$phpLdd" | grep 'not found'; \
-	printf '%s\n' "$phpLdd" | grep -F '/usr/lib/libiconv.so.2'
+	printf '%s\n' "$phpLdd" | grep -F '/usr/lib/libiconv.so.2'; \
+	rm -f /var/log/apk.log
 
 # Recommended PHP.ini settings.
 RUN set -eux; \

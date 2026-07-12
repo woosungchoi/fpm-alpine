@@ -61,13 +61,18 @@ assert_contains SUPPORT.md 'The Docker Hub `this` tag is an unsupported legacy/a
 assert_contains SUPPORT.md 'There is intentionally no `latest` tag.'
 
 assert_file LICENSE
-license_sha256="c894d4253148e8ce9803b6a114a6bb330e65ac358afe03e1f39e851d3ebf03c6"
+license_sha256="8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
 actual_license_sha256="$(sha256sum -- LICENSE | cut -d ' ' -f 1)"
 [ "$actual_license_sha256" = "$license_sha256" ] || fail "LICENSE SHA-256 mismatch: expected $license_sha256, got $actual_license_sha256"
-assert_contains LICENSE "SPDX-License-Identifier: GPL-2.0-only"
-assert_regex LICENSE '^WordPress Docker Official Image\. docker-library/wordpress is licensed under$'
-assert_regex LICENSE '^GPL-2\.0\. It also builds on the PHP Docker Official Image packaging\.$'
-assert_regex LICENSE '^docker-library/php is licensed under the MIT License\.'
+assert_regex LICENSE '^[[:space:]]+GNU GENERAL PUBLIC LICENSE$'
+assert_not_contains LICENSE "Repository licensing and upstream attribution"
+assert_not_contains LICENSE "SPDX-License-Identifier"
+assert_file NOTICE.md
+assert_contains NOTICE.md "SPDX-License-Identifier: GPL-2.0-only"
+assert_contains NOTICE.md "docker-library/wordpress"
+assert_contains NOTICE.md "docker-library/php"
+assert_contains README.md "canonical [LICENSE](./LICENSE) text"
+assert_contains README.md "[NOTICE.md](./NOTICE.md)"
 assert_contains LICENSE "GNU GENERAL PUBLIC LICENSE"
 assert_contains LICENSE "Version 2, June 1991"
 assert_contains LICENSE "TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION"
@@ -163,6 +168,10 @@ assert_not_contains README.md "single machine-readable source"
 assert_not_contains docs/ci-operations.md "single source for PHP"
 assert_contains docs/ci-operations.md "GitHub Actions is the sole publisher"
 assert_contains docs/ci-operations.md "Rollback"
+assert_contains docs/ci-operations.md "External Snyk webhook"
+assert_contains docs/ci-operations.md "non-required external advisory signal"
+assert_contains docs/ci-operations.md "repository maintainer owns the integration"
+assert_contains docs/ci-operations.md "does not replace the exact-subject Trivy fixable-CRITICAL gate"
 
 for removed in \
   .github/workflows/branch-drift.yml \
@@ -184,6 +193,48 @@ assert_not_regex .github/workflows/smoke-test.yml 'branches:.*8\.5'
 assert_not_regex .github/workflows/verify-published-manifest.yml "^[[:space:]]+- '8\\.[0-5]'$"
 assert_not_regex README.md 'branch-(sync|drift)'
 assert_not_regex docs/ci-operations.md 'branch-(sync|drift)'
+
+assert_file .github/dependabot.yml
+assert_contains .github/dependabot.yml 'package-ecosystem: github-actions'
+assert_contains .github/dependabot.yml 'interval: weekly'
+assert_file .github/workflows/php-lifecycle.yml
+assert_file .github/workflows/published-runtime-smoke.yml
+assert_file scripts/check-php-lifecycle.py
+assert_executable scripts/check-php-lifecycle.py
+assert_file scripts/create-php-lifecycle-issue.sh
+assert_executable scripts/create-php-lifecycle-issue.sh
+assert_contains .github/workflows/php-lifecycle.yml "cron: '19 5 1 * *'"
+assert_contains .github/workflows/php-lifecycle.yml 'workflow_dispatch:'
+assert_contains .github/workflows/php-lifecycle.yml 'scripts/check-php-lifecycle.py'
+assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["publish"]'
+assert_contains .github/workflows/published-runtime-smoke.yml 'branches: ["main"]'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-image.sh'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/scan-image.sh'
+assert_contains .github/workflows/published-runtime-smoke.yml 'git merge-base --is-ancestor'
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+uses = []
+for path in sorted(Path('.github/workflows').glob('*.yml')):
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        match = re.match(r'^\s*uses:\s*([^\s#]+)(?:\s+#\s+(.+))?$', line)
+        if not match:
+            continue
+        ref, comment = match.groups()
+        if ref.startswith('./'):
+            continue
+        if '@' not in ref:
+            raise SystemExit(f'{path}:{number}: action has no ref')
+        revision = ref.rsplit('@', 1)[1]
+        if not re.fullmatch(r'[0-9a-f]{40}', revision):
+            raise SystemExit(f'{path}:{number}: action is not pinned to a full SHA: {ref}')
+        if not comment or not re.fullmatch(r'v\d+(?:\.\d+){1,2}', comment.strip()):
+            raise SystemExit(f'{path}:{number}: pinned action lacks a release-tag comment')
+        uses.append(ref)
+if not uses:
+    raise SystemExit('no action uses found')
+PY
 
 fixture_dir="$(mktemp -d)"
 mkdir -p "$fixture_dir/bin"
@@ -365,5 +416,6 @@ bash -n scripts/report-freshness.sh
 ./tests/test_reproducible_build_policy.sh
 ./tests/test_smoke_script.sh
 ./tests/test_publisher_policy.sh
+./tests/test_php_lifecycle.py
 
 echo "policy script tests passed"

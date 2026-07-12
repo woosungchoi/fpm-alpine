@@ -43,6 +43,14 @@ Non-required / report-only workflows:
   - Report-only dependency/source freshness observations.
   - Does not mutate Dockerfiles, open PRs, or publish images.
   - When freshness signals require review, opens or updates a `dependency-freshness` issue.
+- `php-lifecycle`
+  - Monthly and manual lifecycle/EOL validation with upstream-source failure separated from policy mismatch.
+  - Opens or updates one deduplicated `php-lifecycle` issue when attention is required.
+- `published-runtime-smoke`
+  - Weekly, manual, and post-publish exact-digest runtime/supply-chain verification for active PHP 8.2–8.5 tags.
+  - Verifies Docker Hub/GHCR platform semantics, provenance, SBOM, Cosign identity, and amd64/arm64 runtime behavior.
+
+All third-party Actions are pinned to full commit SHAs with release-tag comments. Dependabot is limited to the `github-actions` ecosystem; source image, PECL, and checksum changes remain reviewed freshness findings rather than automatic mutations.
 
 ## Workflow responsibilities
 
@@ -139,6 +147,15 @@ Rollback:
 
 - Revert report formatting or parsing changes only.
 - No published images or dependency pins are changed by this workflow.
+
+### External Snyk webhook
+
+The active Snyk webhook receives `push` and `pull_request` events as a non-required external advisory signal. The repository maintainer owns the integration and its Snyk project configuration.
+
+- Snyk does not satisfy the required `docker-smoke` context.
+- Snyk does not replace the exact-subject Trivy fixable-CRITICAL gate or the scheduled runtime/supply-chain verification.
+- On delivery failures, inspect recent webhook deliveries and the linked Snyk project before changing repository policy.
+- Remove the webhook only after a 90-day audit finds no accepted deliveries, checks, or statuses and the Trivy replacement remains verified.
 
 ## Merge checklist
 

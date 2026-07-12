@@ -1,0 +1,121 @@
+name: published-runtime-smoke
+
+on:
+  schedule:
+    - cron: '31 6 * * 0'
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["publish"]
+    types: [completed]
+    branches: ["main"]
+
+concurrency:
+  group: published-runtime-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  prepare:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Validate and prepare active matrix
+        id: matrix
+        run: |
+          ./scripts/validate-versions.py
+          matrix=$(python3 - <<'PY'
+          import json
+          data=json.load(open('build/versions.json'))
+          print(json.dumps({'include': [
+              {'php_minor': minor, 'php_patch': item['patch']}
+              for minor,item in data['versions'].items()
+          ]}, separators=(',', ':')))
+          PY
+          )
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout main with protected history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Resolve published source revision
+        id: source
+        env:
+          IMAGE_REF: docker.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
+          EXPECTED_PATCH: ${{ matrix.php_patch }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE_REF" --format '{{ json .Image }}' > /tmp/published-image.json
+          revision=$(python3 - "$EXPECTED_PATCH" <<'PY'
+          import json,re,sys
+          images=json.load(open('/tmp/published-image.json'))
+          image=images.get('linux/amd64')
+          if not isinstance(image,dict): raise SystemExit('missing linux/amd64 image metadata')
+          labels=(image.get('config') or {}).get('Labels') or (image.get('config') or {}).get('labels') or {}
+          revision=labels.get('org.opencontainers.image.revision','')
+          version=labels.get('org.opencontainers.image.version','')
+          if not re.fullmatch(r'[0-9a-f]{40}',revision): raise SystemExit('invalid published source revision')
+          if version != sys.argv[1]: raise SystemExit(f'published patch mismatch: {version!r}')
+          print(revision)
+          PY
+          )
+          git cat-file -e "${revision}^{commit}"
+          git merge-base --is-ancestor "$revision" HEAD
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact published runtime and supply chain
+        run: |
+          ./scripts/verify-published-image.sh \
+            "docker.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}" \
+            "ghcr.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}" \
+            "${{ steps.source.outputs.revision }}" \
+            "${{ matrix.php_patch }}" \
+            "published-runtime-reports/${{ matrix.php_minor }}"
+
+      - name: Scan active exact subject for fixable vulnerabilities
+        run: |
+          set -euo pipefail
+          digest=$(./scripts/resolve-image-digest.sh "docker.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}")
+          for platform in linux/amd64 linux/arm64; do
+            ./scripts/scan-image.sh \
+              docker.io/woosungchoi/fpm-alpine \
+              "$digest" \
+              "published-runtime-reports/${{ matrix.php_minor }}/scan" \
+              "$platform"
+          done
+
+      - name: Upload published runtime evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: published-runtime-${{ matrix.php_minor }}
+          path: published-runtime-reports/${{ matrix.php_minor }}/
+          if-no-files-found: error

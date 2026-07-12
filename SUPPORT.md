@@ -17,6 +17,8 @@ This file is the canonical lifecycle and support policy for the image tags in th
 
 For source-only CI, these four active matrix entries and their lifecycle fields are mirrored in `build/versions.json`. The validator requires the exact version set, order, status, and EOL values; this document remains the human-facing canonical lifecycle policy.
 
+The monthly `php-lifecycle` workflow warns 90 and 30 days before EOL, fails when an active matrix entry reaches EOL, and reports upstream release-source outages separately from lifecycle mismatches.
+
 ## Unsupported legacy images
 
 The `8.0` and `8.1` tags are retained so existing references and historical artifacts remain identifiable, but they are frozen and **never rebuilt**. They receive no package refreshes, CVE remediation, compatibility fixes, or support. Running these tags is unsupported legacy use and should be migrated to a supported PHP line.

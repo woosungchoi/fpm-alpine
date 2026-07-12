@@ -91,6 +91,19 @@ run_check() {
   fi
 }
 
+run_fpm_config_check() {
+  local name="php-fpm -t"
+  printf '\n== %s ==\n' "$name"
+  append_summary "- ⏳ ${name}"
+  if docker run --rm "${docker_platform_args[@]}" --entrypoint php-fpm "$IMAGE_NAME" -t; then
+    update_check "$name" "✅"
+  else
+    update_check "$name" "❌"
+    echo "smoke check failed: ${name}" >&2
+    exit 1
+  fi
+}
+
 cat > "$SMOKE_REPORT_MD" <<EOF
 # fpm-alpine smoke test report
 
@@ -105,6 +118,7 @@ docker_platform_args=()
 if [ -n "$EXPECTED_PLATFORM" ]; then
   docker_platform_args=(--platform "$EXPECTED_PLATFORM")
 fi
+run_fpm_config_check
 container_id="$(docker run -d --rm "${docker_platform_args[@]}" --entrypoint php-fpm "$IMAGE_NAME" -F)"
 
 wait_for_fpm
@@ -121,7 +135,6 @@ if [ -n "$EXPECTED_PLATFORM" ]; then
   run_check "architecture: ${EXPECTED_PLATFORM}" "uname -m | grep -Ex '${expected_uname}'"
 fi
 run_check "php -m" 'php -m | sort'
-run_check "php-fpm -t" 'php-fpm -t'
 for extension in imagick redis apcu; do
   case "$extension" in
     imagick) expected_version="$EXPECTED_IMAGICK_VERSION" ;;

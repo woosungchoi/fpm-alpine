@@ -204,7 +204,9 @@ def deletion_plan_sha256(plan: dict[str, Any]) -> str:
 def validate_archive_map(plan: dict[str, Any], archive: dict[str, Any]) -> None:
     if archive.get("schema_version") != 1:
         raise PolicyError("archive map schema version mismatch")
-    expected = {row["name"]: row["digest"] for row in plan.get("delete", [])}
+    expected_rows = {row["name"]: row for row in plan.get("delete", [])}
+    expected = {name: row["digest"] for name, row in expected_rows.items()}
+    canonical_classes = {"canary", "immutable-release", "immutable-source"}
     entries = archive.get("entries")
     if not isinstance(entries, list):
         raise PolicyError("archive map entries must be a list")
@@ -218,15 +220,37 @@ def validate_archive_map(plan: dict[str, Any], archive: dict[str, Any]) -> None:
         archive_digest = entry.get("archive_digest")
         if not isinstance(name, str) or name in observed:
             raise PolicyError("archive map contains a duplicate or invalid source tag")
-        if not isinstance(digest, str) or digest != expected.get(name):
+        expected_row = expected_rows.get(name)
+        if not isinstance(digest, str) or expected_row is None or digest != expected_row.get("digest"):
             raise PolicyError(f"archive source digest mismatch: {name}")
+        classification = entry.get("classification")
+        if classification != expected_row.get("classification"):
+            raise PolicyError(f"archive classification mismatch: {name}")
+        php_minor = entry.get("php_minor")
+        if not isinstance(php_minor, str) or not re.fullmatch(r"8\.[0-5]", php_minor):
+            raise PolicyError(f"archive PHP minor is invalid: {name}")
         if not isinstance(archive_ref, str) or not archive_ref.startswith("ghcr.io/woosungchoi/fpm-alpine:archive-dockerhub-"):
             raise PolicyError(f"archive reference is outside the canonical GHCR repository: {name}")
         if not isinstance(archive_digest, str) or not DIGEST_RE.fullmatch(archive_digest):
             raise PolicyError(f"archive digest is invalid: {name}")
-        for field in ("parity", "signature", "anonymous_read"):
+        for field in ("parity", "signature", "anonymous_read", "runtime"):
             if entry.get(field) != "verified":
                 raise PolicyError(f"archive {field} is not verified: {name}")
+        if classification in canonical_classes:
+            if entry.get("canonical_ref") != f"ghcr.io/woosungchoi/fpm-alpine:{name}":
+                raise PolicyError(f"archive canonical reference mismatch: {name}")
+            canonical_digest = entry.get("canonical_digest")
+            if not isinstance(canonical_digest, str) or not DIGEST_RE.fullmatch(canonical_digest):
+                raise PolicyError(f"archive canonical digest is invalid: {name}")
+            for field in ("canonical_parity", "canonical_signature", "canonical_anonymous_read"):
+                if entry.get(field) != "verified":
+                    raise PolicyError(f"archive {field} is not verified: {name}")
+        else:
+            if entry.get("canonical_ref") is not None or entry.get("canonical_digest") is not None:
+                raise PolicyError(f"archive canonical reference must be absent: {name}")
+            for field in ("canonical_parity", "canonical_signature", "canonical_anonymous_read"):
+                if entry.get(field) != "not_applicable":
+                    raise PolicyError(f"archive {field} must be not_applicable: {name}")
         observed[name] = digest
     if observed != expected:
         missing = sorted(set(expected) - set(observed))

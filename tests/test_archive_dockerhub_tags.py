@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +84,45 @@ class ArchiveDockerHubTagsTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "safely"):
             module.archive_tag("bad/tag", digest)
+
+    def test_qemu_sigsegv_is_retried_with_a_bound(self):
+        calls = 0
+        sleeps = []
+
+        def flaky_run(command, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise subprocess.CalledProcessError(139, command)
+            return ""
+
+        setattr(module, "run", flaky_run)
+        module.run_with_qemu_retry(["verify-runtime"], attempts=3, sleeper=sleeps.append)
+        self.assertEqual(calls, 3)
+        self.assertEqual(sleeps, [2, 4])
+
+    def test_non_qemu_failure_is_not_retried(self):
+        calls = 0
+
+        def failed_run(command, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise subprocess.CalledProcessError(1, command)
+
+        setattr(module, "run", failed_run)
+        with self.assertRaises(subprocess.CalledProcessError):
+            module.run_with_qemu_retry(["verify-runtime"], attempts=3, sleeper=lambda _: None)
+        self.assertEqual(calls, 1)
+
+    def test_archive_map_is_checkpointed_after_each_candidate(self):
+        entry = {"source_tag": "8.0", "source_digest": "sha256:" + "1" * 64}
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "archive-map.json"
+            module.write_archive_checkpoint(output, "a" * 64, [entry])
+            payload = json.loads(output.read_text())
+            self.assertEqual(payload["inventory_sha256"], "a" * 64)
+            self.assertEqual(payload["entries"], [entry])
+            self.assertFalse(output.with_suffix(".json.tmp").exists())
 
 
 if __name__ == "__main__":

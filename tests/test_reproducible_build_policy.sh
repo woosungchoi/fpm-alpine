@@ -92,6 +92,9 @@ def steps(text):
     return [(m.group(1), text[m.start():starts[i+1].start() if i+1<len(starts) else len(text)]) for i,m in enumerate(starts)]
 def workflow_policy(text):
     assert '  docker-smoke-matrix:\n    name: docker-smoke-matrix (${{ matrix.php_minor }} / ${{ matrix.arch }})\n' in text
+    native_runs_on = "runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}"
+    assert native_runs_on in text, 'native matrix runner routing'
+    assert 'docker/setup-qemu-action@' not in text, 'QEMU forbidden in native smoke matrix'
     aggregate=re.search(r'^  docker-smoke:\n(?P<body>(?:(?!^  \S).*(?:\n|$))*)', text, re.M)
     assert aggregate, 'docker-smoke aggregate job'
     aggregate=aggregate.group('body')
@@ -104,7 +107,12 @@ def workflow_policy(text):
         found=[body for title,body in blocks if title==name]
         assert len(found)==1, name
         return found[0]
-    qemu=one('Set up QEMU'); assert 'docker/setup-qemu-action@' in qemu
+    native=one('Require native runner architecture')
+    for value in (
+      'TARGET_ARCH: ${{ matrix.arch }}','host_arch="$(uname -m)"',
+      "docker info --format '{{.Architecture}}'",'RUNNER_ARCH:$TARGET_ARCH:$host_arch:$docker_arch',
+      'X64:amd64:x86_64:x86_64','ARM64:arm64:aarch64:aarch64','exit 1'):
+        assert value in native, value
     build=one('Build source-only smoke image')
     required=(
       'platforms: ${{ matrix.platform }}','load: true','push: false',
@@ -145,7 +153,21 @@ workflow_policy(workflow)
 mutations=[]
 def remove_step(name):
     blocks=steps(workflow); body=next(body for title,body in blocks if title==name); return workflow.replace(body,'',1)
-mutations += [remove_step('Set up QEMU'), remove_step('Upload smoke and dependency-safety reports'), remove_step('Run policy and mutation tests'), remove_step('Build reproducibility probe archive A'), remove_step('Build reproducibility probe archive B'), remove_step('Require reproducible OCI manifest'), remove_step('Compare package and runtime contract with published baseline'), remove_step('Scan source-only image')]
+mutations += [remove_step('Require native runner architecture'), remove_step('Upload smoke and dependency-safety reports'), remove_step('Run policy and mutation tests'), remove_step('Build reproducibility probe archive A'), remove_step('Build reproducibility probe archive B'), remove_step('Require reproducible OCI manifest'), remove_step('Compare package and runtime contract with published baseline'), remove_step('Scan source-only image')]
+native_runs_on = "runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}"
+mutations.append(workflow.replace(native_runs_on, 'runs-on: ubuntu-latest', 1))
+mutations.append(workflow.replace("'ubuntu-24.04-arm'", "'ubuntu-24.04'", 1))
+mutations.append(workflow.replace("'ubuntu-24.04' }}", "'ubuntu-24.04-arm' }}", 1))
+native_step=next(body for title,body in steps(workflow) if title=='Require native runner architecture')
+for old,new in (
+ ('ARM64:arm64:aarch64:aarch64','X64:arm64:aarch64:aarch64'),
+ ('exit 1','exit 0'),
+ ('TARGET_ARCH: ${{ matrix.arch }}','TARGET_ARCH: amd64')):
+ mutations.append(workflow.replace(native_step,native_step.replace(old,new,1),1))
+mutations.append(workflow.replace(
+ '      - name: Set up Docker Buildx\n',
+ '      - name: Set up QEMU\n        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8\n\n      - name: Set up Docker Buildx\n',
+ 1))
 aggregate_start=workflow.index('  docker-smoke:\n')
 mutations.append(workflow[:aggregate_start])
 mutations.append(workflow.replace('needs: [dependency-safety, docker-smoke-matrix]','needs: prepare',1))

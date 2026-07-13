@@ -98,7 +98,7 @@ jobs:
   docker-smoke-matrix:
     name: docker-smoke-matrix (${{ matrix.php_minor }} / ${{ matrix.arch }})
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -109,10 +109,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          platforms: arm64
+      - name: Require native runner architecture
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          host_arch="$(uname -m)"
+          docker_arch="$(docker info --format '{{.Architecture}}')"
+          case "$RUNNER_ARCH:$TARGET_ARCH:$host_arch:$docker_arch" in
+            X64:amd64:x86_64:x86_64|ARM64:arm64:aarch64:aarch64)
+              ;;
+            *)
+              printf 'runner/target architecture mismatch: runner=%s target=%s host=%s docker=%s\n' \
+                "$RUNNER_ARCH" "$TARGET_ARCH" "$host_arch" "$docker_arch" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0

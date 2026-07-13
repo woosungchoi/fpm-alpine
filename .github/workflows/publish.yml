@@ -228,13 +228,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
@@ -242,26 +235,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Reject an existing canary tag before push
+      - name: Reject an existing GHCR canary tag before push
         env:
-          DOCKERHUB_REF: ${{ env.DOCKERHUB_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
           GHCR_REF: ${{ env.GHCR_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          for ref in "$DOCKERHUB_REF" "$GHCR_REF"; do
-            set +e
-            output="$(docker buildx imagetools inspect "$ref" 2>&1)"
-            status=$?
-            set -e
-            if [ "$status" -eq 0 ]; then
-              echo "refusing to overwrite existing canary tag: $ref" >&2
-              exit 1
-            fi
-            printf '%s\n' "$output" | ./scripts/is-manifest-absent.sh "$ref" || {
-              printf '%s\n' "$output" >&2
-              exit "$status"
-            }
-          done
+          set +e
+          output="$(docker buildx imagetools inspect "$GHCR_REF" 2>&1)"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "refusing to overwrite existing GHCR canary tag: $GHCR_REF" >&2
+            exit 1
+          fi
+          printf '%s\n' "$output" | ./scripts/is-manifest-absent.sh "$GHCR_REF" || {
+            printf '%s\n' "$output" >&2
+            exit "$status"
+          }
 
       - name: Build and push non-moving canary subjects
         id: build
@@ -273,9 +263,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.DOCKERHUB_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
-            ${{ env.GHCR_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: ${{ env.GHCR_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
             PHP_BASE_IMAGE=${{ matrix.php_base_image }}
             IMAGICK_URL=${{ matrix.imagick_url }}
@@ -303,41 +291,40 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Capture and sign exact registry subjects
+      - name: Capture and sign exact GHCR canary subject
         id: subjects
         env:
-          DOCKERHUB_REF: ${{ env.DOCKERHUB_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
           GHCR_REF: ${{ env.GHCR_REPOSITORY }}:canary-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
           PHP_MINOR: ${{ matrix.php_minor }}
           PHP_PATCH: ${{ matrix.php_patch }}
         run: |
           set -euo pipefail
-          echo "Build output digest: $BUILD_DIGEST"
-          dockerhub_digest="$(./scripts/resolve-image-digest.sh "$DOCKERHUB_REF")"
           ghcr_digest="$(./scripts/resolve-image-digest.sh "$GHCR_REF")"
-          [[ "$dockerhub_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$ghcr_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          cosign sign --yes "${DOCKERHUB_REF%:*}@${dockerhub_digest}"
+          test "$ghcr_digest" = "$BUILD_DIGEST"
           cosign sign --yes "${GHCR_REF%:*}@${ghcr_digest}"
-          echo "dockerhub_digest=$dockerhub_digest" >> "$GITHUB_OUTPUT"
           echo "ghcr_digest=$ghcr_digest" >> "$GITHUB_OUTPUT"
           mkdir -p publisher-reports
-          python3 - "$dockerhub_digest" "$ghcr_digest" <<'PY'
+          python3 - "$ghcr_digest" "$GHCR_REF" <<'PY'
           import json
           import os
           import sys
           from pathlib import Path
 
           payload = {
+              "schema_version": 2,
               "channel": "canary",
               "source_sha": os.environ["GITHUB_SHA"],
               "php_minor": os.environ["PHP_MINOR"],
               "php_patch": os.environ["PHP_PATCH"],
               "run_id": int(os.environ["GITHUB_RUN_ID"]),
               "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-              "dockerhub_digest": sys.argv[1],
-              "ghcr_digest": sys.argv[2],
+              "canonical_registry": "ghcr.io",
+              "canonical_repository": "ghcr.io/woosungchoi/fpm-alpine",
+              "canonical_ref": sys.argv[2],
+              "ghcr_digest": sys.argv[1],
+              "platforms": ["linux/amd64", "linux/arm64"],
           }
           Path("publisher-reports/canary-metadata.json").write_text(
               json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -358,31 +345,25 @@ jobs:
               --entrypoint php "$platform_subject" -r 'exit(PHP_VERSION_ID > 0 ? 0 : 1);'
           done
 
-      - name: Verify canary subjects
+      - name: Verify GHCR canary subject
         env:
-          DOCKERHUB_REF: ${{ env.DOCKERHUB_REPOSITORY }}@${{ steps.subjects.outputs.dockerhub_digest }}
           GHCR_REF: ${{ env.GHCR_REPOSITORY }}@${{ steps.subjects.outputs.ghcr_digest }}
           EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
           PHP_PATCH: ${{ matrix.php_patch }}
         run: |
-          ./scripts/verify-published-image.sh \
-            "$DOCKERHUB_REF" \
+          ./scripts/verify-canary-image.sh \
             "$GHCR_REF" \
             "$EXPECTED_SOURCE_SHA" \
             "$PHP_PATCH" \
             "publisher-reports"
 
-      - name: Scan exact canary subjects
+      - name: Scan exact GHCR canary subject
         env:
-          DOCKERHUB_DIGEST: ${{ steps.subjects.outputs.dockerhub_digest }}
           GHCR_DIGEST: ${{ steps.subjects.outputs.ghcr_digest }}
         run: |
           set -euo pipefail
-          for entry in "$DOCKERHUB_REPOSITORY|$DOCKERHUB_DIGEST" "$GHCR_REPOSITORY|$GHCR_DIGEST"; do
-            IFS='|' read -r repository digest <<< "$entry"
-            for platform in linux/amd64 linux/arm64; do
-              ./scripts/scan-image.sh "$repository" "$digest" publisher-reports/scans "$platform"
-            done
+          for platform in linux/amd64 linux/arm64; do
+            ./scripts/scan-image.sh "$GHCR_REPOSITORY" "$GHCR_DIGEST" publisher-reports/scans "$platform"
           done
 
       - name: Upload canary verification evidence
@@ -695,6 +676,7 @@ jobs:
       actions: read
       contents: read
       packages: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -761,21 +743,17 @@ jobs:
               raise SystemExit(f"expected one canary metadata file, found {len(files)}")
           payload = json.loads(files[0].read_text())
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"dockerhub_digest={payload['dockerhub_digest']}\n")
               output.write(f"ghcr_digest={payload['ghcr_digest']}\n")
           Path("/tmp/canary-digests.env").write_text(
-              f"dockerhub_digest={payload['dockerhub_digest']}\n"
               f"ghcr_digest={payload['ghcr_digest']}\n"
           )
           PY
           source /tmp/canary-digests.env
-          test "$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:canary-${EXPECTED_MINOR}-${CANARY_RUN_ID}-${CANARY_RUN_ATTEMPT}")" = "$dockerhub_digest"
           test "$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:canary-${EXPECTED_MINOR}-${CANARY_RUN_ID}-${CANARY_RUN_ATTEMPT}")" = "$ghcr_digest"
 
-      - name: Promote verified canary digests without rebuilding
+      - name: Promote verified GHCR canary without rebuilding
         id: promote
         env:
-          DOCKERHUB_DIGEST: ${{ steps.canary.outputs.dockerhub_digest }}
           GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
           EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
           PHP_MINOR: ${{ matrix.php_minor }}
@@ -793,26 +771,34 @@ jobs:
           echo "previous_dockerhub=$previous_dockerhub" >> "$GITHUB_OUTPUT"
           echo "previous_ghcr=$previous_ghcr" >> "$GITHUB_OUTPUT"
 
-          ./scripts/promote-image.sh --check-only "$DOCKERHUB_REPOSITORY" "$DOCKERHUB_DIGEST" \
+          ./scripts/promote-image.sh --check-only --policy moving-only \
+            "$DOCKERHUB_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
             "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
-          ./scripts/promote-image.sh --check-only "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
+          ./scripts/promote-image.sh --check-only --policy evidence \
+            "$GHCR_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
             "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
 
           test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
           ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
           mutated=0
-          trap 'rc=$?; if [ "$mutated" -eq 1 ]; then set +e; ./scripts/rollback-moving-aliases.sh "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" "$GHCR_REPOSITORY" "$previous_ghcr" "$PHP_MINOR" publisher-reports/rollback-trap; fi; exit "$rc"' EXIT
+          trap 'rc=$?; if [ "$mutated" -eq 1 ]; then set +e; COSIGN_SIGN_DESTINATION=1 ./scripts/rollback-moving-aliases.sh "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" "$GHCR_REPOSITORY" "$previous_ghcr" "$PHP_MINOR" publisher-reports/rollback-trap; fi; exit "$rc"' EXIT
           mutated=1
           echo "mutated=true" >> "$GITHUB_OUTPUT"
-          ./scripts/promote-image.sh "$DOCKERHUB_REPOSITORY" "$DOCKERHUB_DIGEST" \
+          ./scripts/promote-image.sh --policy evidence \
+            "$GHCR_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
             "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
-          ./scripts/promote-image.sh "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
+          ./scripts/promote-image.sh --policy moving-only \
+            "$DOCKERHUB_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
             "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
+          dockerhub_digest="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
+          [[ "$dockerhub_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cosign sign --yes "${DOCKERHUB_REPOSITORY}@${dockerhub_digest}"
+          echo "dockerhub_digest=$dockerhub_digest" >> "$GITHUB_OUTPUT"
           trap - EXIT
 
       - name: Verify production aliases resolve to verified subjects
         env:
-          DOCKERHUB_DIGEST: ${{ steps.canary.outputs.dockerhub_digest }}
+          DOCKERHUB_DIGEST: ${{ steps.promote.outputs.dockerhub_digest }}
           GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
           EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
           PHP_MINOR: ${{ matrix.php_minor }}
@@ -833,6 +819,7 @@ jobs:
           PREVIOUS_DOCKERHUB: ${{ steps.promote.outputs.previous_dockerhub }}
           PREVIOUS_GHCR: ${{ steps.promote.outputs.previous_ghcr }}
           PHP_MINOR: ${{ matrix.php_minor }}
+          COSIGN_SIGN_DESTINATION: "1"
         run: |
           ./scripts/rollback-moving-aliases.sh \
             "$DOCKERHUB_REPOSITORY" \
@@ -924,12 +911,10 @@ jobs:
           if len(files) != 1:
               raise SystemExit(1)
           payload = json.loads(files[0].read_text())
-          digest_re = re.compile(r"^sha256:[0-9a-f]{64}$")
-          for key in ("dockerhub_digest", "ghcr_digest"):
-              value = str(payload.get(key, ""))
-              if not digest_re.fullmatch(value):
-                  raise SystemExit(1)
-              print(f"{key}={value}")
+          value = str(payload.get("ghcr_digest", ""))
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+              raise SystemExit(1)
+          print(f"ghcr_digest={value}")
           PY
               then
                 source /tmp/failure-digests.env
@@ -939,9 +924,9 @@ jobs:
               ref_suffix="canary-${minor}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             else
               ref_suffix="$minor"
+              IMAGE_DIGEST="$dockerhub_digest" MANIFEST_REPORT_DIR=publisher-reports/failure \
+                ./scripts/create-manifest-failure-issue.sh "${DOCKERHUB_REPOSITORY}:${ref_suffix}"
             fi
-            IMAGE_DIGEST="$dockerhub_digest" MANIFEST_REPORT_DIR=publisher-reports/failure \
-              ./scripts/create-manifest-failure-issue.sh "${DOCKERHUB_REPOSITORY}:${ref_suffix}"
             IMAGE_DIGEST="$ghcr_digest" MANIFEST_REPORT_DIR=publisher-reports/failure \
               ./scripts/create-manifest-failure-issue.sh "${GHCR_REPOSITORY}:${ref_suffix}"
           done < /tmp/failure-minors.txt

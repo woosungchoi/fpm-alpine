@@ -21,12 +21,12 @@ The monthly `php-lifecycle` workflow warns 90 and 30 days before EOL, fails when
 
 ## Unsupported legacy images
 
-The `8.0` and `8.1` tags are retained so existing references and historical artifacts remain identifiable, but they are frozen and **never rebuilt**. They receive no package refreshes, CVE remediation, compatibility fixes, or support. Running these tags is unsupported legacy use and should be migrated to a supported PHP line.
+PHP 8.0 and 8.1 remain in this lifecycle table as unsupported history, but their former Docker Hub tags are no longer published. Signed archival subjects and the source-to-archive digest map are retained in GHCR and protected workflow evidence for audit or emergency recovery. Existing deployments that referenced `8.0` or `8.1` must migrate to an active PHP line.
 
 Former PHP 7.4 / `master` and version-branch source lines are archived, unsupported history. `main` is the only active source branch.
 
-The Docker Hub `this` tag is an unsupported legacy/accidental tag; it is not a supported version contract, receives no rebuilds, updates, or support, and must not be used.
+The former Docker Hub `this` tag was an unsupported accidental alias and is no longer published. It was never a supported version contract.
 
 ## Tag policy
 
-There is intentionally no `latest` tag. Pin an explicit major/minor image tag, such as `woosungchoi/fpm-alpine:8.5`, and review this policy before selecting a line. Retaining a tag does not imply that it is supported or rebuilt.
+Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, and `8.5`. There is intentionally no `latest`, canary, immutable, source, frozen, or legacy tag on Docker Hub. Pin an active minor or its resolved digest and review this policy before selecting a line. GHCR is the canonical evidence registry for non-moving canary, immutable release/source, provenance, signature, archive, and rollback subjects.

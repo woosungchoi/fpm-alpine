@@ -5,7 +5,7 @@ Custom PHP-FPM Alpine images used for WordPress / Gnuboard / Rhymix deployments.
 See also: [SUPPORT.md](./SUPPORT.md), [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md), and [docs/ci-operations.md](./docs/ci-operations.md).
 
 > [!IMPORTANT]
-> PHP `8.0` and `8.1` images are frozen, unsupported legacy artifacts and are never rebuilt. See [SUPPORT.md](./SUPPORT.md) for the canonical lifecycle policy.
+> PHP `8.0` and `8.1` are frozen, unsupported history and their former Docker Hub tags are no longer published. See [SUPPORT.md](./SUPPORT.md) for the canonical lifecycle policy.
 >
 > The repository's primary/default branch is **`main`**, the only active source trunk.
 >
@@ -17,8 +17,8 @@ The single `main` source trunk builds the active PHP matrix from `build/versions
 
 | Image tag | Base image | Status |
 | --- | --- | --- |
-| `8.0` | `php:8.0-fpm-alpine` | EOL / frozen / unsupported |
-| `8.1` | `php:8.1-fpm-alpine` | EOL / frozen / unsupported |
+| `8.0` | historical `php:8.0-fpm-alpine` | EOL / frozen / not published on Docker Hub |
+| `8.1` | historical `php:8.1-fpm-alpine` | EOL / frozen / not published on Docker Hub |
 | `8.2` | `php:8.2-fpm-alpine` | security-only |
 | `8.3` | `php:8.3-fpm-alpine` | security-only |
 | `8.4` | `php:8.4-fpm-alpine` | active / security support |
@@ -41,9 +41,10 @@ What that means in practice:
 
 ## Docker tags / Docker Hub notes
 
-- PHP 8.0 and 8.1 tags are retained but never rebuilt
-- Explicit version tags remain the safest production contract
-- No `latest` tag is intentionally published
+- Docker Hub exposes exactly `8.2`, `8.3`, `8.4`, and `8.5`
+- Explicit active-minor tags or resolved digests remain the production contract
+- No `latest`, canary, immutable, source, frozen, or legacy tag is published on Docker Hub
+- GHCR retains non-moving canary, immutable, provenance, signature, archive, and rollback evidence
 
 Safe rule for production use:
 
@@ -58,9 +59,9 @@ For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRAN
 
 GitHub Actions is the sole publisher for PHP 8.2–8.5. Docker Hub Automatic Builds and the legacy publication webhook have been removed. Production promotion remains manual-only until the documented auto-production bake gate is completed. An explicitly enabled trusted-main controller may dispatch immutable canaries, but source pull requests cannot access registry credentials or publish images.
 
-- Canary tags are non-moving per workflow attempt: `canary-<minor>-<run-id>-<run-attempt>` on Docker Hub and GHCR. Existing canary tags are rejected before push.
-- Production promotion requires one explicit PHP minor per dispatch, downloaded and content-validated evidence from the immediately preceding PHP 8.5 canary and every current 8.2–8.5 canary artifact, repository variable `LEGACY_PUBLISHER_DISABLED=true`, explicit dispatch input `legacy_publisher_disabled=true`, and a matching fresh 15-minute cutover-evidence hash proving inactive build rule, strict integer zero in-flight builds, and absent webhook. The lease is revalidated immediately before bootstrap creation and production promotion. It re-tags the verified full-matrix canary digest without rebuilding, so a failed run cannot leave a partially updated multi-minor release or race an enabled legacy publisher.
-- Release and source tags include the full verified digest (`<patch>-<date>-<digest64>` and `sha-<minor>-<commit12>-<digest64>`) so different content cannot claim the same immutable tag name.
+- Canary tags are GHCR-only and non-moving per workflow attempt: `canary-<minor>-<run-id>-<run-attempt>`. Existing GHCR canary tags are rejected before push.
+- Production promotion requires one explicit PHP minor per dispatch, downloaded and content-validated GHCR evidence from two consecutive canary runs, repository variable `LEGACY_PUBLISHER_DISABLED=true`, explicit dispatch input `legacy_publisher_disabled=true`, and a matching fresh 15-minute cutover-evidence hash. It promotes the verified GHCR subject without rebuilding, writes GHCR moving and immutable evidence tags, and writes only the selected moving alias to Docker Hub.
+- GHCR release and source tags include the full verified digest (`<patch>-<date>-<digest64>` and `sha-<minor>-<commit12>-<digest64>`) so different content cannot claim the same immutable tag name.
 - Every publisher subject is checked by exact digest for amd64/arm64 manifests, runtime behavior, BuildKit SBOM/provenance, keyless Cosign signatures, Trivy fixable-CRITICAL findings, and cross-registry semantic parity.
 - PHP 8.0 and 8.1 are excluded from publication, and no `latest` tag is created.
 
@@ -68,10 +69,10 @@ See [docs/ci-operations.md](./docs/ci-operations.md) for dispatch, verification,
 
 ### Published manifest verification reports
 
-GitHub Actions publishes to Docker Hub and GHCR and verifies both registries by exact digest:
+GitHub Actions verifies active Docker Hub moving aliases and their GHCR evidence subjects by exact digest:
 
 - `verify-published-manifest` runs after `main` pushes, on a schedule, and on manual dispatch.
-- The workflow verifies each maintained Docker Hub tag for the expected `linux/amd64` and `linux/arm64` platforms.
+- The workflow verifies the four active Docker Hub tags for `linux/amd64` and `linux/arm64`, and its exact-set guard rejects every additional public tag after enforcement is enabled.
 - Each run writes a GitHub Actions step summary and uploads manifest report artifacts containing the observed tag digest, per-platform digests, and attestation/metadata manifest entries when present.
 - Scheduled/manual verification remains the source of truth for the final published state.
 

@@ -9,15 +9,17 @@ This document defines branch and tag behavior. [SUPPORT.md](./SUPPORT.md) is the
 - A branch or tag existing in the repository or registry does not by itself mean that the line is supported.
 - PHP 7.4 / former `master` is frozen, unsupported history; the remote `master` branch has been removed.
 
-Support, security-only, frozen, and unsupported status is defined only in [SUPPORT.md](./SUPPORT.md). In particular, the retained `8.0` and `8.1` tags are unsupported and never rebuilt.
+Support, security-only, frozen, and unsupported status is defined only in [SUPPORT.md](./SUPPORT.md). PHP 8.0 and 8.1 are unsupported history and are not exposed as Docker Hub tags.
 
 ## Docker Hub tag policy
 
 - Production users should pin an explicit tag such as `woosungchoi/fpm-alpine:8.5`.
+- Docker Hub exposes exactly four moving aliases: `8.2`, `8.3`, `8.4`, and `8.5`.
+- Canary, immutable release/source, provenance, signature, archive, and rollback subjects are retained in GHCR instead of Docker Hub.
 - There is intentionally no `latest` tag. Consumers must select a PHP line explicitly.
 - GitHub Actions is the sole publisher for supported release targets on Docker Hub and GHCR.
 - Docker Hub Automatic Builds and legacy publication hooks are removed.
-- Operational workflows may still inspect historical tags. Such inspection does not grant or imply support.
+- The public Docker Hub tag verifier fails on any missing active alias or any additional tag.
 
 ## Change policy
 

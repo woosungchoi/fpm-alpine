@@ -21,7 +21,8 @@ This lightweight aggregate gate is the only check that should block regular PR
 merges by default. It succeeds only when `dependency-safety` and all eight
 `docker-smoke-matrix` jobs (PHP 8.2–8.5 × amd64/arm64) succeed. The safety job
 enforces policy/mutation tests and source checksum replay; matrix jobs build the
-Dockerfile twice, require reproducibility, compare package/module contracts,
+Dockerfile three times (one runtime candidate and two independent no-cache
+reproducibility probes), require reproducibility, compare package/module contracts,
 scan for fixable CRITICAL vulnerabilities, and run target-platform runtime checks.
 
 ## Manual-only publisher
@@ -78,8 +79,11 @@ input for PHP and source-archive pins, then derives the PHP 8.2–8.5 ×
 amd64/arm64 matrix. `build/automation-policy.json`, `scripts/validate-versions.py`,
 and mutation tests independently enforce lifecycle, source-host, runtime-contract,
 and allowed-bump boundaries without duplicating mutable patch pins. Matrix
-jobs build with `push: false` and run the resulting target-platform image under
-the GitHub-hosted runner's QEMU support. No registry login, secrets, or image
+jobs build with `push: false` on architecture-matched GitHub-hosted runners:
+amd64 uses `ubuntu-24.04` and arm64 uses `ubuntu-24.04-arm`. The matrix fails
+closed if runner, host, Docker daemon, and target architectures do not match;
+it does not use QEMU fallback. QEMU remains limited to workflows that genuinely
+exercise both architectures from one job. No registry login, secrets, or image
 publishing are involved.
 
 Each build explicitly passes OCI source, commit revision, PHP patch version,

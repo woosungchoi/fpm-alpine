@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - plan
+          - archive
           - apply
         default: plan
       plan_run_id:
@@ -74,6 +75,113 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  archive:
+    if: ${{ inputs.mode == 'archive' }}
+    runs-on: ubuntu-latest
+    environment: fpm-production
+    timeout-minutes: 240
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Validate archive dispatch contract
+        env:
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+          INVENTORY_SHA256: ${{ inputs.expected_inventory_sha256 }}
+          PLAN_SHA256: ${{ inputs.expected_deletion_plan_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}" > /tmp/plan-run.json
+          python3 - /tmp/plan-run.json <<'PY'
+          import json
+          import os
+          import sys
+          run = json.load(open(sys.argv[1]))
+          checks = {
+              "conclusion": run.get("conclusion") == "success",
+              "event": run.get("event") == "workflow_dispatch",
+              "head_branch": run.get("head_branch") == "main",
+              "head_sha": run.get("head_sha") == os.environ["GITHUB_SHA"],
+              "path": run.get("path") == ".github/workflows/prune-dockerhub-tags.yml",
+          }
+          failed = [key for key, passed in checks.items() if not passed]
+          if failed:
+              raise SystemExit("plan run contract failed: " + ", ".join(failed))
+          PY
+
+      - name: Download bound deletion plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+          INVENTORY_SHA256: ${{ inputs.expected_inventory_sha256 }}
+          PLAN_SHA256: ${{ inputs.expected_deletion_plan_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p prune-evidence
+          gh run download "$PLAN_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "dockerhub-prune-plan-${PLAN_RUN_ID}" --dir prune-evidence
+          python3 - "$INVENTORY_SHA256" "$PLAN_SHA256" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+          expected_inventory, expected_plan = sys.argv[1:]
+          path = Path("prune-evidence/deletion-plan.json")
+          plan = json.loads(path.read_text())
+          actual = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+          if plan.get("inventory_sha256") != expected_inventory:
+              raise SystemExit("inventory SHA-256 mismatch")
+          if actual != expected_plan:
+              raise SystemExit("deletion plan SHA-256 mismatch")
+          if len(plan.get("keep", [])) != 4 or not plan.get("delete"):
+              raise SystemExit("unsafe deletion plan cardinality")
+          PY
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Archive, sign, compare, and anonymously read every candidate
+        run: |
+          ./scripts/archive-dockerhub-tags.py \
+            --plan prune-evidence/deletion-plan.json \
+            --output prune-evidence/archive-map.json \
+            --report-dir prune-evidence/archive-reports
+
+      - name: Upload pre-deletion archive evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dockerhub-prune-archive-${{ github.run_id }}-${{ github.run_attempt }}
+          path: prune-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
   apply:
     if: ${{ inputs.mode == 'apply' }}
     runs-on: ubuntu-latest
@@ -106,12 +214,14 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PLAN_RUN_ID}" > /tmp/plan-run.json
           python3 - /tmp/plan-run.json <<'PY'
           import json
+          import os
           import sys
           run = json.load(open(sys.argv[1]))
           checks = {
               "conclusion": run.get("conclusion") == "success",
               "event": run.get("event") == "workflow_dispatch",
               "head_branch": run.get("head_branch") == "main",
+              "head_sha": run.get("head_sha") == os.environ["GITHUB_SHA"],
               "path": run.get("path") == ".github/workflows/prune-dockerhub-tags.yml",
           }
           failed = [key for key, passed in checks.items() if not passed]

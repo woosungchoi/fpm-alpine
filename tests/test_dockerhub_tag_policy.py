@@ -60,6 +60,34 @@ def tag(name: str, seed: str) -> dict:
     }
 
 
+def archive_map(plan: dict) -> dict:
+    canonical_classes = {"canary", "immutable-release", "immutable-source"}
+    entries = []
+    for index, row in enumerate(plan["delete"]):
+        classification = row["classification"]
+        canonical = classification in canonical_classes
+        entries.append(
+            {
+                "source_tag": row["name"],
+                "source_digest": row["digest"],
+                "classification": classification,
+                "php_minor": "8.5" if classification != "frozen" else row["name"],
+                "archive_ref": f"ghcr.io/woosungchoi/fpm-alpine:archive-dockerhub-{index}",
+                "archive_digest": "sha256:" + "d" * 64,
+                "parity": "verified",
+                "signature": "verified",
+                "anonymous_read": "verified",
+                "runtime": "verified",
+                "canonical_ref": f"ghcr.io/woosungchoi/fpm-alpine:{row['name']}" if canonical else None,
+                "canonical_digest": "sha256:" + "c" * 64 if canonical else None,
+                "canonical_parity": "verified" if canonical else "not_applicable",
+                "canonical_signature": "verified" if canonical else "not_applicable",
+                "canonical_anonymous_read": "verified" if canonical else "not_applicable",
+            }
+        )
+    return {"schema_version": 1, "entries": entries}
+
+
 class DockerHubTagPolicyTests(unittest.TestCase):
     def setUp(self):
         self.inventory = [
@@ -108,43 +136,25 @@ class DockerHubTagPolicyTests(unittest.TestCase):
 
     def test_archive_map_must_cover_every_delete_digest(self):
         plan = module.build_deletion_plan(self.inventory)
-        archive = {
-            "schema_version": 1,
-            "entries": [
-                {
-                    "source_tag": row["name"],
-                    "source_digest": row["digest"],
-                    "archive_ref": f"ghcr.io/woosungchoi/fpm-alpine:archive-dockerhub-{index}",
-                    "archive_digest": "sha256:" + "d" * 64,
-                    "parity": "verified",
-                    "signature": "verified",
-                    "anonymous_read": "verified",
-                }
-                for index, row in enumerate(plan["delete"])
-            ],
-        }
+        archive = archive_map(plan)
         module.validate_archive_map(plan, archive)
+        canonical = next(entry for entry in archive["entries"] if entry["classification"] == "canary")
+        original_ref = canonical["canonical_ref"]
+        canonical["canonical_ref"] = "ghcr.io/woosungchoi/fpm-alpine:wrong"
+        with self.assertRaisesRegex(module.PolicyError, "canonical reference"):
+            module.validate_archive_map(plan, archive)
+        canonical["canonical_ref"] = original_ref
+        canonical["runtime"] = "missing"
+        with self.assertRaisesRegex(module.PolicyError, "runtime"):
+            module.validate_archive_map(plan, archive)
+        canonical["runtime"] = "verified"
         archive["entries"].pop()
         with self.assertRaisesRegex(module.PolicyError, "archive coverage"):
             module.validate_archive_map(plan, archive)
 
     def test_apply_is_inventory_bound_and_idempotent_for_missing_candidates(self):
         plan = module.build_deletion_plan(self.inventory)
-        archive = {
-            "schema_version": 1,
-            "entries": [
-                {
-                    "source_tag": row["name"],
-                    "source_digest": row["digest"],
-                    "archive_ref": f"ghcr.io/woosungchoi/fpm-alpine:archive-dockerhub-{index}",
-                    "archive_digest": "sha256:" + "d" * 64,
-                    "parity": "verified",
-                    "signature": "verified",
-                    "anonymous_read": "verified",
-                }
-                for index, row in enumerate(plan["delete"])
-            ],
-        }
+        archive = archive_map(plan)
         current = list(self.inventory)
         deleted = []
 
@@ -184,21 +194,7 @@ class DockerHubTagPolicyTests(unittest.TestCase):
 
     def test_apply_stops_on_partial_failure_and_preserves_result(self):
         plan = module.build_deletion_plan(self.inventory)
-        archive = {
-            "schema_version": 1,
-            "entries": [
-                {
-                    "source_tag": row["name"],
-                    "source_digest": row["digest"],
-                    "archive_ref": f"ghcr.io/woosungchoi/fpm-alpine:archive-dockerhub-{index}",
-                    "archive_digest": "sha256:" + "d" * 64,
-                    "parity": "verified",
-                    "signature": "verified",
-                    "anonymous_read": "verified",
-                }
-                for index, row in enumerate(plan["delete"])
-            ],
-        }
+        archive = archive_map(plan)
         current = list(self.inventory)
         calls = 0
 

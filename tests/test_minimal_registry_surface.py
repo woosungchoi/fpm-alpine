@@ -116,16 +116,28 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         workflow = yaml.safe_load(path.read_text())
         trigger = workflow.get("on", workflow.get(True))
         self.assertEqual(set(trigger), {"workflow_dispatch"})
-        self.assertEqual(set(workflow["jobs"]), {"plan", "apply"})
+        self.assertEqual(set(workflow["jobs"]), {"plan", "archive", "apply"})
+        self.assertEqual(
+            trigger["workflow_dispatch"]["inputs"]["mode"]["options"],
+            ["plan", "archive", "apply"],
+        )
         self.assertNotIn("environment", workflow["jobs"]["plan"])
-        job = workflow["jobs"]["apply"]
-        self.assertEqual(job["environment"], "fpm-production")
-        self.assertIn("id-token", job["permissions"])
+        for name in ("archive", "apply"):
+            job = workflow["jobs"][name]
+            self.assertEqual(job["environment"], "fpm-production")
+            self.assertIn("id-token", job["permissions"])
+            self.assertEqual(job["permissions"]["packages"], "write")
+        archive = yaml.safe_dump(workflow["jobs"]["archive"], sort_keys=False)
+        self.assertIn("scripts/archive-dockerhub-tags.py", archive)
+        self.assertIn("dockerhub-prune-archive-", archive)
+        self.assertNotIn("DOCKERHUB_TOKEN", archive)
+        self.assertNotIn("prune-dockerhub-tags.py apply", archive)
         text = path.read_text()
         for required in (
             "expected_inventory_sha256",
             "expected_deletion_plan_sha256",
             "plan_run_id",
+            'run.get("head_sha") == os.environ["GITHUB_SHA"]',
             "DELETE NON-ACTIVE DOCKER HUB TAGS",
             "scripts/archive-dockerhub-tags.py",
             "scripts/prune-dockerhub-tags.py",

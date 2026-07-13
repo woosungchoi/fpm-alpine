@@ -9,8 +9,8 @@ PLATFORMS=(linux/amd64 linux/arm64)
 
 if [[ ! "$DOCKERHUB_SUBJECT" =~ @sha256:[0-9a-f]{64}$ ]] || \
    [[ ! "$GHCR_SUBJECT" =~ @sha256:[0-9a-f]{64}$ ]] || \
-   [[ ! "$PHP_MINOR" =~ ^8\.[2-5]$ ]]; then
-  echo "usage: $0 <dockerhub@sha256:digest> <ghcr@sha256:digest> <8.2-8.5> [report-dir]" >&2
+   [[ ! "$PHP_MINOR" =~ ^8\.[0-5]$ ]]; then
+  echo "usage: $0 <dockerhub@sha256:digest> <ghcr@sha256:digest> <8.0-8.5> [report-dir]" >&2
   exit 64
 fi
 

@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 DOCKERHUB_REPOSITORY = "docker.io/woosungchoi/fpm-alpine"
 GHCR_REPOSITORY = "ghcr.io/woosungchoi/fpm-alpine"
@@ -32,6 +33,34 @@ def run(command: list[str], *, env: dict[str, str] | None = None, output: bool =
         check=True,
     )
     return completed.stdout.strip() if output else ""
+
+
+def run_with_qemu_retry(command: list[str], *, attempts: int = 3, sleeper=time.sleep) -> None:
+    if attempts < 1:
+        raise ValueError("attempts must be positive")
+    for attempt in range(1, attempts + 1):
+        try:
+            run(command)
+            return
+        except subprocess.CalledProcessError as error:
+            if error.returncode != 139 or attempt == attempts:
+                raise
+            delay = 2**attempt
+            print(f"QEMU runtime exited 139; retrying attempt {attempt + 1}/{attempts} after {delay}s")
+            sleeper(delay)
+
+
+def write_archive_checkpoint(output: Path, inventory_sha256: str | None, entries: list[dict]) -> None:
+    archive_map = {
+        "schema_version": 1,
+        "repository": "woosungchoi/fpm-alpine",
+        "inventory_sha256": inventory_sha256,
+        "entries": entries,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(json.dumps(archive_map, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, output)
 
 
 def resolve(reference: str, *, env: dict[str, str] | None = None) -> str:
@@ -112,6 +141,7 @@ def main() -> int:
         raise SystemExit("invalid deletion plan")
     args.report_dir.mkdir(parents=True, exist_ok=True)
     entries = []
+    write_archive_checkpoint(args.output, plan.get("inventory_sha256"), entries)
     for index, candidate in enumerate(delete):
         source_tag = candidate.get("name")
         source_digest = candidate.get("digest")
@@ -170,7 +200,7 @@ def main() -> int:
             ]
         )
         runtime_path = args.report_dir / f"{index:03d}-{destination_tag}-runtime"
-        run(
+        run_with_qemu_retry(
             [
                 str(ROOT / "scripts/verify-rollback-image.sh"),
                 source_subject,
@@ -201,14 +231,7 @@ def main() -> int:
                 "canonical_anonymous_read": canonical_anonymous_read,
             }
         )
-    archive_map = {
-        "schema_version": 1,
-        "repository": "woosungchoi/fpm-alpine",
-        "inventory_sha256": plan.get("inventory_sha256"),
-        "entries": entries,
-    }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(archive_map, indent=2, sort_keys=True) + "\n")
+        write_archive_checkpoint(args.output, plan.get("inventory_sha256"), entries)
     print(f"dockerhub_archive=PASS count={len(entries)}")
     return 0
 

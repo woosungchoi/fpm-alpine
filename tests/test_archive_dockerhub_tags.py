@@ -101,6 +101,26 @@ class ArchiveDockerHubTagsTests(unittest.TestCase):
         self.assertEqual(calls, 3)
         self.assertEqual(sleeps, [2, 4])
 
+    def test_qemu_sigsegv_log_is_retried_when_wrapper_returns_one(self):
+        calls = 0
+        sleeps = []
+
+        def wrapped_failure(command, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise subprocess.CalledProcessError(
+                    1,
+                    command,
+                    output="qemu-aarch64: QEMU internal SIGSEGV {code=MAPERR}",
+                )
+            return "runtime passed"
+
+        setattr(module, "run", wrapped_failure)
+        module.run_with_qemu_retry(["verify-runtime"], attempts=3, sleeper=sleeps.append)
+        self.assertEqual(calls, 2)
+        self.assertEqual(sleeps, [2])
+
     def test_non_qemu_failure_is_not_retried(self):
         calls = 0
 

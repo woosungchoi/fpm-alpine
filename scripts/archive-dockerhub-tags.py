@@ -24,12 +24,21 @@ KNOWN_CLASSES = CANONICAL_CLASSES | {"legacy", "frozen"}
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(command: list[str], *, env: dict[str, str] | None = None, output: bool = False) -> str:
+def run(
+    command: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    output: bool = False,
+    combined_output: bool = False,
+) -> str:
+    if combined_output and not output:
+        raise ValueError("combined_output requires output=True")
     completed = subprocess.run(
         command,
         env=env,
         text=True,
         stdout=subprocess.PIPE if output else None,
+        stderr=subprocess.STDOUT if combined_output else None,
         check=True,
     )
     return completed.stdout.strip() if output else ""
@@ -38,15 +47,22 @@ def run(command: list[str], *, env: dict[str, str] | None = None, output: bool =
 def run_with_qemu_retry(command: list[str], *, attempts: int = 3, sleeper=time.sleep) -> None:
     if attempts < 1:
         raise ValueError("attempts must be positive")
+    marker = "qemu-aarch64: QEMU internal SIGSEGV"
     for attempt in range(1, attempts + 1):
         try:
-            run(command)
+            message = run(command, output=True, combined_output=True)
+            if message:
+                print(message)
             return
         except subprocess.CalledProcessError as error:
-            if error.returncode != 139 or attempt == attempts:
+            message = error.stdout or error.output or ""
+            if message:
+                print(message)
+            transient = error.returncode == 139 or marker in message
+            if not transient or attempt == attempts:
                 raise
             delay = 2**attempt
-            print(f"QEMU runtime exited 139; retrying attempt {attempt + 1}/{attempts} after {delay}s")
+            print(f"QEMU runtime SIGSEGV; retrying attempt {attempt + 1}/{attempts} after {delay}s")
             sleeper(delay)
 
 

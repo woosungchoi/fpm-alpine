@@ -11,7 +11,7 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 assert_file .github/workflows/publish.yml
-for script in scripts/verify-published-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh; do
+for script in scripts/verify-published-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
   assert_file "$script"
   assert_executable "$script"
 done
@@ -56,7 +56,7 @@ for name in ('prepare', 'canary', 'production-preflight', 'bootstrap-ghcr-rollba
     assert name in jobs, name
 assert jobs['prepare']['permissions'] == {'actions': 'read', 'contents': 'read'}
 assert jobs['canary']['permissions'] == {'contents': 'read', 'packages': 'write', 'id-token': 'write'}
-assert jobs['production']['permissions'] == {'actions': 'read', 'contents': 'read', 'packages': 'write'}
+assert jobs['production']['permissions'] == {'actions': 'read', 'contents': 'read', 'packages': 'write', 'id-token': 'write'}
 assert jobs['production']['environment'] == 'fpm-production'
 assert jobs['production-preflight']['permissions'] == {'actions': 'read', 'contents': 'read'}
 assert jobs['bootstrap-ghcr-rollback']['environment'] == 'fpm-production'
@@ -66,16 +66,18 @@ assert jobs['report-failure']['permissions'] == {'actions': 'read', 'contents': 
 canary = yaml.safe_dump(jobs['canary'], sort_keys=False)
 production = yaml.safe_dump(jobs['production'], sort_keys=False)
 for required in ('docker/login-action@', 'docker/build-push-action@', 'provenance: mode=max', 'sbom: true',
-                 'scripts/verify-published-image.sh', 'scripts/scan-image.sh', 'cosign sign --yes',
+                 'scripts/verify-canary-image.sh', 'scripts/scan-image.sh', 'cosign sign --yes',
                  'github.run_attempt'):
     assert required in canary, required
-assert 'refusing to overwrite existing canary tag' in text
+assert 'refusing to overwrite existing GHCR canary tag' in text
+assert 'DOCKERHUB_REPOSITORY' not in canary
+assert 'dockerhub_digest' not in canary
 assert 'github.event.inputs.channel == \'canary\'' in canary
 assert 'docker/build-push-action@' not in production
 assert 'github.event.inputs.channel == \'production\'' in production
 for required in ('scripts/verify-published-image.sh', 'scripts/promote-image.sh', 'scripts/rollback-moving-aliases.sh',
-                 'canary_run_id', 'canary_run_attempt', 'steps.canary.outputs.dockerhub_digest',
-                 'steps.canary.outputs.ghcr_digest'):
+                 'canary_run_id', 'canary_run_attempt', 'steps.promote.outputs.dockerhub_digest',
+                 'steps.canary.outputs.ghcr_digest', '--policy moving-only', '--policy evidence'):
     assert required in production, required
 assert 'test "$SOURCE_SHA" = "$DISPATCH_SHA"' in text
 assert text.count('SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}') == 1
@@ -98,14 +100,15 @@ for field in ('source_sha', 'dockerhub_resolution_status', 'dockerhub_inspect_ex
     assert field in text, field
 bootstrap_run = next(step['run'] for step in jobs['bootstrap-ghcr-rollback']['steps'] if step.get('name') == 'Establish idempotent GHCR rollback baselines')
 assert bootstrap_run.index('./scripts/validate-legacy-cutover-evidence.py') < bootstrap_run.index('docker buildx imagetools create')
-promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified canary digests without rebuilding')
-assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh "$DOCKERHUB_REPOSITORY"')
+promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified GHCR canary without rebuilding')
+assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
 production_step_names = [step.get('name') for step in jobs['production']['steps']]
 assert 'Re-verify exact canary subjects before promotion' not in production_step_names
-assert production_step_names.index('Promote verified canary digests without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
+assert production_step_names.index('Promote verified GHCR canary without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
 assert './scripts/scan-image.sh' not in promotion_run
 metadata_load_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Load and bind verified canary metadata')
-assert metadata_load_run.index('./scripts/validate-canary-metadata.py') < metadata_load_run.index('output.write(f"dockerhub_digest=')
+assert metadata_load_run.index('./scripts/validate-canary-metadata.py') < metadata_load_run.index('output.write(f"ghcr_digest=')
+assert 'dockerhub_digest' not in metadata_load_run
 assert "imagetools inspect \"$1\" | awk '/^Digest:/" not in text
 assert '[[ "$REQUESTED_VERSION" =~ ^8\\.[2-5]$ ]]' in text
 assert 'gh run download "$CANARY_RUN_ID" --repo "$GITHUB_REPOSITORY"' in text
@@ -260,14 +263,18 @@ if not match or match.group(2) != run_id:
 minor, artifact_run, attempt = match.groups()
 versions = json.load(open(os.environ["MOCK_VERSIONS"]))["versions"]
 payload = {
+    "schema_version": 2,
     "channel": "canary",
     "source_sha": "bad" if name == os.environ.get("MOCK_CORRUPT_ARTIFACT") else os.environ["MOCK_SOURCE_SHA"],
     "php_minor": minor,
     "php_patch": versions[minor]["patch"],
     "run_id": int(artifact_run),
     "run_attempt": int(attempt),
-    "dockerhub_digest": "sha256:" + "1" * 64,
+    "canonical_registry": "ghcr.io",
+    "canonical_repository": "ghcr.io/woosungchoi/fpm-alpine",
+    "canonical_ref": f"ghcr.io/woosungchoi/fpm-alpine:canary-{minor}-{artifact_run}-{attempt}",
     "ghcr_digest": "sha256:" + "2" * 64,
+    "platforms": ["linux/amd64", "linux/arm64"],
 }
 destination.mkdir(parents=True, exist_ok=True)
 (destination / "canary-metadata.json").write_text(json.dumps(payload))
@@ -318,14 +325,18 @@ from pathlib import Path
 with tempfile.TemporaryDirectory() as tmp:
     evidence = Path(tmp)
     payload = {
+        "schema_version": 2,
         "channel": "canary",
         "source_sha": "0123456789abcdef0123456789abcdef01234567",
         "php_minor": "8.5",
         "php_patch": "8.5.8",
         "run_id": 123,
         "run_attempt": True,
-        "dockerhub_digest": "sha256:" + "1" * 64,
+        "canonical_registry": "ghcr.io",
+        "canonical_repository": "ghcr.io/woosungchoi/fpm-alpine",
+        "canonical_ref": "ghcr.io/woosungchoi/fpm-alpine:canary-8.5-123-1",
         "ghcr_digest": "sha256:" + "2" * 64,
+        "platforms": ["linux/amd64", "linux/arm64"],
     }
     (evidence / "canary-metadata.json").write_text(json.dumps(payload))
     result = subprocess.run([
@@ -591,9 +602,9 @@ assert_contains .github/workflows/published-runtime-smoke.yml 'fetch-tags: true'
 assert_contains scripts/verify-rollback-image.sh 'rollback registry platform config/layer parity verified'
 assert_not_contains scripts/verify-rollback-image.sh 'build/versions.json'
 assert_contains scripts/rollback-moving-aliases.sh 'both registries were attempted'
-assert_contains scripts/rollback-moving-aliases.sh 'both registry moving aliases restored and verified'
-assert_contains scripts/rollback-moving-aliases.sh '${DOCKERHUB_REPOSITORY}@${DOCKERHUB_DIGEST}'
-assert_contains scripts/rollback-moving-aliases.sh '${GHCR_REPOSITORY}@${GHCR_DIGEST}'
+assert_contains scripts/rollback-moving-aliases.sh 'both registry moving aliases restored from durable GHCR and verified'
+assert_contains scripts/rollback-moving-aliases.sh 'source_subject="${GHCR_REPOSITORY}@${PREVIOUS_GHCR_DIGEST}"'
+assert_contains scripts/rollback-moving-aliases.sh 'COSIGN_SIGN_DESTINATION'
 assert_contains scripts/report-manifest.sh 'GitHub Actions publisher subject; verification is digest-qualified.'
 
 fixture_dir="$(mktemp -d)"
@@ -691,6 +702,10 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${MOCK_DOCKER_LOG:?}"
 if [ "${1:-}" = buildx ] && [ "${2:-}" = imagetools ] && [ "${3:-}" = inspect ]; then
   ref="${*: -1}"
+  if [[ "$ref" == ghcr.io/woosungchoi/fpm-alpine@sha256:* ]]; then
+    printf 'Digest: %s\n' "${ref##*@}"
+    exit 0
+  fi
   if [ "${MOCK_AUTH_ERROR:-0}" = 1 ]; then
     echo 'error getting credentials: docker credential helper binary not found' >&2
     exit "${MOCK_AUTH_ERROR_STATUS:-1}"
@@ -728,51 +743,51 @@ source_digest="sha256:$(printf '%064d' 1)"
 digest_hex="${source_digest#sha256:}"
 for minor_patch in '8.2 8.2.32' '8.3 8.3.32' '8.4 8.4.23' '8.5 8.5.8'; do
   read -r minor patch <<< "$minor_patch"
-  PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only \
-    registry.example/fpm "$source_digest" "$minor" "$patch" "$source_sha" 20260711 >/dev/null
-  assert_contains "$MOCK_DOCKER_LOG" "registry.example/fpm:sha-${minor}-${source_sha:0:12}-${digest_hex}"
+  PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only --policy evidence \
+    ghcr.io/woosungchoi/fpm-alpine ghcr.io/woosungchoi/fpm-alpine "$source_digest" "$minor" "$patch" "$source_sha" 20260711 >/dev/null
+  assert_contains "$MOCK_DOCKER_LOG" "ghcr.io/woosungchoi/fpm-alpine:sha-${minor}-${source_sha:0:12}-${digest_hex}"
 done
 assert_not_contains "$MOCK_DOCKER_LOG" 'imagetools create'
-export MOCK_CONFLICT_REF="registry.example/fpm:8.5.8-20260711-${digest_hex}"
-if PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only \
-  registry.example/fpm "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
+export MOCK_CONFLICT_REF="ghcr.io/woosungchoi/fpm-alpine:8.5.8-20260711-${digest_hex}"
+if PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only --policy evidence \
+  ghcr.io/woosungchoi/fpm-alpine ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
   >"$fixture_dir/conflict.out" 2>&1; then
   fail "promotion preflight accepted a conflicting immutable tag"
 fi
 assert_contains "$fixture_dir/conflict.out" 'immutable tag already points to another digest'
 unset MOCK_CONFLICT_REF
 : > "$MOCK_DOCKER_LOG"
-if MOCK_AUTH_ERROR=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only \
-  registry.example/fpm "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
+if MOCK_AUTH_ERROR=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only --policy evidence \
+  ghcr.io/woosungchoi/fpm-alpine ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
   >"$fixture_dir/auth-error.out" 2>&1; then
   fail "promotion preflight treated a credential-helper error as tag absence"
 fi
 assert_contains "$fixture_dir/auth-error.out" 'credential helper binary not found'
 assert_not_contains "$MOCK_DOCKER_LOG" 'imagetools create'
 : > "$MOCK_DOCKER_LOG"
-if MOCK_AUTH_ERROR=1 MOCK_AUTH_ERROR_STATUS=2 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only \
-  registry.example/fpm "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
+if MOCK_AUTH_ERROR=1 MOCK_AUTH_ERROR_STATUS=2 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only --policy evidence \
+  ghcr.io/woosungchoi/fpm-alpine ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
   >"$fixture_dir/auth-error-exit2.out" 2>&1; then
   fail "promotion preflight treated a credential-helper exit 2 as tag absence"
 fi
 assert_not_contains "$MOCK_DOCKER_LOG" 'imagetools create'
 : > "$MOCK_DOCKER_LOG"
-if MOCK_MIXED_ERROR=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only \
-  registry.example/fpm "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
+if MOCK_MIXED_ERROR=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only --policy evidence \
+  ghcr.io/woosungchoi/fpm-alpine ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
   >"$fixture_dir/mixed-error.out" 2>&1; then
   fail "promotion preflight accepted mixed auth/not-found output"
 fi
 assert_not_contains "$MOCK_DOCKER_LOG" 'imagetools create'
 : > "$MOCK_DOCKER_LOG"
-if MOCK_MULTIPLE_EXISTING=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only \
-  registry.example/fpm "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
+if MOCK_MULTIPLE_EXISTING=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only --policy evidence \
+  ghcr.io/woosungchoi/fpm-alpine ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
   >"$fixture_dir/multiple-existing.out" 2>&1; then
   fail "promotion preflight accepted ambiguous multiple-digest output"
 fi
 assert_not_contains "$MOCK_DOCKER_LOG" 'imagetools create'
 : > "$MOCK_DOCKER_LOG"
-if MOCK_UNRELATED_ERROR=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only \
-  registry.example/fpm "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
+if MOCK_UNRELATED_ERROR=1 PATH="$mock_bin:$PATH" ./scripts/promote-image.sh --check-only --policy evidence \
+  ghcr.io/woosungchoi/fpm-alpine ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 8.5.8 "$source_sha" 20260711 \
   >"$fixture_dir/unrelated-error.out" 2>&1; then
   fail "promotion preflight accepted not-found output for an unrelated ref"
 fi
@@ -809,10 +824,10 @@ if [ "${1:-}" = buildx ] && [ "${2:-}" = imagetools ] && [ "${3:-}" = inspect ];
     exit 0
   fi
   printf 'Digest: %s\n' "${ROLLBACK_DIGEST:?}"
-  if [ "${MOCK_MULTIPLE_DIGESTS:-0}" = 1 ]; then
+  if [ "${MOCK_MULTIPLE_DIGESTS:-0}" = 1 ] && [[ "$ref" != *@* ]]; then
     printf 'Digest: sha256:%064d\n' 8
   fi
-  if [ "${MOCK_INSPECT_FAIL_WITH_DIGEST:-0}" = 1 ]; then
+  if [ "${MOCK_INSPECT_FAIL_WITH_DIGEST:-0}" = 1 ] && [[ "$ref" != *@* ]]; then
     exit 1
   fi
   exit 0
@@ -847,15 +862,14 @@ if MOCK_INSPECT_FAIL_WITH_DIGEST=1 PATH="$mock_bin:$PATH" ./scripts/rollback-mov
   >"$fixture_dir/rollback-readback-failure.out" 2>&1; then
   fail "rollback accepted digest output from a failed alias inspect"
 fi
-assert_contains "$fixture_dir/rollback-readback-failure.out" 'rollback read-back failed'
-assert_not_contains "$fixture_dir/rollback-readback-failure.out" 'both registry moving aliases restored and verified'
+assert_not_contains "$fixture_dir/rollback-readback-failure.out" 'both registry moving aliases restored from durable GHCR and verified'
 : > "$MOCK_DOCKER_LOG"
 if MOCK_MULTIPLE_DIGESTS=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
   >"$fixture_dir/rollback-multiple-digests.out" 2>&1; then
   fail "rollback accepted ambiguous multiple-digest read-back"
 fi
-assert_not_contains "$fixture_dir/rollback-multiple-digests.out" 'both registry moving aliases restored and verified'
+assert_not_contains "$fixture_dir/rollback-multiple-digests.out" 'both registry moving aliases restored from durable GHCR and verified'
 : > "$MOCK_DOCKER_LOG"
 if PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
@@ -863,14 +877,14 @@ if PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   fail "rollback ignored an exact-digest verifier failure"
 fi
 assert_contains "$MOCK_DOCKER_LOG" "dockerhub.example/fpm@${source_digest}"
-assert_not_contains "$fixture_dir/rollback-verifier-failure.out" 'both registry moving aliases restored and verified'
+assert_not_contains "$fixture_dir/rollback-verifier-failure.out" 'both registry moving aliases restored from durable GHCR and verified'
 : > "$MOCK_DOCKER_LOG"
 if ! MOCK_FULL_SUCCESS=1 MANIFEST_RETRY_ATTEMPTS=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback-success" \
   >"$fixture_dir/rollback-success.out" 2>&1; then
   fail "rollback full success path failed"
 fi
-assert_contains "$fixture_dir/rollback-success.out" 'both registry moving aliases restored and verified'
+assert_contains "$fixture_dir/rollback-success.out" 'both registry moving aliases restored from durable GHCR and verified'
 assert_contains "$MOCK_DOCKER_LOG" "dockerhub.example/fpm@${source_digest}"
 assert_contains "$MOCK_DOCKER_LOG" "ghcr.example/fpm@${source_digest}"
 
@@ -881,7 +895,7 @@ fi
 assert_contains scripts/create-manifest-failure-issue.sh 'Registry:'
 assert_contains scripts/create-manifest-failure-issue.sh 'Digest:'
 assert_contains docs/ci-operations.md 'manual-only'
-assert_contains docs/ci-operations.md 'verified canary digest'
+assert_contains docs/ci-operations.md 'exact GHCR subject'
 assert_contains .github/workflows/publish.yml 'LEGACY_DISABLED_VARIABLE'
 assert_contains .github/workflows/publish.yml 'legacy_publisher_disabled'
 assert_contains scripts/verify-rollback-image.sh 'fsockopen'

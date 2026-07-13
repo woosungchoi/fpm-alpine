@@ -29,8 +29,6 @@ jobs:
       fail-fast: false
       matrix:
         image_ref:
-          - woosungchoi/fpm-alpine:8.0
-          - woosungchoi/fpm-alpine:8.1
           - woosungchoi/fpm-alpine:8.2
           - woosungchoi/fpm-alpine:8.3
           - woosungchoi/fpm-alpine:8.4
@@ -59,6 +57,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REF: ${{ matrix.image_ref }}
         run: scripts/create-manifest-failure-issue.sh
+
+  verify-dockerhub-tag-policy:
+    if: ${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Require exact public Docker Hub tag set
+        run: ./scripts/verify-dockerhub-tag-policy.py --json-output tag-policy-report.json
+
+      - name: Upload Docker Hub tag policy report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dockerhub-tag-policy
+          path: tag-policy-report.json
+          if-no-files-found: error
 
   verify-single-input:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.image_ref != '' }}

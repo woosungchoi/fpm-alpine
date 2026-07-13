@@ -14,8 +14,7 @@ import urllib.request
 
 REPOSITORY = "woosungchoi/fpm-alpine"
 SHORT_DESCRIPTION = (
-    "Multi-arch PHP-FPM Alpine images: active PHP 8.2-8.5; "
-    "frozen 8.0/8.1 compatibility tags."
+    "Multi-arch PHP-FPM Alpine images: active Docker Hub tags 8.2, 8.3, 8.4, and 8.5."
 )
 API_BASE = "https://hub.docker.com/v2"
 AUTH_URL = f"{API_BASE}/auth/token"

@@ -55,10 +55,11 @@ assert_regex SUPPORT.md '^\| PHP 8\.2 \(`8\.2`\) \| security-only \| 2026-12-31 
 assert_regex SUPPORT.md '^\| PHP 8\.3 \(`8\.3`\) \| security-only \| 2027-12-31 \|$'
 assert_regex SUPPORT.md '^\| PHP 8\.4 \(`8\.4`\) \| active support, then security support \| 2028-12-31 \|$'
 assert_regex SUPPORT.md '^\| PHP 8\.5 \(`8\.5`\) \| active support, then security support \| 2029-12-31 \|$'
-assert_regex SUPPORT.md 'The `8\.0` and `8\.1` tags are retained.*frozen and \*\*never rebuilt\*\*'
-assert_contains SUPPORT.md "Running these tags is unsupported legacy use"
-assert_contains SUPPORT.md 'The Docker Hub `this` tag is an unsupported legacy/accidental tag; it is not a supported version contract, receives no rebuilds, updates, or support, and must not be used.'
-assert_contains SUPPORT.md 'There is intentionally no `latest` tag.'
+assert_contains SUPPORT.md 'their former Docker Hub tags are no longer published'
+assert_contains SUPPORT.md 'Signed archival subjects and the source-to-archive digest map are retained in GHCR'
+assert_contains SUPPORT.md 'The former Docker Hub `this` tag was an unsupported accidental alias and is no longer published.'
+assert_contains SUPPORT.md 'Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, and `8.5`.'
+assert_contains SUPPORT.md 'There is intentionally no `latest`'
 
 assert_file LICENSE
 license_sha256="8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
@@ -414,10 +415,9 @@ assert_file .github/workflows/sync-dockerhub-metadata.yml
 assert_file scripts/sync_dockerhub_metadata.py
 assert_executable scripts/sync_dockerhub_metadata.py
 assert_file docs/dockerhub-description.md
-assert_contains docs/dockerhub-description.md 'Active and maintained tags: `8.2`, `8.3`, `8.4`, and `8.5`'
-assert_contains docs/dockerhub-description.md 'Frozen, unsupported compatibility tags: `8.0` and `8.1`'
-assert_contains docs/dockerhub-description.md 'There is intentionally no `latest` tag'
-assert_contains docs/dockerhub-description.md 'The Docker Hub `this` tag is unsupported legacy'
+assert_contains docs/dockerhub-description.md 'Docker Hub exposes exactly four active moving tags: `8.2`, `8.3`, `8.4`, and `8.5`'
+assert_contains docs/dockerhub-description.md 'There is intentionally no `latest`, canary, immutable, source, frozen, or legacy tag on Docker Hub'
+assert_contains docs/dockerhub-description.md 'Non-moving canary, immutable release/source, provenance, signature, archive, and rollback evidence is retained in GHCR'
 assert_not_contains docs/dockerhub-description.md 'default branch is **`8.5`**'
 python3 - <<'PY'
 from pathlib import Path
@@ -453,11 +453,16 @@ bash -n scripts/smoke-test-image.sh
 bash -n scripts/create-manifest-failure-issue.sh
 bash -n scripts/report-manifest.sh
 bash -n scripts/report-freshness.sh
+bash -n scripts/promote-image.sh
+bash -n scripts/rollback-moving-aliases.sh
+bash -n scripts/verify-canary-image.sh
 ./tests/test_reproducible_build_policy.sh
 python3 ./tests/test_reproducibility_archive.py
 ./tests/test_smoke_script.sh
 ./tests/test_publisher_policy.sh
 ./tests/test_php_lifecycle.py
 python3 ./tests/test_dockerhub_metadata.py
+python3 ./tests/test_dockerhub_tag_policy.py
+python3 ./tests/test_minimal_registry_surface.py
 
 echo "policy script tests passed"

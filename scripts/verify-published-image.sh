@@ -137,7 +137,7 @@ for registry in ("dockerhub", "ghcr"):
             if labels.get(key) != expected:
                 raise SystemExit(f"label mismatch for {registry} {platform}: {key}")
         created = labels.get("org.opencontainers.image.created", "")
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})", created):
             raise SystemExit(f"invalid OCI creation label for {registry} {platform}: {created!r}")
         if not sbom.get(platform):
             raise SystemExit(f"missing SBOM attestation for {registry} {platform}")

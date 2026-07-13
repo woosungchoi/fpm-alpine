@@ -1015,4 +1015,16 @@ invalid_signing_ref_status=$?
 set -e
 [ "$invalid_signing_ref_status" -eq 64 ] || fail "published verifier did not reject an invalid signing ref at input validation"
 
+python3 - <<'PY'
+import re
+pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})"
+for value in ("2026-07-13T11:42:01Z", "2026-07-13T20:42:01+09:00", "2026-07-13T06:12:01-05:30"):
+    assert re.fullmatch(pattern, value), value
+for value in ("2026-07-13T11:42:01", "linux/amd64", "2026-07-13"):
+    assert not re.fullmatch(pattern, value), value
+for path in ("scripts/verify-canary-image.sh", "scripts/verify-published-image.sh"):
+    text = open(path).read()
+    assert r"(?:Z|[+-]\d{2}:\d{2})" in text, path
+PY
+
 echo "publisher policy tests passed"

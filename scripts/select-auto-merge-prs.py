@@ -15,6 +15,7 @@ AUTOMATION_BRANCH = re.compile(
 DEPENDABOT_BRANCH = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
 )
+DEPENDABOT_LOGINS = {"dependabot[bot]", "app/dependabot"}
 BOT_LOGIN = re.compile(r"^[A-Za-z0-9_.-]+\[bot\]$")
 
 
@@ -63,8 +64,8 @@ def select(rows: Any, repository: str) -> tuple[list[int], dict[Any, list[str]]]
             ):
                 reasons.append("automation branch author is not an updater bot")
         elif DEPENDABOT_BRANCH.fullmatch(branch):
-            if login != "dependabot[bot]":
-                reasons.append("Dependabot branch author is not dependabot[bot]")
+            if login not in DEPENDABOT_LOGINS:
+                reasons.append("Dependabot branch author is not an approved identity")
         else:
             reasons.append("head branch is outside the dependency automation allowlist")
         if reasons:

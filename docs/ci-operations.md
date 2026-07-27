@@ -174,6 +174,7 @@ All new automation is fail-closed when its activation variable is absent or not 
   - The GitHub App must be repository-scoped with only Contents and Pull requests read/write permissions. It cannot merge or publish.
 - `dependency-auto-merge`
   - Read-only selection always revalidates exact metadata, diff shape, Action release provenance or source classifier output, and exact-head `docker-smoke` from GitHub Actions App ID `15368`.
+  - Scheduled runs use the trusted default branch. Manual evaluation uses the `dependency-auto-merge` `repository_dispatch` event instead of branch-selectable `workflow_dispatch`; missing or boolean `true` `client_payload.report_only` remains read-only, while only boolean `false` permits the gated native auto-merge request.
   - Native auto-merge is requested only with `DEPENDENCY_AUTO_MERGE_ENABLED=true`; direct/admin merge is forbidden.
 - `dependency-auto-promote`
   - Trusted-main eligibility binds the merge commit to exactly one updater-bot PR and its exact successful PR head.

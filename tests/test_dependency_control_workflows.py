@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 import unittest
 from pathlib import Path
@@ -24,8 +25,35 @@ class ControlWorkflowTests(unittest.TestCase):
         for ref in refs:
             self.assertRegex(ref, r"^[^@]+@[0-9a-f]{40}$")
 
+    def assert_auto_merge_uses_trusted_dispatch(self, data: dict) -> None:
+        trigger = data.get("on", data.get(True))
+        assert isinstance(trigger, dict)
+        self.assertEqual(set(trigger), {"schedule", "repository_dispatch"})
+        self.assertEqual(
+            trigger["repository_dispatch"], {"types": ["dependency-auto-merge"]}
+        )
+
+        select = data["jobs"]["select"]
+        merge = data["jobs"]["enable-native-auto-merge"]
+        self.assertIn("github.ref == 'refs/heads/main'", select["if"])
+        checkout = next(
+            step for step in select["steps"] if step["name"] == "Checkout trusted main"
+        )
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+
+        merge_if = merge["if"]
+        self.assertIn("github.ref == 'refs/heads/main'", merge_if)
+        self.assertIn("github.event_name == 'schedule'", merge_if)
+        self.assertIn("github.event_name == 'repository_dispatch'", merge_if)
+        self.assertIn("github.event.action == 'dependency-auto-merge'", merge_if)
+        self.assertIn(
+            "toJSON(github.event.client_payload.report_only) == 'false'", merge_if
+        )
+        self.assertNotIn("inputs.report_only", merge_if)
+
     def test_auto_merge_separates_read_selection_from_write_enablement(self) -> None:
         text, data = self.load("dependency-auto-merge.yml")
+        self.assert_auto_merge_uses_trusted_dispatch(data)
         self.assertEqual(data["permissions"], {})
         select = data["jobs"]["select"]
         merge = data["jobs"]["enable-native-auto-merge"]
@@ -45,6 +73,42 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertNotIn("--admin", rendered)
         self.assertNotIn("pull_request_target", text)
         self.assert_pinned(text)
+
+    def test_auto_merge_trusted_dispatch_contract_rejects_mutations(self) -> None:
+        _, data = self.load("dependency-auto-merge.yml")
+        trigger_key = "on" if "on" in data else True
+        variants = []
+
+        non_main = copy.deepcopy(data)
+        non_main[trigger_key]["workflow_dispatch"] = {}
+        variants.append(("branch-selectable dispatch", non_main))
+
+        wrong_event = copy.deepcopy(data)
+        wrong_event[trigger_key]["repository_dispatch"]["types"] = ["other"]
+        variants.append(("wrong repository event", wrong_event))
+
+        moving_checkout = copy.deepcopy(data)
+        checkout = next(
+            step
+            for step in moving_checkout["jobs"]["select"]["steps"]
+            if step["name"] == "Checkout trusted main"
+        )
+        checkout["with"]["ref"] = "refs/heads/main"
+        variants.append(("moving main checkout", moving_checkout))
+
+        loose_boolean = copy.deepcopy(data)
+        loose_boolean["jobs"]["enable-native-auto-merge"]["if"] = loose_boolean[
+            "jobs"
+        ]["enable-native-auto-merge"]["if"].replace(
+            "toJSON(github.event.client_payload.report_only) == 'false'",
+            "github.event.client_payload.report_only == false",
+        )
+        variants.append(("loosely typed report_only", loose_boolean))
+
+        for name, variant in variants:
+            with self.subTest(name=name):
+                with self.assertRaises(AssertionError):
+                    self.assert_auto_merge_uses_trusted_dispatch(variant)
 
     def test_auto_promote_only_dispatches_canary_and_is_activation_gated(self) -> None:
         text, data = self.load("dependency-auto-promote.yml")

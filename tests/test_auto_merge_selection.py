@@ -51,6 +51,15 @@ class SelectionTests(unittest.TestCase):
         }
         self.assertEqual(self.module.select([row], "woosungchoi/fpm-alpine")[0], [2])
 
+    def test_dependabot_graphql_app_actor_selected(self) -> None:
+        row = {
+            **BASE,
+            "number": 3,
+            "author": {"login": "app/dependabot"},
+            "headRefName": "dependabot/github_actions/actions/checkout-7.0.1",
+        }
+        self.assertEqual(self.module.select([row], "woosungchoi/fpm-alpine")[0], [3])
+
     def test_spoofed_dependabot_author_rejected(self) -> None:
         row = {**BASE, "headRefName": "dependabot/github_actions/evil"}
         selected, rejected = self.module.select([row], "woosungchoi/fpm-alpine")

@@ -35,6 +35,26 @@ class UpdaterWorkflowTests(unittest.TestCase):
         self.assertRegex(rendered, r"actions/download-artifact@[0-9a-f]{40}")
         self.assertEqual(rendered.count("persist-credentials: false"), 1)
         self.assertIn("gh auth setup-git", rendered)
+        download = next(
+            step
+            for step in create["steps"]
+            if step["name"] == "Download candidate evidence"
+        )
+        self.assertEqual(
+            download["with"]["path"], "${{ runner.temp }}/dependency-candidates"
+        )
+        create_prs = next(
+            step
+            for step in create["steps"]
+            if step["name"] == "Create one pull request per eligible candidate"
+        )
+        candidate_file = create_prs["env"]["CANDIDATE_FILE"]
+        self.assertEqual(
+            candidate_file,
+            "${{ runner.temp }}/dependency-candidates/candidates.json",
+        )
+        self.assertIn("Path(os.environ['CANDIDATE_FILE'])", create_prs["run"])
+        self.assertIn('"$CANDIDATE_FILE" "$candidate_key"', create_prs["run"])
         self.assertNotIn("persist-credentials: true", text)
         self.assertNotIn("pull_request_target", text)
         self.assertNotIn("packages: write", text)

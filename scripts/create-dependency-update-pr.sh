@@ -137,3 +137,5 @@ gh pr create \
   --head "$branch" \
   --title "$title" \
   --body-file "$body_file"
+
+git switch --detach "$source_sha"

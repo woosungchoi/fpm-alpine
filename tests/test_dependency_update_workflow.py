@@ -79,6 +79,12 @@ class UpdaterWorkflowTests(unittest.TestCase):
         self.assertRegex(text, r"\[\[ \"\$candidate_key\" =~")
         self.assertIn("candidate is not eligible", text)
 
+    def test_pr_script_restores_trusted_source_for_next_candidate(self) -> None:
+        text = SCRIPT.read_text()
+        create_index = text.index("gh pr create")
+        restore_index = text.index('git switch --detach "$source_sha"')
+        self.assertGreater(restore_index, create_index)
+
     def test_every_action_is_full_sha_pinned(self) -> None:
         text = WORKFLOW.read_text()
         refs = re.findall(r"^\s*uses:\s*([^\s#]+)", text, re.M)

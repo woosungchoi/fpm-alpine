@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 candidate_file="${1:?candidate JSON path required}"
 candidate_key="${2:?candidate key required}"

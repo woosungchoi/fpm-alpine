@@ -130,7 +130,7 @@ jobs:
           vars.DEPENDENCY_AUTO_CANARY_ENABLED == 'true' }}
     needs: [evaluate, claim-conveyor]
     runs-on: ubuntu-latest
-    timeout-minutes: 480
+    timeout-minutes: 360
     permissions:
       actions: write
       contents: read

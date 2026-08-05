@@ -85,7 +85,7 @@ for index in 1 2; do
     -f source_sha="$source_sha" \
     -f correlation_id="$correlation"
   run_id="$(wait_for_run "$correlation")"
-  timeout 4h gh run watch "$run_id" --repo "$repo" --exit-status
+  timeout 150m gh run watch "$run_id" --repo "$repo" --exit-status
   runs+=("$(validate_run "$run_id" "auto-canary-evidence/$index")")
 done
 

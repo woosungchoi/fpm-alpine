@@ -25,6 +25,17 @@ class ControlWorkflowTests(unittest.TestCase):
         for ref in refs:
             self.assertRegex(ref, r"^[^@]+@[0-9a-f]{40}$")
 
+    def test_all_job_timeouts_fit_github_platform_limit(self) -> None:
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            data = yaml.safe_load(path.read_text())
+            for job_name, job in data.get("jobs", {}).items():
+                timeout = job.get("timeout-minutes")
+                if timeout is None:
+                    continue
+                with self.subTest(workflow=path.name, job=job_name):
+                    self.assertIsInstance(timeout, int)
+                    self.assertLessEqual(timeout, 360)
+
     def assert_auto_merge_uses_trusted_dispatch(self, data: dict) -> None:
         trigger = data.get("on", data.get(True))
         assert isinstance(trigger, dict)
@@ -136,6 +147,7 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertEqual(
             canary["permissions"], {"actions": "write", "contents": "read"}
         )
+        self.assertEqual(canary["timeout-minutes"], 360)
         self.assertEqual(claim["permissions"], {"contents": "write"})
         self.assertIn("github.event_name == 'push'", claim["if"])
         self.assertIn("automation/conveyor-lock", yaml.safe_dump(claim, sort_keys=False))
@@ -153,6 +165,8 @@ class ControlWorkflowTests(unittest.TestCase):
             "^auto-[0-9a-f]{12}-[1-9][0-9]*-[1-9][0-9]*$",
             runner,
         )
+        self.assertIn('timeout 150m gh run watch "$run_id"', runner)
+        self.assertNotIn('timeout 4h gh run watch "$run_id"', runner)
         self.assertIn("dependency-auto-production", yaml.safe_dump(dispatch, sort_keys=False))
         self.assertIn("repos/$GITHUB_REPOSITORY/dispatches", text)
         merge_workflow = self.load("dependency-auto-merge.yml")[1]

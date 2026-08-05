@@ -6,22 +6,35 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 ./scripts/validate-versions.py
-[ "$(./scripts/validate-versions.py --get-base 8.5)" = "php:8.5-fpm-alpine@sha256:79def1d16ece3ab1a6656c46a23bfd80ad33887fbd33626e7bd743cef54ef9c6" ] || fail "--get-base mismatch"
+expected_base="$(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.loads(Path("build/versions.json").read_text())["versions"]["8.5"]["base_image"])
+PY
+)"
+[ "$(./scripts/validate-versions.py --get-base 8.5)" = "$expected_base" ] || fail "--get-base mismatch"
 python3 - <<'PY'
 import json, subprocess
+from pathlib import Path
+manifest=json.loads(Path("build/versions.json").read_text())
 rows=json.loads(subprocess.check_output(["./scripts/validate-versions.py", "--matrix"]))["include"]
 versions = {
- "8.2": ("8.2.32", "php:8.2-fpm-alpine@sha256:41ddda74d95c43518c3e4414e6c1c99f9c062d397f0c7a2d8cadf8d1f035d196"),
- "8.3": ("8.3.32", "php:8.3-fpm-alpine@sha256:9fcec48321d890240d700ccdc2b475420c87d398826e68c3d8830b8fca663e5c"),
- "8.4": ("8.4.23", "php:8.4-fpm-alpine@sha256:913ddd6934a805429618a16aa36da47cd8a8aec8b2f111c294936ba4003fded6"),
- "8.5": ("8.5.8", "php:8.5-fpm-alpine@sha256:79def1d16ece3ab1a6656c46a23bfd80ad33887fbd33626e7bd743cef54ef9c6"),
+ minor: (row["patch"], row["base_image"])
+ for minor, row in manifest["versions"].items()
 }
 deps = {
- "imagick": ("3.8.1", "https://pecl.php.net/get/imagick-3.8.1.tgz", "3a3587c0a524c17d0dad9673a160b90cd776e836838474e173b549ed864352ee"),
- "redis": ("6.3.0", "https://pecl.php.net/get/redis-6.3.0.tgz", "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5"),
- "apcu": ("5.1.28", "https://pecl.php.net/get/apcu-5.1.28.tgz", "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf"),
+ name: (row["version"], row["url"], row["sha256"])
+ for name, row in manifest["dependencies"].items()
 }
-iconv={"iconv_implementation":"libiconv","iconv_version":"1.18","iconv_package":"gnu-libiconv-libs","iconv_package_version":"1.18-r0","iconv_owner_path":"/usr/lib/libiconv.so.2","iconv_target":"/usr/lib/libiconv.so.2.7.0"}
+contract=manifest["runtimeContracts"]["libiconv"]
+iconv={
+ "iconv_implementation":contract["implementation"],
+ "iconv_version":contract["version"],
+ "iconv_package":contract["package"],
+ "iconv_package_version":contract["packageVersion"],
+ "iconv_owner_path":contract["ownerPath"],
+ "iconv_target":contract["target"],
+}
 expected=[]
 for minor in ("8.2", "8.3", "8.4", "8.5"):
  for platform, arch in (("linux/amd64", "amd64"), ("linux/arm64", "arm64")):

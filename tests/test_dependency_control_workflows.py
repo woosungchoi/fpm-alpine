@@ -55,6 +55,12 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.workflow_run.conclusion == 'success'", job["if"])
         rendered = yaml.safe_dump(job, sort_keys=False)
         self.assertIn(".github/workflows/smoke-test.yml", rendered)
+        updater_text = (WORKFLOWS / "dependency-update-pr.yml").read_text()
+        updater_token = re.search(r"actions/create-github-app-token@[0-9a-f]{40}", updater_text)
+        self.assertIsNotNone(updater_token)
+        if updater_token is None:
+            return
+        self.assertIn(updater_token.group(0), text)
         self.assertIn("actions/create-github-app-token@", rendered)
         self.assertIn("vars.DEPENDENCY_UPDATE_APP_ID", rendered)
         self.assertIn("secrets.DEPENDENCY_UPDATE_APP_PRIVATE_KEY", rendered)

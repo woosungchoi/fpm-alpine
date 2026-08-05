@@ -164,7 +164,7 @@ Rollback:
 - Revert report formatting or parsing changes only.
 - No published images or dependency pins are changed by this workflow.
 
-### Guarded dependency updater and auto-canary
+### Guarded dependency updater, auto-canary, and auto-production
 
 All new automation is fail-closed when its activation variable is absent or not exactly `true`:
 
@@ -172,14 +172,23 @@ All new automation is fail-closed when its activation variable is absent or not 
   - Discovery is report-only by default and uses public Docker Hub tag metadata, Docker Official Images metadata, and PECL archives.
   - PR creation additionally requires a pre-created `dependency-updater` environment, `DEPENDENCY_UPDATE_APP_ID`, `DEPENDENCY_UPDATE_APP_PRIVATE_KEY`, and `DEPENDENCY_AUTOMATION_ENABLED=true`.
   - The GitHub App must be repository-scoped with only Contents and Pull requests read/write permissions. It cannot merge or publish.
+  - One run creates at most one eligible image-changing PR. Remaining candidates stay in discovery evidence until the preceding source finishes production.
 - `dependency-auto-merge`
   - Read-only selection always revalidates exact metadata, diff shape, Action release provenance or source classifier output, and exact-head `docker-smoke` from GitHub Actions App ID `15368`.
   - Scheduled runs use the trusted default branch. Manual evaluation uses the `dependency-auto-merge` `repository_dispatch` event instead of branch-selectable `workflow_dispatch`; missing or boolean `true` `client_payload.report_only` remains read-only, while only boolean `false` permits the gated native auto-merge request.
   - Native auto-merge is requested only with `DEPENDENCY_AUTO_MERGE_ENABLED=true`; direct/admin merge is forbidden.
+  - Only the oldest allowlisted PR is revalidated in each run, so two pending candidates cannot receive native auto-merge concurrently.
 - `dependency-auto-promote`
   - Trusted-main eligibility binds the merge commit to exactly one updater-bot PR and its exact successful PR head.
   - Two full active-matrix canaries are dispatched only with `DEPENDENCY_AUTO_CANARY_ENABLED=true`; their source SHA, run attempts, consecutive run numbers, and every artifact are validated.
-  - Canary evidence always records `productionAuthorized=false`. There is no auto-production workflow before the separate minimum-30-day and two-real-update-cycle bake gate is completed and reviewed.
+  - A successful pair records `productionAuthorized=true`; this is evidence eligibility only and cannot publish without the independent activation variable and controller.
+- `dependency-auto-production`
+  - Runs only from the completed trusted-main `dependency-auto-promote` workflow when `DEPENDENCY_AUTO_PRODUCTION_ENABLED=true`.
+  - Revalidates the exact upstream workflow path, push event, current `main` SHA, eligible updater PR identity, affected-minor set, and both canary identities before dispatching production.
+  - Uses the protected `fpm-auto-production` environment. The existing `fpm-production` environment remains the human-reviewed lane for manual publishing and recovery.
+  - Promotes affected minors sequentially through the existing `publish.yml` digest-copy path. A failed dispatch, publisher run, read-back, runtime check, signature check, or rollback check prevents every later minor from being dispatched.
+  - Automatic publication accepts no fresh lease supplied by the controller. Instead, the publisher validates the durable quiescent cutover record and reads live Docker Hub metadata (`is_automated=false`) during prepare, rollback-baseline bootstrap when needed, and immediately before moving-tag mutation.
+  - Only after every affected minor passes production read-back does the controller dispatch `dependency-update-pr` for the next candidate. Any failure freezes the serial conveyor.
 
 Activation order:
 
@@ -187,9 +196,9 @@ Activation order:
 2. Set `DEPENDENCY_AUTOMATION_ENABLED=true` only after a clean discovery run and one manually reviewed generated PR.
 3. Set `DEPENDENCY_AUTO_MERGE_ENABLED=true` only after exact-head classification and native auto-merge are observed on a real eligible PR.
 4. Set `DEPENDENCY_AUTO_CANARY_ENABLED=true` only after two manually dispatched full-matrix canaries pass for the same exact source contract.
-5. Keep auto-production absent until the bake gate is documented and approved in a separate change.
+5. Create `fpm-auto-production` with protected branches only, merge the controller through the required `docker-smoke` check, then set `DEPENDENCY_AUTO_PRODUCTION_ENABLED=true` after explicit repository-owner approval.
 
-Immediately disable the corresponding variable when a candidate is ambiguous, source metadata moves during observation, required check provenance is missing, package/module drift appears, canary runs are not consecutive, or any evidence cannot be rebound to the exact source SHA.
+Immediately disable the corresponding variable when a candidate is ambiguous, source metadata moves during observation, required check provenance is missing, package/module drift appears, canary runs are not consecutive, or any evidence cannot be rebound to the exact source SHA. `DEPENDENCY_AUTO_PRODUCTION_ENABLED=false` is the first containment action for the automatic publication lane; existing registry aliases and the manual `fpm-production` recovery path remain available.
 
 ### External Snyk webhook
 

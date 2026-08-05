@@ -19,6 +19,10 @@ Support, security-only, frozen, and unsupported status is defined only in [SUPPO
 - There is intentionally no `latest` tag. Consumers must select a PHP line explicitly.
 - GitHub Actions is the sole publisher for supported release targets on Docker Hub and GHCR.
 - Docker Hub Automatic Builds and legacy publication hooks are removed.
+- Eligible same-minor PHP base and PECL patch updates may update only their classifier-authorized moving aliases after exact-head required checks, native merge to current `main`, and two consecutive verified full-matrix canaries.
+- Image-changing dependency candidates are admitted serially: one updater PR and one oldest-PR auto-merge decision at a time, with the next candidate dispatched only after prior production read-back succeeds.
+- Automatic production promotes affected aliases sequentially without rebuilding. Any failure stops the sequence, and the existing publisher restores the recorded previous Docker Hub and GHCR digests after a post-mutation failure.
+- General source, Dockerfile, lifecycle, runtime-contract, workflow-permission, and publisher-policy merges never enter the automatic production lane.
 - The public Docker Hub tag verifier fails on any missing active alias or any additional tag.
 
 ## Change policy

@@ -137,3 +137,48 @@ jobs:
             auto-promotion-evidence/
             auto-canary-evidence/
           if-no-files-found: error
+
+  dispatch-production-controller:
+    if: >-
+      ${{ github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          needs.evaluate.outputs.eligible == 'true' &&
+          vars.DEPENDENCY_AUTO_PRODUCTION_ENABLED == 'true' }}
+    needs: [evaluate, auto-canary]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Dispatch trusted default-branch auto-production controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.evaluate.outputs.source_sha }}
+          UPSTREAM_RUN_ID: ${{ github.run_id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SOURCE_SHA" = "$GITHUB_SHA"
+          [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          python3 - "$SOURCE_SHA" "$UPSTREAM_RUN_ID" "$UPSTREAM_RUN_ATTEMPT" <<'PY' > /tmp/auto-production-dispatch.json
+          import json
+          import sys
+
+          source_sha, run_id, run_attempt = sys.argv[1:]
+          json.dump(
+              {
+                  "event_type": "dependency-auto-production",
+                  "client_payload": {
+                      "source_sha": source_sha,
+                      "upstream_run_id": run_id,
+                      "upstream_run_attempt": run_attempt,
+                  },
+              },
+              sys.stdout,
+          )
+          PY
+          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
+            --input /tmp/auto-production-dispatch.json \
+            --silent

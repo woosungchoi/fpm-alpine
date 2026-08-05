@@ -1,0 +1,218 @@
+name: dependency-auto-production
+
+on:
+  repository_dispatch:
+    types: [dependency-auto-production]
+
+permissions: {}
+
+concurrency:
+  group: dependency-auto-production
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: >-
+      ${{ github.event.action == 'dependency-auto-production' &&
+          vars.DEPENDENCY_AUTO_PRODUCTION_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      eligible: ${{ steps.select.outputs.eligible }}
+      source_sha: ${{ steps.select.outputs.source_sha }}
+    steps:
+      - name: Checkout exact dispatched source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.client_payload.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate completed upstream run and current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.client_payload.upstream_run_id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.client_payload.upstream_run_attempt }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          completed=false
+          for _ in $(seq 1 120); do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN_ID" > /tmp/upstream-run.json
+            status="$(python3 -c 'import json; print(json.load(open("/tmp/upstream-run.json")).get("status", ""))')"
+            if [ "$status" = completed ]; then
+              completed=true
+              break
+            fi
+            sleep 5
+          done
+          test "$completed" = true
+          python3 - /tmp/upstream-run.json "$UPSTREAM_RUN_ID" "$UPSTREAM_RUN_ATTEMPT" "$SOURCE_SHA" <<'PY'
+          import json
+          import sys
+
+          path, expected_id, expected_attempt, source_sha = sys.argv[1:]
+          row = json.load(open(path))
+          required = {
+              "id": int(expected_id),
+              "run_attempt": int(expected_attempt),
+              "path": ".github/workflows/dependency-auto-promote.yml",
+              "event": "push",
+              "head_branch": "main",
+              "head_sha": source_sha,
+              "status": "completed",
+              "conclusion": "success",
+          }
+          failed = [key for key, expected in required.items() if type(row.get(key)) is not type(expected) or row.get(key) != expected]
+          if failed:
+              raise SystemExit("upstream auto-promotion run contract mismatch: " + ", ".join(failed))
+          PY
+
+      - name: Download upstream eligibility bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.client_payload.upstream_run_id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.client_payload.upstream_run_attempt }}
+        run: |
+          set -euo pipefail
+          rm -rf upstream-eligibility
+          gh run download "$UPSTREAM_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "auto-promotion-eligibility-${UPSTREAM_RUN_ID}-${UPSTREAM_RUN_ATTEMPT}" \
+            --dir upstream-eligibility
+
+      - name: Select eligible image-changing merge
+        id: select
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 - "$SOURCE_SHA" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          source_sha, output = sys.argv[1:]
+          matches = list(Path("upstream-eligibility").rglob("eligibility.json"))
+          if len(matches) != 1:
+              raise SystemExit(f"expected exactly one eligibility payload, found {len(matches)}")
+          payload = json.loads(matches[0].read_text())
+          if type(payload) is not dict or payload.get("sourceCommit") != source_sha:
+              raise SystemExit("upstream eligibility source mismatch")
+          eligible = payload.get("eligible") is True
+          with open(output, "a") as handle:
+              handle.write(f"eligible={str(eligible).lower()}\n")
+              handle.write(f"source_sha={source_sha}\n")
+          PY
+
+      - name: Download successful auto-canary evidence bytes
+        if: ${{ steps.select.outputs.eligible == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.client_payload.upstream_run_id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.client_payload.upstream_run_attempt }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+        run: |
+          set -euo pipefail
+          rm -rf upstream-canary
+          gh run download "$UPSTREAM_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "auto-canary-${SOURCE_SHA}-${UPSTREAM_RUN_ID}-${UPSTREAM_RUN_ATTEMPT}" \
+            --dir upstream-canary
+
+      - name: Bind production authorization to exact upstream evidence
+        if: ${{ steps.select.outputs.eligible == 'true' }}
+        env:
+          UPSTREAM_RUN_ID: ${{ github.event.client_payload.upstream_run_id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.client_payload.upstream_run_attempt }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+        run: |
+          ./scripts/validate-auto-production-evidence.py \
+            --evidence-dir upstream-canary \
+            --source-sha "$SOURCE_SHA" \
+            --upstream-run-id "$UPSTREAM_RUN_ID" \
+            --upstream-run-attempt "$UPSTREAM_RUN_ATTEMPT" \
+            --output auto-production-evidence/authorization.json
+
+      - name: Upload run-bound production authorization
+        if: ${{ steps.select.outputs.eligible == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auto-production-authorization-${{ github.event.client_payload.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-production-evidence/authorization.json
+          if-no-files-found: error
+
+  dispatch-production:
+    if: ${{ needs.authorize.outputs.eligible == 'true' }}
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout exact authorized source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.authorize.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download run-bound production authorization
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: auto-production-authorization-${{ needs.authorize.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-production-evidence
+
+      - name: Recheck current source and settled legacy publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}
+          LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
+          LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
+          LEGACY_EVIDENCE_SHA256: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          ./scripts/validate-settled-publisher-state.py \
+            --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256" \
+            --repository woosungchoi/fpm-alpine
+
+      - name: Dispatch and verify affected production promotions sequentially
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}
+        run: |
+          ./scripts/run-auto-production.sh \
+            "$SOURCE_SHA" \
+            auto-production-evidence/authorization.json \
+            auto-production-evidence/production-runs.json
+
+      - name: Dispatch discovery for the next dependency candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          gh workflow run dependency-update-pr.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f dry_run=false
+
+      - name: Upload automatic production controller evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auto-production-controller-${{ needs.authorize.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-production-evidence/
+          if-no-files-found: error

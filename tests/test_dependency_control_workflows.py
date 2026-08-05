@@ -115,6 +115,7 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertEqual(data["permissions"], {})
         evaluate = data["jobs"]["evaluate"]
         canary = data["jobs"]["auto-canary"]
+        dispatch = data["jobs"]["dispatch-production-controller"]
         self.assertEqual(
             evaluate["permissions"],
             {"contents": "read", "pull-requests": "read", "checks": "read"},
@@ -123,15 +124,28 @@ class ControlWorkflowTests(unittest.TestCase):
             canary["permissions"], {"actions": "write", "contents": "read"}
         )
         self.assertIn("DEPENDENCY_AUTO_CANARY_ENABLED", canary["if"])
+        self.assertEqual(dispatch["permissions"], {"contents": "write"})
+        self.assertEqual(dispatch["needs"], ["evaluate", "auto-canary"])
+        self.assertIn("DEPENDENCY_AUTO_PRODUCTION_ENABLED", dispatch["if"])
         rendered = yaml.safe_dump(canary, sort_keys=False)
         self.assertIn("run-auto-canary.sh", rendered)
+        self.assertIn("dependency-auto-production", yaml.safe_dump(dispatch, sort_keys=False))
+        self.assertIn("repos/$GITHUB_REPOSITORY/dispatches", text)
+        merge_workflow = self.load("dependency-auto-merge.yml")[1]
+        evaluate_run = next(
+            step["run"]
+            for step in merge_workflow["jobs"]["select"]["steps"]
+            if step.get("name") == "Revalidate the oldest selected PR only"
+        )
+        self.assertIn("read -r pr < auto-merge-selection/preselected.txt", evaluate_run)
+        self.assertNotIn("while IFS= read -r pr", evaluate_run)
         self.assertNotIn("channel=production", text)
         self.assertNotIn("packages: write", text)
         self.assertNotIn("id-token: write", text)
         self.assertNotIn("pull_request_target", text)
         self.assert_pinned(text)
 
-    def test_exact_check_app_and_production_denial_are_source_contracts(self) -> None:
+    def test_exact_check_app_and_production_authorization_are_source_contracts(self) -> None:
         merged = (ROOT / "scripts/validate-merged-dependency-pr.sh").read_text()
         merge_eval = (ROOT / "scripts/evaluate-auto-merge-pr.sh").read_text()
         canary = (ROOT / "scripts/run-auto-canary.sh").read_text()
@@ -139,7 +153,7 @@ class ControlWorkflowTests(unittest.TestCase):
             self.assertIn("15368", text)
             self.assertIn('get("name")', text)
             self.assertIn('"docker-smoke"', text)
-        self.assertIn('"productionAuthorized": False', canary)
+        self.assertIn('"productionAuthorized": True', canary)
         self.assertIn("for index in 1 2", canary)
         self.assertIn("first_number + 1", canary)
         self.assertNotIn("channel=production", canary)
@@ -153,10 +167,59 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertIn("CORRELATION_ID", text)
         self.assertIn("^[A-Za-z0-9._-]{1,64}$", text)
 
-    def test_no_auto_production_workflow_exists_before_bake_gate(self) -> None:
-        self.assertFalse(
-            (ROOT / ".github/workflows/dependency-auto-production.yml").exists()
+    def test_auto_production_is_separate_and_activation_gated(self) -> None:
+        text, data = self.load("dependency-auto-production.yml")
+        trigger = data.get("on", data.get(True))
+        self.assertEqual(
+            trigger,
+            {
+                "repository_dispatch": {
+                    "types": ["dependency-auto-production"],
+                }
+            },
         )
+        self.assertEqual(data["permissions"], {})
+        authorize = data["jobs"]["authorize"]
+        production = data["jobs"]["dispatch-production"]
+        self.assertEqual(
+            authorize["permissions"], {"actions": "read", "contents": "read"}
+        )
+        self.assertEqual(
+            production["permissions"], {"actions": "write", "contents": "read"}
+        )
+        self.assertIn("DEPENDENCY_AUTO_PRODUCTION_ENABLED", authorize["if"])
+        self.assertIn("github.event.action == 'dependency-auto-production'", authorize["if"])
+        rendered = yaml.safe_dump(data, sort_keys=False)
+        self.assertIn('"event": "push"', text)
+        self.assertIn('"head_branch": "main"', text)
+        self.assertIn("validate-auto-production-evidence.py", rendered)
+        self.assertIn("validate-settled-publisher-state.py", rendered)
+        self.assertIn("run-auto-production.sh", rendered)
+        self.assertIn("dependency-update-pr.yml", rendered)
+        self.assertIn("dry_run=false", rendered)
+        self.assertNotIn("DOCKERHUB_TOKEN", text)
+        self.assertNotIn("packages: write", text)
+        self.assertNotIn("id-token: write", text)
+        self.assert_pinned(text)
+
+    def test_publisher_separates_manual_and_automatic_environments(self) -> None:
+        text, data = self.load("publish.yml")
+        trigger = data.get("on", data.get(True))
+        inputs = trigger["workflow_dispatch"]["inputs"]
+        self.assertIn("auto_promotion_run_id", inputs)
+        self.assertIn("auto_promotion_run_attempt", inputs)
+        prepare = data["jobs"]["prepare"]
+        self.assertIn("production_environment", prepare["outputs"])
+        for job_name in ("bootstrap-ghcr-rollback", "production"):
+            self.assertEqual(
+                data["jobs"][job_name]["environment"],
+                "${{ needs.prepare.outputs.production_environment }}",
+            )
+        self.assertIn("fpm-auto-production", text)
+        self.assertIn("fpm-production", text)
+        self.assertIn("validate-auto-production-evidence.py", text)
+        self.assertGreaterEqual(text.count("validate-settled-publisher-state.py"), 3)
+        self.assertIn("DEPENDENCY_AUTO_PRODUCTION_ENABLED", text)
 
 
 if __name__ == "__main__":

@@ -109,8 +109,8 @@ data = {
     "affectedMinors": eligibility["affectedMinors"],
     "firstCanary": {"runId": int(first_id), "runAttempt": int(first_attempt), "runNumber": int(first_number)},
     "secondCanary": {"runId": int(second_id), "runAttempt": int(second_attempt), "runNumber": int(second_number)},
-    "productionAuthorized": False,
+    "productionAuthorized": True,
 }
 open(output, "w").write(json.dumps(data, indent=2) + "\n")
 PY
-printf 'auto_canary=PASS source=%s first=%s second=%s production_authorized=false\n' "$source_sha" "$first_id" "$second_id"
+printf 'auto_canary=PASS source=%s first=%s second=%s production_authorized=true\n' "$source_sha" "$first_id" "$second_id"

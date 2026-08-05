@@ -49,6 +49,14 @@ on:
         description: Required for production; SHA-256 of fresh repository cutover evidence
         required: false
         type: string
+      auto_promotion_run_id:
+        description: Automatic production only; completed dependency-auto-promote run ID
+        required: false
+        type: string
+      auto_promotion_run_attempt:
+        description: Automatic production only; completed dependency-auto-promote run attempt
+        required: false
+        type: string
 
 permissions: {}
 
@@ -71,6 +79,8 @@ jobs:
       created: ${{ steps.metadata.outputs.created }}
       source_date_epoch: ${{ steps.metadata.outputs.source_date_epoch }}
       release_date: ${{ steps.metadata.outputs.release_date }}
+      production_environment: ${{ steps.contract.outputs.production_environment }}
+      automatic_production: ${{ steps.contract.outputs.automatic_production }}
     steps:
       - name: Checkout exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,6 +90,7 @@ jobs:
           fetch-depth: 0
 
       - name: Validate dispatch contract
+        id: contract
         env:
           SOURCE_SHA: ${{ github.event.inputs.source_sha }}
           CORRELATION_ID: ${{ github.event.inputs.correlation_id }}
@@ -94,6 +105,9 @@ jobs:
           LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.inputs.legacy_cutover_evidence_sha256 }}
           LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
+          AUTO_PRODUCTION_ENABLED: ${{ vars.DEPENDENCY_AUTO_PRODUCTION_ENABLED }}
+          AUTO_PROMOTION_RUN_ID: ${{ github.event.inputs.auto_promotion_run_id }}
+          AUTO_PROMOTION_RUN_ATTEMPT: ${{ github.event.inputs.auto_promotion_run_attempt }}
           DISPATCH_SHA: ${{ github.sha }}
           DISPATCH_REF: ${{ github.ref }}
           GH_TOKEN: ${{ github.token }}
@@ -107,6 +121,16 @@ jobs:
           if [ -n "$CORRELATION_ID" ]; then
             [[ "$CORRELATION_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
           fi
+          automatic_production=false
+          production_environment=fpm-production
+          if [ -n "$AUTO_PROMOTION_RUN_ID" ] || [ -n "$AUTO_PROMOTION_RUN_ATTEMPT" ]; then
+            test "$CHANNEL" = production
+            [[ "$AUTO_PROMOTION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$AUTO_PROMOTION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+            test "$AUTO_PRODUCTION_ENABLED" = true
+            automatic_production=true
+            production_environment=fpm-auto-production
+          fi
           if [ "$CHANNEL" = production ]; then
             [[ "$REQUESTED_VERSION" =~ ^8\.[2-5]$ ]]
             [[ "$CANARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
@@ -116,9 +140,68 @@ jobs:
             test "$CANARY_RUN_ID" != "$PRIOR_CANARY_RUN_ID"
             test "$LEGACY_DISABLED_INPUT" = true
             test "$LEGACY_DISABLED_VARIABLE" = true
-            [[ "$LEGACY_EVIDENCE_SHA256_INPUT" =~ ^[0-9a-f]{64}$ ]]
-            test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
-            ./scripts/validate-legacy-cutover-evidence.py "$SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
+            if [ "$automatic_production" = true ]; then
+              test -z "$LEGACY_EVIDENCE_SHA256_INPUT"
+              [[ "$LEGACY_EVIDENCE_SHA256_VARIABLE" =~ ^[0-9a-f]{64}$ ]]
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${AUTO_PROMOTION_RUN_ID}" > /tmp/auto-promotion-run.json
+              python3 - /tmp/auto-promotion-run.json "$AUTO_PROMOTION_RUN_ID" "$AUTO_PROMOTION_RUN_ATTEMPT" "$SOURCE_SHA" <<'PY'
+          import json
+          import sys
+
+          path, expected_id, expected_attempt, source_sha = sys.argv[1:]
+          row = json.load(open(path))
+          required = {
+              "id": int(expected_id),
+              "run_attempt": int(expected_attempt),
+              "path": ".github/workflows/dependency-auto-promote.yml",
+              "event": "push",
+              "head_branch": "main",
+              "head_sha": source_sha,
+              "status": "completed",
+              "conclusion": "success",
+          }
+          failed = [key for key, expected in required.items() if type(row.get(key)) is not type(expected) or row.get(key) != expected]
+          if failed:
+              raise SystemExit("automatic promotion run contract mismatch: " + ", ".join(failed))
+          PY
+              rm -rf /tmp/auto-production-evidence
+              gh run download "$AUTO_PROMOTION_RUN_ID" \
+                --repo "$GITHUB_REPOSITORY" \
+                --name "auto-canary-${SOURCE_SHA}-${AUTO_PROMOTION_RUN_ID}-${AUTO_PROMOTION_RUN_ATTEMPT}" \
+                --dir /tmp/auto-production-evidence
+              ./scripts/validate-auto-production-evidence.py \
+                --evidence-dir /tmp/auto-production-evidence \
+                --source-sha "$SOURCE_SHA" \
+                --upstream-run-id "$AUTO_PROMOTION_RUN_ID" \
+                --upstream-run-attempt "$AUTO_PROMOTION_RUN_ATTEMPT" \
+                --output /tmp/auto-production-authorization.json
+              python3 - /tmp/auto-production-authorization.json "$REQUESTED_VERSION" \
+                "$CANARY_RUN_ID" "$CANARY_RUN_ATTEMPT" \
+                "$PRIOR_CANARY_RUN_ID" "$PRIOR_CANARY_RUN_ATTEMPT" <<'PY'
+          import json
+          import sys
+
+          path, minor, current_id, current_attempt, prior_id, prior_attempt = sys.argv[1:]
+          row = json.load(open(path))
+          if row.get("productionAuthorized") is not True or minor not in row.get("affectedMinors", []):
+              raise SystemExit("requested minor is not authorized by automatic promotion evidence")
+          expected = {
+              "currentCanary": {"runId": int(current_id), "runAttempt": int(current_attempt)},
+              "priorCanary": {"runId": int(prior_id), "runAttempt": int(prior_attempt)},
+          }
+          failed = [key for key, value in expected.items() if row.get(key) != value]
+          if failed:
+              raise SystemExit("automatic canary authorization mismatch: " + ", ".join(failed))
+          PY
+              LEGACY_PUBLISHER_DISABLED="$LEGACY_DISABLED_VARIABLE" \
+                ./scripts/validate-settled-publisher-state.py \
+                  --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256_VARIABLE" \
+                  --repository woosungchoi/fpm-alpine
+            else
+              [[ "$LEGACY_EVIDENCE_SHA256_INPUT" =~ ^[0-9a-f]{64}$ ]]
+              test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
+              ./scripts/validate-legacy-cutover-evidence.py "$SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
+            fi
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANARY_RUN_ID}" > /tmp/canary-run.json
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PRIOR_CANARY_RUN_ID}" > /tmp/prior-canary-run.json
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANARY_RUN_ID}/artifacts?per_page=100" > /tmp/canary-artifacts.json
@@ -171,7 +254,11 @@ jobs:
             test -z "$PRIOR_CANARY_RUN_ID"
             test -z "$PRIOR_CANARY_RUN_ATTEMPT"
             test -z "$LEGACY_EVIDENCE_SHA256_INPUT"
+            test -z "$AUTO_PROMOTION_RUN_ID"
+            test -z "$AUTO_PROMOTION_RUN_ATTEMPT"
           fi
+          echo "production_environment=$production_environment" >> "$GITHUB_OUTPUT"
+          echo "automatic_production=$automatic_production" >> "$GITHUB_OUTPUT"
           ./scripts/validate-versions.py
 
       - name: Prepare one build per active PHP minor
@@ -197,9 +284,11 @@ jobs:
       - name: Prepare immutable build metadata
         id: metadata
         run: |
-          echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-          echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-          echo "release_date=$(date -u +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+          {
+            echo "created=$(git show -s --format=%cI "$GITHUB_SHA")"
+            echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")"
+            echo "release_date=$(date -u +'%Y%m%d')"
+          } >> "$GITHUB_OUTPUT"
 
   canary:
     if: ${{ github.event.inputs.channel == 'canary' }}
@@ -425,7 +514,7 @@ jobs:
     if: ${{ github.event.inputs.channel == 'production' }}
     needs: [prepare, production-preflight]
     runs-on: ubuntu-latest
-    environment: fpm-production
+    environment: ${{ needs.prepare.outputs.production_environment }}
     timeout-minutes: 90
     permissions:
       contents: read
@@ -459,6 +548,8 @@ jobs:
           LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.inputs.legacy_cutover_evidence_sha256 }}
           LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
+          LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
+          AUTOMATIC_PRODUCTION: ${{ needs.prepare.outputs.automatic_production }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -582,8 +673,14 @@ jobs:
               update_evidence baseline_state '"absent"'
               update_evidence cutover_validation_status '"in_progress"'
               set +e
-              test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE" && \
-                ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
+              if [ "$AUTOMATIC_PRODUCTION" = true ]; then
+                ./scripts/validate-settled-publisher-state.py \
+                  --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256_VARIABLE" \
+                  --repository woosungchoi/fpm-alpine
+              else
+                test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE" && \
+                  ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
+              fi
               cutover_status=$?
               set -e
               update_evidence cutover_validation_exit_code "$cutover_status"
@@ -670,7 +767,7 @@ jobs:
     if: ${{ github.event.inputs.channel == 'production' }}
     needs: [prepare, production-preflight, bootstrap-ghcr-rollback]
     runs-on: ubuntu-latest
-    environment: fpm-production
+    environment: ${{ needs.prepare.outputs.production_environment }}
     timeout-minutes: 180
     permissions:
       actions: read
@@ -762,6 +859,8 @@ jobs:
           LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.inputs.legacy_cutover_evidence_sha256 }}
           LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
+          LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
+          AUTOMATIC_PRODUCTION: ${{ needs.prepare.outputs.automatic_production }}
         run: |
           set -euo pipefail
           previous_dockerhub="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
@@ -778,8 +877,14 @@ jobs:
             "$GHCR_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
             "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
 
-          test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
-          ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
+          if [ "$AUTOMATIC_PRODUCTION" = true ]; then
+            ./scripts/validate-settled-publisher-state.py \
+              --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256_VARIABLE" \
+              --repository woosungchoi/fpm-alpine
+          else
+            test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
+            ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
+          fi
           mutated=0
           trap 'rc=$?; if [ "$mutated" -eq 1 ]; then set +e; COSIGN_SIGN_DESTINATION=1 ./scripts/rollback-moving-aliases.sh "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" "$GHCR_REPOSITORY" "$previous_ghcr" "$PHP_MINOR" publisher-reports/rollback-trap; fi; exit "$rc"' EXIT
           mutated=1

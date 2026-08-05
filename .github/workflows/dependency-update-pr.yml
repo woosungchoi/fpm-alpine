@@ -109,7 +109,7 @@ jobs:
           name: dependency-candidates-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dependency-candidates
 
-      - name: Create one pull request per eligible candidate
+      - name: Create the next eligible pull request
         env:
           CANDIDATE_FILE: ${{ runner.temp }}/dependency-candidates/candidates.json
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -121,12 +121,13 @@ jobs:
           import os
           from pathlib import Path
           data = json.loads(Path(os.environ['CANDIDATE_FILE']).read_text())
-          for row in data.get('candidates', []):
-              if row.get('eligible') is True:
-                  print(row['key'])
+          eligible = [row for row in data.get('candidates', []) if row.get('eligible') is True]
+          if eligible:
+              print(eligible[0]['key'])
           PY
-          while IFS= read -r candidate_key; do
-            test -n "$candidate_key"
+          candidate_key=""
+          IFS= read -r candidate_key < /tmp/eligible-candidate-keys || true
+          if [ -n "$candidate_key" ]; then
             ./scripts/create-dependency-update-pr.sh \
               "$CANDIDATE_FILE" "$candidate_key"
-          done < /tmp/eligible-candidate-keys
+          fi

@@ -11,7 +11,7 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 assert_file .github/workflows/publish.yml
-for script in scripts/verify-published-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
+for script in scripts/verify-published-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/validate-auto-production-evidence.py scripts/validate-settled-publisher-state.py scripts/run-auto-production.sh scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
   assert_file "$script"
   assert_executable "$script"
 done
@@ -39,6 +39,8 @@ assert inputs['canary_run_attempt']['required'] is False
 assert inputs['prior_canary_run_id']['required'] is False
 assert inputs['prior_canary_run_attempt']['required'] is False
 assert inputs['legacy_cutover_evidence_sha256']['required'] is False
+assert inputs['auto_promotion_run_id']['required'] is False
+assert inputs['auto_promotion_run_attempt']['required'] is False
 assert data['permissions'] == {}
 assert data['concurrency']['cancel-in-progress'] is False
 assert data['concurrency']['group'] == "publish-${{ github.event.inputs.channel }}"
@@ -57,9 +59,9 @@ for name in ('prepare', 'canary', 'production-preflight', 'bootstrap-ghcr-rollba
 assert jobs['prepare']['permissions'] == {'actions': 'read', 'contents': 'read'}
 assert jobs['canary']['permissions'] == {'contents': 'read', 'packages': 'write', 'id-token': 'write'}
 assert jobs['production']['permissions'] == {'actions': 'read', 'contents': 'read', 'packages': 'write', 'id-token': 'write'}
-assert jobs['production']['environment'] == 'fpm-production'
+assert jobs['production']['environment'] == '${{ needs.prepare.outputs.production_environment }}'
 assert jobs['production-preflight']['permissions'] == {'actions': 'read', 'contents': 'read'}
-assert jobs['bootstrap-ghcr-rollback']['environment'] == 'fpm-production'
+assert jobs['bootstrap-ghcr-rollback']['environment'] == '${{ needs.prepare.outputs.production_environment }}'
 assert jobs['bootstrap-ghcr-rollback']['permissions'] == {'contents': 'read', 'packages': 'write'}
 assert jobs['report-failure']['permissions'] == {'actions': 'read', 'contents': 'read', 'issues': 'write'}
 
@@ -95,13 +97,19 @@ assert 'legacy cutover evidence is not within the 15-minute lease' in validator_
 assert 'Docker Hub legacy publisher is not quiescent' in validator_text
 assert 'publisher-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}' in text
 assert text.count('./scripts/validate-legacy-cutover-evidence.py') == 3
+assert text.count('./scripts/validate-settled-publisher-state.py') == 3
+assert 'fpm-auto-production' in text
+assert 'DEPENDENCY_AUTO_PRODUCTION_ENABLED' in text
+assert 'validate-auto-production-evidence.py' in text
 assert 'bootstrap-evidence.json' in text
 for field in ('source_sha', 'dockerhub_resolution_status', 'dockerhub_inspect_exit_code', 'dockerhub_digest_parse_exit_code', 'dockerhub_digest', 'baseline_state', 'baseline_inspect_exit_code', 'cutover_validation_status', 'cutover_validation_exit_code', 'create_status', 'create_exit_code', 'readback_status', 'readback_exit_code', 'readback_digest_parse_exit_code', 'readback_digest', 'verifier_status', 'verifier_exit_code', 'final_status', 'created_at', 'updated_at'):
     assert field in text, field
 bootstrap_run = next(step['run'] for step in jobs['bootstrap-ghcr-rollback']['steps'] if step.get('name') == 'Establish idempotent GHCR rollback baselines')
 assert bootstrap_run.index('./scripts/validate-legacy-cutover-evidence.py') < bootstrap_run.index('docker buildx imagetools create')
+assert bootstrap_run.index('./scripts/validate-settled-publisher-state.py') < bootstrap_run.index('docker buildx imagetools create')
 promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified GHCR canary without rebuilding')
 assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
+assert promotion_run.index('./scripts/validate-settled-publisher-state.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
 production_step_names = [step.get('name') for step in jobs['production']['steps']]
 assert 'Re-verify exact canary subjects before promotion' not in production_step_names
 assert production_step_names.index('Promote verified GHCR canary without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
@@ -474,6 +482,8 @@ exit 97
         "LEGACY_EVIDENCE_SHA256_INPUT": digest,
         "LEGACY_EVIDENCE_SHA256_VARIABLE": digest,
         "LEGACY_EVIDENCE_B64": base64.b64encode(raw).decode(),
+        "LEGACY_PUBLISHER_DISABLED": "true",
+        "AUTOMATIC_PRODUCTION": "false",
         "RUN_ID": "123",
         "RUN_ATTEMPT": "2",
     })

@@ -46,7 +46,7 @@ class UpdaterWorkflowTests(unittest.TestCase):
         create_prs = next(
             step
             for step in create["steps"]
-            if step["name"] == "Create one pull request per eligible candidate"
+            if step["name"] == "Create the next eligible pull request"
         )
         candidate_file = create_prs["env"]["CANDIDATE_FILE"]
         self.assertEqual(
@@ -55,6 +55,8 @@ class UpdaterWorkflowTests(unittest.TestCase):
         )
         self.assertIn("Path(os.environ['CANDIDATE_FILE'])", create_prs["run"])
         self.assertIn('"$CANDIDATE_FILE" "$candidate_key"', create_prs["run"])
+        self.assertIn("eligible[0]['key']", create_prs["run"])
+        self.assertNotIn("while IFS= read -r candidate_key", create_prs["run"])
         self.assertNotIn("persist-credentials: true", text)
         self.assertNotIn("pull_request_target", text)
         self.assertNotIn("packages: write", text)

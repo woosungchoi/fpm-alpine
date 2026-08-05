@@ -164,32 +164,30 @@ Rollback:
 - Revert report formatting or parsing changes only.
 - No published images or dependency pins are changed by this workflow.
 
-### Guarded dependency updater and auto-canary
+### Dependency PR, auto-merge, and Docker Hub publish
 
-All new automation is fail-closed when its activation variable is absent or not exactly `true`:
+The automated path has three stages:
 
 - `dependency-update-pr`
   - Discovery is report-only by default and uses public Docker Hub tag metadata, Docker Official Images metadata, and PECL archives.
   - PR creation additionally requires a pre-created `dependency-updater` environment, `DEPENDENCY_UPDATE_APP_ID`, `DEPENDENCY_UPDATE_APP_PRIVATE_KEY`, and `DEPENDENCY_AUTOMATION_ENABLED=true`.
   - The GitHub App must be repository-scoped with only Contents and Pull requests read/write permissions. It cannot merge or publish.
 - `dependency-auto-merge`
-  - Read-only selection always revalidates exact metadata, diff shape, Action release provenance or source classifier output, and exact-head `docker-smoke` from GitHub Actions App ID `15368`.
-  - Scheduled runs use the trusted default branch. Manual evaluation uses the `dependency-auto-merge` `repository_dispatch` event instead of branch-selectable `workflow_dispatch`; missing or boolean `true` `client_payload.report_only` remains read-only, while only boolean `false` permits the gated native auto-merge request.
-  - Native auto-merge is requested only with `DEPENDENCY_AUTO_MERGE_ENABLED=true`; direct/admin merge is forbidden.
-- `dependency-auto-promote`
-  - Trusted-main eligibility binds the merge commit to exactly one updater-bot PR and its exact successful PR head.
-  - Two full active-matrix canaries are dispatched only with `DEPENDENCY_AUTO_CANARY_ENABLED=true`; their source SHA, run attempts, consecutive run numbers, and every artifact are validated.
-  - Canary evidence always records `productionAuthorized=false`. There is no auto-production workflow before the separate minimum-30-day and two-real-update-cycle bake gate is completed and reviewed.
+  - It runs only after the trusted `smoke-test` workflow completes successfully for a pull request.
+  - It revalidates the exact workflow run, same-repository PR metadata, bot branch, and dependency-only diff before requesting GitHub native auto-merge.
+  - `DEPENDENCY_AUTO_MERGE_ENABLED=true` is required. Protected `main` and the strict required `docker-smoke` check remain authoritative; direct/admin merge is not used.
+- `dependency-auto-publish`
+  - It runs only when protected `main` changes `build/versions.json` and the merged diff is accepted by the dependency classifier.
+  - It builds all maintained PHP minors for `linux/amd64` and `linux/arm64` and pushes only `8.2`, `8.3`, `8.4`, and `8.5` to `woosungchoi/fpm-alpine` on Docker Hub.
+  - It verifies that each Docker Hub tag resolves to the build digest and contains both required platforms. It does not use GHCR canaries or a separate promotion controller.
 
 Activation order:
 
 1. Create the scoped App/environment and run `dependency-update-pr` manually with `dry_run=true`.
-2. Set `DEPENDENCY_AUTOMATION_ENABLED=true` only after a clean discovery run and one manually reviewed generated PR.
-3. Set `DEPENDENCY_AUTO_MERGE_ENABLED=true` only after exact-head classification and native auto-merge are observed on a real eligible PR.
-4. Set `DEPENDENCY_AUTO_CANARY_ENABLED=true` only after two manually dispatched full-matrix canaries pass for the same exact source contract.
-5. Keep auto-production absent until the bake gate is documented and approved in a separate change.
+2. Keep `DEPENDENCY_AUTO_MERGE_ENABLED=true` and verify that protected `main` requires the strict `docker-smoke` check.
+3. Set `DEPENDENCY_AUTOMATION_ENABLED=true` after the updater dry run is clean. Each generated PR then follows the same check, native auto-merge, and Docker Hub publish path.
 
-Immediately disable the corresponding variable when a candidate is ambiguous, source metadata moves during observation, required check provenance is missing, package/module drift appears, canary runs are not consecutive, or any evidence cannot be rebound to the exact source SHA.
+Immediately set `DEPENDENCY_AUTOMATION_ENABLED=false` when discovery is ambiguous or generated PRs are incorrect. Set `DEPENDENCY_AUTO_MERGE_ENABLED=false` to stop automatic merges. To stop publishing, disable `dependency-auto-publish` and keep `main` unchanged until the workflow issue is corrected.
 
 ### External Snyk webhook
 

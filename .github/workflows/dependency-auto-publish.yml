@@ -1,0 +1,178 @@
+name: dependency-auto-publish
+run-name: dockerhub-${{ github.sha }}
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["build/versions.json"]
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_REPOSITORY: woosungchoi/fpm-alpine
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      created: ${{ steps.metadata.outputs.created }}
+      source_date_epoch: ${{ steps.metadata.outputs.source_date_epoch }}
+    steps:
+      - name: Checkout merged main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Require an eligible dependency-only merge
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$BASE_SHA" != 0000000000000000000000000000000000000000
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          ./scripts/validate-versions.py
+          python3 scripts/evaluate-auto-promotion.py \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$SOURCE_SHA" \
+            --output /tmp/dependency-publish-eligibility.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path('/tmp/dependency-publish-eligibility.json').read_text())
+          if result.get('eligible') is not True:
+              raise SystemExit('merged main change is not an eligible dependency update')
+          PY
+
+      - name: Prepare one multi-arch build per maintained PHP minor
+        id: matrix
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import subprocess
+
+          full = json.loads(subprocess.check_output(
+              ['python3', 'scripts/validate-versions.py', '--matrix'], text=True
+          ))
+          rows = []
+          seen = set()
+          for source in full['include']:
+              minor = source['php_minor']
+              if minor in seen:
+                  continue
+              seen.add(minor)
+              row = dict(source)
+              row.pop('platform')
+              row.pop('arch')
+              rows.append(row)
+          if [row['php_minor'] for row in rows] != ['8.2', '8.3', '8.4', '8.5']:
+              raise SystemExit('maintained PHP matrix is not exact')
+          print('matrix=' + json.dumps({'include': rows}, separators=(',', ':')))
+          PY
+
+      - name: Prepare OCI source metadata
+        id: metadata
+        run: |
+          set -euo pipefail
+          echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+
+  publish-dockerhub:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    concurrency:
+      group: dockerhub-production-${{ matrix.php_minor }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout exact merged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker Hub image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: woosungchoi/fpm-alpine:${{ matrix.php_minor }}
+          build-args: |
+            PHP_BASE_IMAGE=${{ matrix.php_base_image }}
+            IMAGICK_URL=${{ matrix.imagick_url }}
+            IMAGICK_SHA256=${{ matrix.imagick_sha256 }}
+            REDIS_URL=${{ matrix.redis_url }}
+            REDIS_SHA256=${{ matrix.redis_sha256 }}
+            APCU_URL=${{ matrix.apcu_url }}
+            APCU_SHA256=${{ matrix.apcu_sha256 }}
+            OCI_SOURCE=${{ github.server_url }}/${{ github.repository }}
+            OCI_REVISION=${{ github.sha }}
+            OCI_VERSION=${{ matrix.php_patch }}
+            OCI_CREATED=${{ needs.prepare.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ matrix.php_patch }}
+            org.opencontainers.image.created=${{ needs.prepare.outputs.created }}
+            org.opencontainers.image.licenses=GPL-2.0-only
+          cache-from: type=gha,scope=publisher-${{ matrix.php_minor }}
+          cache-to: type=gha,mode=max,scope=publisher-${{ matrix.php_minor }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Verify Docker Hub digest and platforms
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          PHP_MINOR: ${{ matrix.php_minor }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          published_digest="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
+          test "$published_digest" = "$BUILD_DIGEST"
+          docker buildx imagetools inspect --raw \
+            "${DOCKERHUB_REPOSITORY}@${BUILD_DIGEST}" > /tmp/published-index.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          index = json.loads(Path('/tmp/published-index.json').read_text())
+          platforms = {
+              (row.get('platform') or {}).get('os', '') + '/' +
+              (row.get('platform') or {}).get('architecture', '')
+              for row in index.get('manifests', [])
+          }
+          required = {'linux/amd64', 'linux/arm64'}
+          if not required.issubset(platforms):
+              raise SystemExit(f'missing required platforms: {sorted(required - platforms)}')
+          PY

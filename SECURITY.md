@@ -15,9 +15,9 @@ The active image lines are validated from the single `main` source trunk with re
 - `verify-published-manifest` checks the published Docker Hub tags for required multi-arch manifest entries.
 - The repository policy standardizes active matrix entries on the documented Imagick release baseline unless an explicit exception is documented.
 
-Dependency automation is fail-closed and disabled by default. The updater may propose only official PHP same-minor patch/digest changes and PECL patch changes allowed by `build/automation-policy.json`. Every generated pull request is reclassified from its exact diff; native auto-merge additionally requires the exact-head `docker-smoke` check from GitHub Actions App ID `15368`. Pull-request workflows have no registry credentials and cannot publish.
+Dependency automation is fail-closed and disabled by default. The updater may propose only official PHP same-minor patch/digest changes and PECL patch changes allowed by `build/automation-policy.json`. Every generated pull request is reclassified from its exact diff; native auto-merge additionally requires the protected exact-head `docker-smoke` check. Pull-request workflows have no registry credentials and cannot publish.
 
-Trusted-main auto-canary, when explicitly enabled, dispatches two immutable full-matrix canary runs and validates their exact source SHA, run attempts, consecutive run numbers, and evidence artifacts. It does not authorize production. PHP minor changes, support/EOL changes, runtime-contract changes, workflow permission changes, publisher changes, vulnerability exceptions, and production automation remain manual-review operations.
+After an eligible dependency-only change reaches protected `main`, the trusted `dependency-auto-publish` workflow builds all maintained PHP minors for `linux/amd64` and `linux/arm64`, pushes the four minor tags directly to Docker Hub, and verifies each digest and platform index. PHP minor-set changes, support/EOL changes, runtime-contract changes, workflow permission changes, publisher changes, and vulnerability exceptions remain manual-review operations.
 
 ## Reporting a vulnerability
 

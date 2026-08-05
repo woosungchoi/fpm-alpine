@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate whether a trusted main commit is eligible for image auto-canary."""
+"""Evaluate whether a trusted main commit is eligible for automatic publishing."""
 
 from __future__ import annotations
 

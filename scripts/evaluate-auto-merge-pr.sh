@@ -74,14 +74,5 @@ else
   reject "branch or author is not eligible"
 fi
 
-checks="$(gh api -H 'Accept: application/vnd.github+json' "repos/$repo/commits/$head_sha/check-runs?check_name=docker-smoke&filter=latest&per_page=100")"
-python3 -c '
-import json, sys
-row=json.load(sys.stdin)
-valid=[c for c in row.get("check_runs", []) if c.get("name")=="docker-smoke" and c.get("head_sha")==sys.argv[1] and c.get("app",{}).get("id")==15368 and c.get("status")=="completed" and c.get("conclusion")=="success"]
-if len(valid)!=1:
-    raise SystemExit("exact app-bound docker-smoke success not found")
-' "$head_sha" <<< "$checks" || reject "required docker-smoke evidence missing"
-
 printf '%s\t%s\n' "$pr" "$head_sha" >> "$output"
 printf 'auto_merge_eligible pr=%s head_sha=%s\n' "$pr" "$head_sha"

@@ -1,121 +1,98 @@
 name: dependency-auto-merge
 
 on:
-  schedule:
-    - cron: '17 * * * *'
-  repository_dispatch:
-    types: [dependency-auto-merge]
+  # Trusted-main code only; the job revalidates the exact successful smoke run
+  # and never checks out or executes pull-request code.
+  # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: ["smoke-test"]
+    types: [completed]
 
 permissions: {}
 
 concurrency:
-  group: dependency-auto-merge
-  cancel-in-progress: false
+  group: dependency-auto-merge-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
 
 jobs:
-  select:
+  enable-native-auto-merge:
     if: >-
-      ${{ github.ref == 'refs/heads/main' &&
-          (github.event_name == 'schedule' ||
-           (github.event_name == 'repository_dispatch' &&
-            github.event.action == 'dependency-auto-merge')) }}
+      ${{ vars.DEPENDENCY_AUTO_MERGE_ENABLED == 'true' &&
+          github.event.workflow_run.event == 'pull_request' &&
+          github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     permissions:
-      contents: read
-      pull-requests: read
-      checks: read
-    outputs:
-      eligible_count: ${{ steps.evaluate.outputs.eligible_count }}
+      actions: read
+      contents: write
+      pull-requests: write
     steps:
-      - name: Checkout trusted main
+      - name: Checkout trusted main workflow code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: List and preselect open dependency PRs
+      - name: Bind the successful smoke run to one same-repository PR
+        id: run
         env:
           GH_TOKEN: ${{ github.token }}
+          SMOKE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SMOKE_RUN_ID" > /tmp/smoke-run.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          run = json.loads(Path('/tmp/smoke-run.json').read_text())
+          expected_id = int(os.environ['SMOKE_RUN_ID'])
+          repository = os.environ['GITHUB_REPOSITORY']
+          required = {
+              'id': expected_id,
+              'path': '.github/workflows/smoke-test.yml',
+              'event': 'pull_request',
+              'status': 'completed',
+              'conclusion': 'success',
+          }
+          mismatches = [key for key, value in required.items() if run.get(key) != value]
+          if mismatches:
+              raise SystemExit('smoke run contract mismatch: ' + ', '.join(mismatches))
+          if (run.get('head_repository') or {}).get('full_name') != repository:
+              raise SystemExit('smoke run head repository is not canonical')
+          head_sha = run.get('head_sha')
+          if not isinstance(head_sha, str) or not re.fullmatch(r'[0-9a-f]{40}', head_sha):
+              raise SystemExit('smoke run head SHA is invalid')
+          pulls = run.get('pull_requests')
+          if not isinstance(pulls, list) or len(pulls) != 1:
+              raise SystemExit('smoke run must bind to exactly one pull request')
+          number = pulls[0].get('number') if isinstance(pulls[0], dict) else None
+          if type(number) is not int or number < 1:
+              raise SystemExit('smoke run pull request number is invalid')
+          print(f'pr_number={number}')
+          print(f'head_sha={head_sha}')
+          PY
+
+      - name: Validate dependency-only PR and enable native auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.run.outputs.pr_number }}
+          CHECKED_HEAD_SHA: ${{ steps.run.outputs.head_sha }}
         run: |
           set -euo pipefail
           mkdir -p auto-merge-selection
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
-            --json number,author,baseRefName,headRefName,headRepository,isCrossRepository,isDraft,reviewDecision \
-            > auto-merge-selection/open-prs.json
-          python3 scripts/select-auto-merge-prs.py \
-            --input auto-merge-selection/open-prs.json \
-            --repository "$GITHUB_REPOSITORY" \
-            --selected-output auto-merge-selection/preselected.txt \
-            --report-output auto-merge-selection/preselection.json
-
-      - name: Revalidate exact diffs and required check evidence
-        id: evaluate
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
           : > auto-merge-selection/eligible.tsv
-          while IFS= read -r pr; do
-            test -n "$pr" || continue
-            set +e
-            ./scripts/evaluate-auto-merge-pr.sh \
-              "$pr" "$GITHUB_REPOSITORY" auto-merge-selection/eligible.tsv
-            rc=$?
-            set -e
-            if [ "$rc" -eq 2 ]; then
-              continue
-            fi
-            [ "$rc" -eq 0 ] || exit "$rc"
-          done < auto-merge-selection/preselected.txt
-          count=$(wc -l < auto-merge-selection/eligible.tsv | tr -d ' ')
-          echo "eligible_count=$count" >> "$GITHUB_OUTPUT"
-
-      - name: Upload selection evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: auto-merge-selection-${{ github.run_id }}-${{ github.run_attempt }}
-          path: auto-merge-selection/
-          if-no-files-found: error
-
-  enable-native-auto-merge:
-    if: >-
-      ${{ github.ref == 'refs/heads/main' &&
-          needs.select.outputs.eligible_count != '0' &&
-          vars.DEPENDENCY_AUTO_MERGE_ENABLED == 'true' &&
-          (github.event_name == 'schedule' ||
-           (github.event_name == 'repository_dispatch' &&
-            github.event.action == 'dependency-auto-merge' &&
-            toJSON(github.event.client_payload.report_only) == 'false')) }}
-    needs: select
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      pull-requests: write
-      checks: read
-    steps:
-      - name: Download exact selection evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: auto-merge-selection-${{ github.run_id }}-${{ github.run_attempt }}
-          path: auto-merge-selection
-
-      - name: Rebind exact head and enable native auto-merge
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          while IFS=$'\t' read -r pr selected_sha; do
-            test -n "$pr" || continue
-            current=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr")
-            current_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])' <<< "$current")
-            current_state=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])' <<< "$current")
-            current_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["draft"]).lower())' <<< "$current")
-            test "$current_sha" = "$selected_sha"
-            test "$current_state" = open
-            test "$current_draft" = false
-            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash --match-head-commit "$selected_sha"
-          done < auto-merge-selection/eligible.tsv
+          ./scripts/evaluate-auto-merge-pr.sh \
+            "$PR_NUMBER" "$GITHUB_REPOSITORY" auto-merge-selection/eligible.tsv
+          test "$(wc -l < auto-merge-selection/eligible.tsv | tr -d ' ')" = 1
+          IFS=$'\t' read -r eligible_pr eligible_sha < auto-merge-selection/eligible.tsv
+          test "$eligible_pr" = "$PR_NUMBER"
+          test "$eligible_sha" = "$CHECKED_HEAD_SHA"
+          gh pr merge "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --auto \
+            --squash \
+            --match-head-commit "$CHECKED_HEAD_SHA"

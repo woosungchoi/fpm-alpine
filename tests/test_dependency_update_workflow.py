@@ -84,6 +84,7 @@ class UpdaterWorkflowTests(unittest.TestCase):
         create_index = text.index("gh pr create")
         restore_index = text.index('git switch --detach "$source_sha"')
         self.assertGreater(restore_index, create_index)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", text)
 
     def test_every_action_is_full_sha_pinned(self) -> None:
         text = WORKFLOW.read_text()

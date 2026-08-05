@@ -46,19 +46,27 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         self.assertEqual(trigger["workflow_run"]["types"], ["completed"])
         self.assertEqual(data["permissions"], {})
         job = data["jobs"]["enable-native-auto-merge"]
+        self.assertEqual(job["environment"], "dependency-updater")
         self.assertEqual(
             job["permissions"],
-            {"actions": "read", "contents": "write", "pull-requests": "write"},
+            {"actions": "read", "contents": "read", "pull-requests": "read"},
         )
         self.assertIn("DEPENDENCY_AUTO_MERGE_ENABLED", job["if"])
         self.assertIn("github.event.workflow_run.conclusion == 'success'", job["if"])
         rendered = yaml.safe_dump(job, sort_keys=False)
         self.assertIn(".github/workflows/smoke-test.yml", rendered)
+        self.assertIn("actions/create-github-app-token@", rendered)
+        self.assertIn("vars.DEPENDENCY_UPDATE_APP_ID", rendered)
+        self.assertIn("secrets.DEPENDENCY_UPDATE_APP_PRIVATE_KEY", rendered)
+        self.assertIn("permission-contents: write", rendered)
+        self.assertIn("permission-pull-requests: write", rendered)
         self.assertIn("evaluate-auto-merge-pr.sh", rendered)
-        self.assertIn("gh pr merge", rendered)
-        self.assertIn("--auto", rendered)
-        self.assertIn("--match-head-commit", rendered)
-        self.assertNotIn("--admin", rendered)
+        merge_step = next(step for step in job["steps"] if step.get("name") == "Enable native auto-merge")
+        self.assertEqual(merge_step["env"]["GH_TOKEN"], "${{ steps.app-token.outputs.token }}")
+        self.assertIn("gh pr merge", merge_step["run"])
+        self.assertIn("--auto", merge_step["run"])
+        self.assertIn("--match-head-commit", merge_step["run"])
+        self.assertNotIn("--admin", merge_step["run"])
         self.assertNotIn("pull_request_target", text)
         self.assertNotIn("schedule:", text)
         self.assertNotIn("repository_dispatch:", text)

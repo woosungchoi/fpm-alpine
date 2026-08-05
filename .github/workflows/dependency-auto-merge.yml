@@ -21,11 +21,12 @@ jobs:
           github.event.workflow_run.event == 'pull_request' &&
           github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    environment: dependency-updater
     timeout-minutes: 15
     permissions:
       actions: read
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout trusted main workflow code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,7 +77,7 @@ jobs:
           print(f'head_sha={head_sha}')
           PY
 
-      - name: Validate dependency-only PR and enable native auto-merge
+      - name: Validate dependency-only PR
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.run.outputs.pr_number }}
@@ -91,6 +92,23 @@ jobs:
           IFS=$'\t' read -r eligible_pr eligible_sha < auto-merge-selection/eligible.tsv
           test "$eligible_pr" = "$PR_NUMBER"
           test "$eligible_sha" = "$CHECKED_HEAD_SHA"
+
+      - name: Create updater app token
+        id: app-token
+        uses: actions/create-github-app-token@3c15e9b31b9dbf31c6533bf0d0c4aceca90e08cf # v2.2.1
+        with:
+          app-id: ${{ vars.DEPENDENCY_UPDATE_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Enable native auto-merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.run.outputs.pr_number }}
+          CHECKED_HEAD_SHA: ${{ steps.run.outputs.head_sha }}
+        run: |
+          set -euo pipefail
           gh pr merge "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --auto \

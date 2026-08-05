@@ -1,0 +1,111 @@
+name: legacy-cutover-lease
+
+on:
+  repository_dispatch:
+    types: [legacy-cutover-lease]
+
+permissions: {}
+
+concurrency:
+  group: legacy-cutover-lease-${{ github.event.client_payload.source_sha }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    if: >-
+      github.event.action == 'legacy-cutover-lease' &&
+      github.event.sender.id == 5674610 &&
+      github.event.sender.login == 'woosungchoi' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+      EXPECTED_EVIDENCE_SHA256: ${{ github.event.client_payload.evidence_sha256 }}
+      LEGACY_EVIDENCE_B64: ${{ github.event.client_payload.evidence_b64 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind lease to current protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$current_main" = "$EXPECTED_SOURCE_SHA"
+
+      - name: Validate and materialize exact fresh lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cutover-lease
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          raw = base64.b64decode(os.environ["LEGACY_EVIDENCE_B64"], validate=True)
+          evidence = json.loads(raw)
+          with urllib.request.urlopen(
+              "https://hub.docker.com/v2/repositories/woosungchoi/fpm-alpine/",
+              timeout=20,
+          ) as response:
+              live = json.load(response)
+
+          expected_hooks = [{
+              "id": 402842509,
+              "name": "web",
+              "active": True,
+              "events": ["pull_request", "push"],
+              "url_host": "api.snyk.io",
+              "url_kind": "github-webhook-uuid",
+          }]
+          dockerhub = evidence.get("dockerhub") or {}
+          github = evidence.get("github") or {}
+          if github.get("active_hooks") != expected_hooks:
+              raise SystemExit("fresh lease hook allowlist mismatch")
+          if (
+              live.get("namespace") != "woosungchoi"
+              or live.get("name") != "fpm-alpine"
+              or type(live.get("status")) is not int
+              or live.get("status") != 1
+              or live.get("is_automated") is not False
+              or dockerhub.get("public_is_automated") is not False
+              or dockerhub.get("repository_last_updated") != live.get("last_updated")
+              or dockerhub.get("queue_basis")
+              != "automatic builds disabled and no source-capable GitHub legacy publisher hook"
+          ):
+              raise SystemExit("fresh lease Docker Hub metadata mismatch")
+
+          Path("cutover-lease/cutover-evidence.json").write_bytes(raw)
+          Path("cutover-lease/cutover-evidence.sha256").write_text(
+              os.environ["EXPECTED_EVIDENCE_SHA256"] + "\n"
+          )
+          PY
+          ./scripts/validate-legacy-cutover-evidence.py \
+            "$EXPECTED_SOURCE_SHA" \
+            "$EXPECTED_EVIDENCE_SHA256"
+          test "$(sha256sum cutover-lease/cutover-evidence.json | cut -d' ' -f1)" = \
+            "$EXPECTED_EVIDENCE_SHA256"
+
+      - name: Upload immutable fresh lease
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: legacy-cutover-lease-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cutover-lease/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false

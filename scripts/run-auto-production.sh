@@ -4,21 +4,24 @@ set -euo pipefail
 source_sha="${1:?source SHA required}"
 authorization_file="${2:?authorization JSON required}"
 output="${3:?output JSON required}"
+requested_minor="${4:-}"
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
+: "${GITHUB_RUN_ATTEMPT:?GITHUB_RUN_ATTEMPT is required}"
 [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid source SHA" >&2; exit 64; }
+[[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || { echo "invalid controller run attempt" >&2; exit 64; }
 [ -f "$authorization_file" ] || { echo "authorization evidence is missing" >&2; exit 64; }
 [ "$(git rev-parse HEAD)" = "$source_sha" ] || { echo "checkout/source mismatch" >&2; exit 65; }
 
 values="$(mktemp)"
 trap 'rm -f "$values"' EXIT
-python3 - "$authorization_file" "$output" "$source_sha" > "$values" <<'PY'
+python3 - "$authorization_file" "$output" "$source_sha" "$requested_minor" > "$values" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
-authorization_path, output_path, source_sha = sys.argv[1:]
+authorization_path, output_path, source_sha, requested_minor = sys.argv[1:]
 payload = json.load(open(authorization_path))
 positive = lambda value: type(value) is int and value > 0
 allowed = ["8.2", "8.3", "8.4", "8.5"]
@@ -31,6 +34,12 @@ if not positive(payload.get("upstreamRunId")) or not positive(payload.get("upstr
 affected = payload.get("affectedMinors")
 if type(affected) is not list or not affected or affected != [minor for minor in allowed if minor in set(affected)] or len(set(affected)) != len(affected):
     raise SystemExit("invalid authorized minor set")
+if requested_minor:
+    if requested_minor not in affected:
+        raise SystemExit("requested minor is outside auto-production authorization")
+    selected = [requested_minor]
+else:
+    selected = affected
 for label in ("priorCanary", "currentCanary"):
     row = payload.get(label)
     if type(row) is not dict or set(row) != {"runId", "runAttempt"} or not all(positive(row.get(key)) for key in row):
@@ -42,7 +51,8 @@ report = {
     "sourceCommit": source_sha,
     "upstreamRunId": payload["upstreamRunId"],
     "upstreamRunAttempt": payload["upstreamRunAttempt"],
-    "affectedMinors": affected,
+    "authorizedMinors": affected,
+    "affectedMinors": selected,
     "productionRuns": [],
 }
 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +63,7 @@ print(payload["priorCanary"]["runId"])
 print(payload["priorCanary"]["runAttempt"])
 print(payload["currentCanary"]["runId"])
 print(payload["currentCanary"]["runAttempt"])
-for minor in affected:
+for minor in selected:
     print(minor)
 PY
 mapfile -t fields < "$values"
@@ -70,12 +80,13 @@ update_report() {
   local minor="$1"
   local run_id="$2"
   local status="$3"
-  python3 - "$output" "$minor" "$run_id" "$status" <<'PY'
+  local correlation="$4"
+  python3 - "$output" "$minor" "$run_id" "$status" "$correlation" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-path, minor, run_id, status = sys.argv[1:]
+path, minor, run_id, status, correlation = sys.argv[1:]
 target = Path(path)
 payload = json.loads(target.read_text())
 rows = payload["productionRuns"]
@@ -87,6 +98,7 @@ if not matching:
     rows.append(row)
 row["runId"] = int(run_id)
 row["status"] = status
+row["correlation"] = correlation
 temporary = target.with_suffix(".tmp")
 temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 temporary.replace(target)
@@ -157,11 +169,11 @@ for minor in "${affected_minors[@]}"; do
     echo "trusted main moved before production dispatch for $minor" >&2
     exit 66
   }
-  correlation="auto-prod-${source_sha:0:12}-${upstream_run_id}-${minor}"
+  correlation="auto-prod-${source_sha:0:12}-${upstream_run_id}-${upstream_run_attempt}-${GITHUB_RUN_ATTEMPT}-${minor}"
   existing="$(gh api "repos/$repo/actions/workflows/publish.yml/runs?event=workflow_dispatch&branch=main&per_page=100" \
     --jq "[.workflow_runs[] | select(.display_title == \"publish-production-${correlation}\")][0].id // empty")"
   [ -z "$existing" ] || { echo "production correlation already exists: $correlation" >&2; exit 67; }
-  update_report "$minor" 0 dispatching
+  update_report "$minor" 0 dispatching "$correlation"
   if ! gh workflow run publish.yml --repo "$repo" --ref main \
     -f channel=production \
     -f version="$minor" \
@@ -174,25 +186,25 @@ for minor in "${affected_minors[@]}"; do
     -f legacy_publisher_disabled=true \
     -f auto_promotion_run_id="$upstream_run_id" \
     -f auto_promotion_run_attempt="$upstream_run_attempt"; then
-    update_report "$minor" 0 failed
+    update_report "$minor" 0 failed "$correlation"
     exit 68
   fi
   if ! run_id="$(wait_for_run "$correlation")"; then
-    update_report "$minor" 0 failed
+    update_report "$minor" 0 failed "$correlation"
     exit 69
   fi
-  update_report "$minor" "$run_id" running
+  update_report "$minor" "$run_id" running "$correlation"
   watch_status=0
   timeout 4h gh run watch "$run_id" --repo "$repo" --exit-status || watch_status=$?
   if ! validate_run "$run_id" "$correlation"; then
-    update_report "$minor" "$run_id" failed
+    update_report "$minor" "$run_id" failed "$correlation"
     printf 'production run failed read-back validation for %s (watch exit %s)\n' "$minor" "$watch_status" >&2
     exit 71
   fi
   if [ "$watch_status" -ne 0 ]; then
     printf 'watcher exited %s but exact production run read-back succeeded for %s\n' "$watch_status" "$minor" >&2
   fi
-  update_report "$minor" "$run_id" success
+  update_report "$minor" "$run_id" success "$correlation"
 done
 
 printf 'auto_production=PASS source=%s affected=%s\n' "$source_sha" "${affected_minors[*]}"

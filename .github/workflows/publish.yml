@@ -142,7 +142,6 @@ jobs:
             test "$LEGACY_DISABLED_VARIABLE" = true
             if [ "$automatic_production" = true ]; then
               test -z "$LEGACY_EVIDENCE_SHA256_INPUT"
-              [[ "$LEGACY_EVIDENCE_SHA256_VARIABLE" =~ ^[0-9a-f]{64}$ ]]
               gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${AUTO_PROMOTION_RUN_ID}" > /tmp/auto-promotion-run.json
               python3 - /tmp/auto-promotion-run.json "$AUTO_PROMOTION_RUN_ID" "$AUTO_PROMOTION_RUN_ATTEMPT" "$SOURCE_SHA" <<'PY'
           import json
@@ -193,10 +192,6 @@ jobs:
           if failed:
               raise SystemExit("automatic canary authorization mismatch: " + ", ".join(failed))
           PY
-              LEGACY_PUBLISHER_DISABLED="$LEGACY_DISABLED_VARIABLE" \
-                ./scripts/validate-settled-publisher-state.py \
-                  --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256_VARIABLE" \
-                  --repository woosungchoi/fpm-alpine
             else
               [[ "$LEGACY_EVIDENCE_SHA256_INPUT" =~ ^[0-9a-f]{64}$ ]]
               test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
@@ -517,6 +512,7 @@ jobs:
     environment: ${{ needs.prepare.outputs.production_environment }}
     timeout-minutes: 90
     permissions:
+      actions: read
       contents: read
       packages: write
     steps:
@@ -550,6 +546,7 @@ jobs:
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
           LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
           AUTOMATIC_PRODUCTION: ${{ needs.prepare.outputs.automatic_production }}
+          GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -674,9 +671,34 @@ jobs:
               update_evidence cutover_validation_status '"in_progress"'
               set +e
               if [ "$AUTOMATIC_PRODUCTION" = true ]; then
-                ./scripts/validate-settled-publisher-state.py \
-                  --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256_VARIABLE" \
-                  --repository woosungchoi/fpm-alpine
+                current_main="$(gh api \
+                  "repos/$GITHUB_REPOSITORY/git/ref/heads/main" \
+                  --jq '.object.sha')"
+                test "$current_main" = "$EXPECTED_SOURCE_SHA" || {
+                  echo "automatic production source is no longer current main" >&2
+                  exit 66
+                }
+                lock_sha="$(gh api \
+                  "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+                  --jq '.object.sha')"
+                test "$lock_sha" = "$EXPECTED_SOURCE_SHA" || {
+                  echo "automatic production conveyor lock moved" >&2
+                  exit 66
+                }
+                ./scripts/require-fresh-cutover-lease.sh \
+                  "$EXPECTED_SOURCE_SHA" \
+                  "$evidence_dir/cutover-lease"
+                current_main="$(gh api \
+                  "repos/$GITHUB_REPOSITORY/git/ref/heads/main" \
+                  --jq '.object.sha')"
+                lock_sha="$(gh api \
+                  "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+                  --jq '.object.sha')"
+                test "$current_main" = "$EXPECTED_SOURCE_SHA" && \
+                  test "$lock_sha" = "$EXPECTED_SOURCE_SHA" || {
+                    echo "automatic production trust boundary moved after lease validation" >&2
+                    exit 66
+                  }
               else
                 test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE" && \
                   ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
@@ -861,6 +883,7 @@ jobs:
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
           LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
           AUTOMATIC_PRODUCTION: ${{ needs.prepare.outputs.automatic_production }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           previous_dockerhub="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
@@ -878,9 +901,31 @@ jobs:
             "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
 
           if [ "$AUTOMATIC_PRODUCTION" = true ]; then
-            ./scripts/validate-settled-publisher-state.py \
-              --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256_VARIABLE" \
-              --repository woosungchoi/fpm-alpine
+            current_main="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/heads/main" \
+              --jq '.object.sha')"
+            test "$current_main" = "$EXPECTED_SOURCE_SHA" || {
+              echo "automatic production source is no longer current main" >&2
+              exit 66
+            }
+            lock_sha="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+              --jq '.object.sha')"
+            test "$lock_sha" = "$EXPECTED_SOURCE_SHA" || {
+              echo "automatic production conveyor lock moved" >&2
+              exit 66
+            }
+            ./scripts/require-fresh-cutover-lease.sh \
+              "$EXPECTED_SOURCE_SHA" \
+              "publisher-reports/cutover-lease-${PHP_MINOR}"
+            current_main="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/heads/main" \
+              --jq '.object.sha')"
+            lock_sha="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+              --jq '.object.sha')"
+            test "$current_main" = "$EXPECTED_SOURCE_SHA"
+            test "$lock_sha" = "$EXPECTED_SOURCE_SHA"
           else
             test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
             ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"

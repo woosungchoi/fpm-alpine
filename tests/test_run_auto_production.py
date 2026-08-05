@@ -23,6 +23,7 @@ class AutoProductionRunnerTests(unittest.TestCase):
         current_main: str = SOURCE,
         fail_minor: str = "",
         transient_watch_minor: str = "",
+        requested_minor: str = "",
     ) -> tuple[subprocess.CompletedProcess[str], list[str], dict]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -110,6 +111,7 @@ class AutoProductionRunnerTests(unittest.TestCase):
                 "EXPECTED_SOURCE": SOURCE,
                 "GITHUB_REPOSITORY": "woosungchoi/fpm-alpine",
                 "GH_TOKEN": "test-token",
+                "GITHUB_RUN_ATTEMPT": "1",
             }
             result = subprocess.run(
                 [
@@ -117,17 +119,23 @@ class AutoProductionRunnerTests(unittest.TestCase):
                     SOURCE,
                     str(authorization),
                     str(output),
+                    requested_minor,
                 ],
                 cwd=ROOT,
                 env=env,
                 text=True,
                 capture_output=True,
             )
-            dispatched = [
-                json.loads(line)["minor"]
-                for line in (state / "dispatched").read_text().splitlines()
-                if line
-            ]
+            dispatched_path = state / "dispatched"
+            dispatched = (
+                [
+                    json.loads(line)["minor"]
+                    for line in dispatched_path.read_text().splitlines()
+                    if line
+                ]
+                if dispatched_path.exists()
+                else []
+            )
             report = json.loads(output.read_text()) if output.exists() else {}
             return result, dispatched, report
 
@@ -136,6 +144,10 @@ class AutoProductionRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(dispatched, ["8.2", "8.5"])
         self.assertEqual([row["minor"] for row in report["productionRuns"]], dispatched)
+        self.assertEqual(
+            report["productionRuns"][0]["correlation"],
+            f"auto-prod-{SOURCE[:12]}-9001-2-1-8.2",
+        )
         self.assertTrue(all(row["status"] == "success" for row in report["productionRuns"]))
 
     def test_stops_before_next_minor_after_failure(self) -> None:
@@ -162,6 +174,24 @@ class AutoProductionRunnerTests(unittest.TestCase):
         self.assertTrue(
             all(row["status"] == "success" for row in report["productionRuns"])
         )
+
+    def test_dispatches_only_the_requested_authorized_release_unit(self) -> None:
+        result, dispatched, report = self.run_controller(
+            ["8.2", "8.3", "8.4", "8.5"], requested_minor="8.4"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(dispatched, ["8.4"])
+        self.assertEqual(report["affectedMinors"], ["8.4"])
+        self.assertEqual(
+            report["authorizedMinors"], ["8.2", "8.3", "8.4", "8.5"]
+        )
+
+    def test_rejects_requested_release_unit_outside_authorization(self) -> None:
+        result, dispatched, _ = self.run_controller(
+            ["8.2"], requested_minor="8.5"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(dispatched, [])
 
 
 if __name__ == "__main__":

@@ -20,19 +20,26 @@ pulls_file="$(mktemp)"
 checks_file="$(mktemp)"
 trap 'rm -f "$pulls_file" "$checks_file"' EXIT
 printf '%s' "$pulls" > "$pulls_file"
-python3 - "$source_sha" "$output" "$pulls_file" <<'PY'
+python3 - "$source_sha" "$output" "$pulls_file" "$repo" <<'PY'
 import json, re, sys
-source_sha, output, pulls_file = sys.argv[1:]
+source_sha, output, pulls_file, canonical_repo = sys.argv[1:]
 rows = json.load(open(pulls_file))
-valid = [row for row in rows if row.get("merged_at") and row.get("merge_commit_sha") == source_sha]
+valid = [
+    row
+    for row in rows
+    if row.get("merged_at")
+    and row.get("merge_commit_sha") == source_sha
+    and row.get("base", {}).get("ref") == "main"
+]
 if len(valid) != 1:
     raise SystemExit("source commit must bind to exactly one merged PR")
 row = valid[0]
 head = row.get("head") or {}
-repo = head.get("repo") or {}
+head_repo = head.get("repo") or {}
+base_repo = (row.get("base") or {}).get("repo") or {}
 author = (row.get("user") or {}).get("login", "")
 branch = head.get("ref", "")
-if repo.get("full_name") != (row.get("base", {}).get("repo") or {}).get("full_name"):
+if head_repo.get("full_name") != canonical_repo or base_repo.get("full_name") != canonical_repo:
     raise SystemExit("merged dependency PR must be same-repository")
 if not re.fullmatch(r"automation/(?:base-8\.[2-5]|pecl-(?:imagick|redis|apcu))-[0-9a-f]{12}", branch):
     raise SystemExit("merged PR branch is not an updater branch")
@@ -48,6 +55,8 @@ evidence = {
     "pullRequestHeadSha": head_sha,
     "author": author,
     "headRef": branch,
+    "baseRef": "main",
+    "baseRepository": canonical_repo,
 }
 open(output, "w").write(json.dumps(evidence, indent=2) + "\n")
 print(head_sha)

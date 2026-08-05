@@ -109,25 +109,98 @@ jobs:
           name: dependency-candidates-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dependency-candidates
 
-      - name: Create the next eligible pull request
+      - name: Select one eligible candidate
+        id: candidate
         env:
           CANDIDATE_FILE: ${{ runner.temp }}/dependency-candidates/candidates.json
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        shell: bash
         run: |
           set -euo pipefail
-          gh auth setup-git
-          python3 - <<'PY' > /tmp/eligible-candidate-keys
+          candidate_key="$(python3 - <<'PY'
           import json
           import os
           from pathlib import Path
           data = json.loads(Path(os.environ['CANDIDATE_FILE']).read_text())
           eligible = [row for row in data.get('candidates', []) if row.get('eligible') is True]
-          if eligible:
-              print(eligible[0]['key'])
+          print(eligible[0]['key'] if eligible else '')
           PY
-          candidate_key=""
-          IFS= read -r candidate_key < /tmp/eligible-candidate-keys || true
-          if [ -n "$candidate_key" ]; then
-            ./scripts/create-dependency-update-pr.sh \
-              "$CANDIDATE_FILE" "$candidate_key"
+          )"
+          printf 'candidate_key=%s\n' "$candidate_key" >> "$GITHUB_OUTPUT"
+
+      - name: Acquire durable conveyor lock
+        id: lock
+        if: ${{ steps.candidate.outputs.candidate_key != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          open_automation_prs="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --limit 100 \
+            --json headRefName \
+            --jq '[.[] | select(.headRefName | test("^automation/(?:base-8\\.[2-5]|pecl-(?:imagick|redis|apcu))-[0-9a-f]{12}$"))] | length')"
+          test "$open_automation_prs" = 0 || {
+            echo "an automation dependency PR exists without a usable conveyor lock" >&2
+            exit 69
+          }
+          if gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+            >/dev/null 2>&1; then
+            echo 'acquired=false' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          payload="$(mktemp)"
+          trap 'rm -f "$payload"' EXIT
+          python3 - "$payload" "$GITHUB_SHA" <<'PY'
+          import json, sys
+          json.dump({"ref": "refs/heads/automation/conveyor-lock", "sha": sys.argv[2]}, open(sys.argv[1], "w"))
+          PY
+          if ! gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/git/refs" \
+            --input "$payload" \
+            >/dev/null; then
+            if gh api \
+              "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+              >/dev/null 2>&1; then
+              echo 'acquired=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            exit 70
+          fi
+          lock_sha="$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+            --jq '.object.sha')"
+          test "$lock_sha" = "$GITHUB_SHA"
+          echo 'acquired=true' >> "$GITHUB_OUTPUT"
+
+      - name: Create one update pull request
+        if: ${{ steps.lock.outputs.acquired == 'true' }}
+        env:
+          CANDIDATE_FILE: ${{ runner.temp }}/dependency-candidates/candidates.json
+          CANDIDATE_KEY: ${{ steps.candidate.outputs.candidate_key }}
+          PROPOSAL_DIR: ${{ runner.temp }}/dependency-proposal
+          DEPENDENCY_UPDATE_APP_ID: ${{ vars.DEPENDENCY_UPDATE_APP_ID }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          ./scripts/create-dependency-update-pr.sh \
+            "$CANDIDATE_FILE" \
+            "$CANDIDATE_KEY" \
+            "$PROPOSAL_DIR"
+
+      - name: Upload immutable dependency proposal
+        if: ${{ steps.lock.outputs.acquired == 'true' && success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-proposal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dependency-proposal/proposal.json
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false

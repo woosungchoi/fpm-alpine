@@ -7,7 +7,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: dependency-auto-production
+  group: dependency-auto-production-${{ github.event.client_payload.upstream_run_id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -23,6 +23,7 @@ jobs:
     outputs:
       eligible: ${{ steps.select.outputs.eligible }}
       source_sha: ${{ steps.select.outputs.source_sha }}
+      affected_minors: ${{ steps.contract.outputs.affected_minors }}
     steps:
       - name: Checkout exact dispatched source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -129,6 +130,7 @@ jobs:
             --dir upstream-canary
 
       - name: Bind production authorization to exact upstream evidence
+        id: contract
         if: ${{ steps.select.outputs.eligible == 'true' }}
         env:
           UPSTREAM_RUN_ID: ${{ github.event.client_payload.upstream_run_id }}
@@ -141,6 +143,18 @@ jobs:
             --upstream-run-id "$UPSTREAM_RUN_ID" \
             --upstream-run-attempt "$UPSTREAM_RUN_ATTEMPT" \
             --output auto-production-evidence/authorization.json
+          python3 - auto-production-evidence/authorization.json "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          path, output = sys.argv[1:]
+          payload = json.load(open(path))
+          affected = payload.get("affectedMinors")
+          if not isinstance(affected, list) or not affected:
+              raise SystemExit("production authorization has no affected minors")
+          with open(output, "a") as handle:
+              handle.write("affected_minors=" + json.dumps(affected, separators=(",", ":")) + "\n")
+          PY
 
       - name: Upload run-bound production authorization
         if: ${{ steps.select.outputs.eligible == 'true' }}
@@ -155,6 +169,11 @@ jobs:
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        minor: ${{ fromJSON(needs.authorize.outputs.affected_minors) }}
     permissions:
       actions: write
       contents: read
@@ -172,47 +191,71 @@ jobs:
           name: auto-production-authorization-${{ needs.authorize.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: auto-production-evidence
 
-      - name: Recheck current source and settled legacy publisher
+      - name: Recheck current source, conveyor lock, and fresh cutover lease
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}
-          LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
-          LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
-          LEGACY_EVIDENCE_SHA256: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
+          REQUESTED_MINOR: ${{ matrix.minor }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
-          ./scripts/validate-settled-publisher-state.py \
-            --expected-evidence-sha256 "$LEGACY_EVIDENCE_SHA256" \
-            --repository woosungchoi/fpm-alpine
+          test "$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/automation/conveyor-lock" \
+            --jq '.object.sha')" = "$SOURCE_SHA"
+          ./scripts/require-fresh-cutover-lease.sh \
+            "$SOURCE_SHA" \
+            "auto-production-evidence/cutover-lease-${REQUESTED_MINOR}"
 
       - name: Dispatch and verify affected production promotions sequentially
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}
+          REQUESTED_MINOR: ${{ matrix.minor }}
         run: |
           ./scripts/run-auto-production.sh \
             "$SOURCE_SHA" \
             auto-production-evidence/authorization.json \
-            auto-production-evidence/production-runs.json
+            "auto-production-evidence/production-runs-${REQUESTED_MINOR}.json" \
+            "$REQUESTED_MINOR"
 
-      - name: Dispatch discovery for the next dependency candidate
+      - name: Upload automatic production release-unit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auto-production-unit-${{ matrix.minor }}-${{ needs.authorize.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auto-production-evidence/
+          if-no-files-found: error
+
+  continue-conveyor:
+    needs: [authorize, dispatch-production]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Release durable conveyor lock and dispatch next candidate
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.authorize.outputs.source_sha }}
         run: |
           set -euo pipefail
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$SOURCE_SHA"
+          lock_endpoint="repos/$GITHUB_REPOSITORY/git/refs/heads/automation/conveyor-lock"
+          test "$(gh api "$lock_endpoint" --jq '.object.sha')" = "$SOURCE_SHA"
+          gh api --method DELETE "$lock_endpoint" --silent
+          lock_error="$(mktemp)"
+          trap 'rm -f "$lock_error"' EXIT
+          if gh api "$lock_endpoint" >/dev/null 2>"$lock_error"; then
+            echo "dependency conveyor lock still exists after deletion" >&2
+            exit 70
+          fi
+          grep -Fq 'HTTP 404' "$lock_error" || {
+            cat "$lock_error" >&2
+            exit 70
+          }
           gh workflow run dependency-update-pr.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
             -f dry_run=false
-
-      - name: Upload automatic production controller evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: auto-production-controller-${{ needs.authorize.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: auto-production-evidence/
-          if-no-files-found: error

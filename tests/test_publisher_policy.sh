@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # Source-code assertions intentionally match literal shell expressions.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,7 +12,7 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 assert_file .github/workflows/publish.yml
-for script in scripts/verify-published-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/validate-auto-production-evidence.py scripts/validate-settled-publisher-state.py scripts/run-auto-production.sh scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
+for script in scripts/verify-published-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/validate-auto-production-evidence.py scripts/select-fresh-cutover-lease.py scripts/require-fresh-cutover-lease.sh scripts/run-auto-production.sh scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
   assert_file "$script"
   assert_executable "$script"
 done
@@ -62,7 +63,7 @@ assert jobs['production']['permissions'] == {'actions': 'read', 'contents': 'rea
 assert jobs['production']['environment'] == '${{ needs.prepare.outputs.production_environment }}'
 assert jobs['production-preflight']['permissions'] == {'actions': 'read', 'contents': 'read'}
 assert jobs['bootstrap-ghcr-rollback']['environment'] == '${{ needs.prepare.outputs.production_environment }}'
-assert jobs['bootstrap-ghcr-rollback']['permissions'] == {'contents': 'read', 'packages': 'write'}
+assert jobs['bootstrap-ghcr-rollback']['permissions'] == {'actions': 'read', 'contents': 'read', 'packages': 'write'}
 assert jobs['report-failure']['permissions'] == {'actions': 'read', 'contents': 'read', 'issues': 'write'}
 
 canary = yaml.safe_dump(jobs['canary'], sort_keys=False)
@@ -97,7 +98,8 @@ assert 'legacy cutover evidence is not within the 15-minute lease' in validator_
 assert 'Docker Hub legacy publisher is not quiescent' in validator_text
 assert 'publisher-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}' in text
 assert text.count('./scripts/validate-legacy-cutover-evidence.py') == 3
-assert text.count('./scripts/validate-settled-publisher-state.py') == 3
+assert text.count('./scripts/require-fresh-cutover-lease.sh') >= 2
+assert 'validate-settled-publisher-state.py' not in text
 assert 'fpm-auto-production' in text
 assert 'DEPENDENCY_AUTO_PRODUCTION_ENABLED' in text
 assert 'validate-auto-production-evidence.py' in text
@@ -106,10 +108,12 @@ for field in ('source_sha', 'dockerhub_resolution_status', 'dockerhub_inspect_ex
     assert field in text, field
 bootstrap_run = next(step['run'] for step in jobs['bootstrap-ghcr-rollback']['steps'] if step.get('name') == 'Establish idempotent GHCR rollback baselines')
 assert bootstrap_run.index('./scripts/validate-legacy-cutover-evidence.py') < bootstrap_run.index('docker buildx imagetools create')
-assert bootstrap_run.index('./scripts/validate-settled-publisher-state.py') < bootstrap_run.index('docker buildx imagetools create')
+assert bootstrap_run.index('./scripts/require-fresh-cutover-lease.sh') < bootstrap_run.index('docker buildx imagetools create')
 promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified GHCR canary without rebuilding')
 assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
-assert promotion_run.index('./scripts/validate-settled-publisher-state.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
+assert promotion_run.index('./scripts/require-fresh-cutover-lease.sh') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
+assert promotion_run.index('git/ref/heads/main') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
+assert 'automatic production source is no longer current main' in promotion_run
 production_step_names = [step.get('name') for step in jobs['production']['steps']]
 assert 'Re-verify exact canary subjects before promotion' not in production_step_names
 assert production_step_names.index('Promote verified GHCR canary without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
@@ -612,8 +616,10 @@ assert_contains .github/workflows/published-runtime-smoke.yml 'fetch-tags: true'
 assert_contains scripts/verify-rollback-image.sh 'rollback registry platform config/layer parity verified'
 assert_not_contains scripts/verify-rollback-image.sh 'build/versions.json'
 assert_contains scripts/rollback-moving-aliases.sh 'both registries were attempted'
-assert_contains scripts/rollback-moving-aliases.sh 'both registry moving aliases restored from durable GHCR and verified'
-assert_contains scripts/rollback-moving-aliases.sh 'source_subject="${GHCR_REPOSITORY}@${PREVIOUS_GHCR_DIGEST}"'
+assert_contains scripts/rollback-moving-aliases.sh 'both registry moving aliases restored from registry-specific immutable subjects and verified'
+assert_contains scripts/rollback-moving-aliases.sh 'dockerhub_source="${dockerhub_repository}@${previous_dockerhub_digest}"'
+assert_contains scripts/rollback-moving-aliases.sh 'ghcr_source="${ghcr_repository}@${previous_ghcr_digest}"'
+assert_not_contains scripts/rollback-moving-aliases.sh 'source_subject="${GHCR_REPOSITORY}@${PREVIOUS_GHCR_DIGEST}"'
 assert_contains scripts/rollback-moving-aliases.sh 'COSIGN_SIGN_DESTINATION'
 assert_contains scripts/report-manifest.sh 'GitHub Actions publisher subject; verification is digest-qualified.'
 
@@ -807,6 +813,8 @@ cat > "$mock_bin/docker" <<'SH'
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "${MOCK_DOCKER_LOG:?}"
+dockerhub_digest="${ROLLBACK_DOCKERHUB_DIGEST:-${ROLLBACK_DIGEST:?}}"
+ghcr_digest="${ROLLBACK_GHCR_DIGEST:-${ROLLBACK_DIGEST:?}}"
 if [ "${1:-}" = buildx ] && [ "${2:-}" = imagetools ] && [ "${3:-}" = create ]; then
   if [ "${MOCK_ROLLBACK_DH_FAIL:-0}" = 1 ] && [[ "$*" == *dockerhub.example/fpm:8.5* ]]; then
     exit 1
@@ -820,7 +828,7 @@ if [ "${1:-}" = buildx ] && [ "${2:-}" = imagetools ] && [ "${3:-}" = inspect ];
   ref="${*: -1}"
   if [ "${MOCK_FULL_SUCCESS:-0}" = 1 ] && [[ " $* " == *" --raw "* ]]; then
     case "$ref" in
-      *@"${ROLLBACK_DIGEST:?}")
+      *@"${dockerhub_digest}"|*@"${ghcr_digest}")
         printf '{"manifests":[{"digest":"sha256:%064d","platform":{"os":"linux","architecture":"amd64"}},{"digest":"sha256:%064d","platform":{"os":"linux","architecture":"arm64"}}]}\n' 2 3
         ;;
       *@sha256:*2)
@@ -833,7 +841,11 @@ if [ "${1:-}" = buildx ] && [ "${2:-}" = imagetools ] && [ "${3:-}" = inspect ];
     esac
     exit 0
   fi
-  printf 'Digest: %s\n' "${ROLLBACK_DIGEST:?}"
+  case "$ref" in
+    dockerhub.example/fpm:*) printf 'Digest: %s\n' "$dockerhub_digest" ;;
+    ghcr.example/fpm:*) printf 'Digest: %s\n' "$ghcr_digest" ;;
+    *) printf 'Digest: %s\n' "$dockerhub_digest" ;;
+  esac
   if [ "${MOCK_MULTIPLE_DIGESTS:-0}" = 1 ] && [[ "$ref" != *@* ]]; then
     printf 'Digest: sha256:%064d\n' 8
   fi
@@ -872,14 +884,14 @@ if MOCK_INSPECT_FAIL_WITH_DIGEST=1 PATH="$mock_bin:$PATH" ./scripts/rollback-mov
   >"$fixture_dir/rollback-readback-failure.out" 2>&1; then
   fail "rollback accepted digest output from a failed alias inspect"
 fi
-assert_not_contains "$fixture_dir/rollback-readback-failure.out" 'both registry moving aliases restored from durable GHCR and verified'
+assert_not_contains "$fixture_dir/rollback-readback-failure.out" 'both registry moving aliases restored from registry-specific immutable subjects and verified'
 : > "$MOCK_DOCKER_LOG"
 if MOCK_MULTIPLE_DIGESTS=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
   >"$fixture_dir/rollback-multiple-digests.out" 2>&1; then
   fail "rollback accepted ambiguous multiple-digest read-back"
 fi
-assert_not_contains "$fixture_dir/rollback-multiple-digests.out" 'both registry moving aliases restored from durable GHCR and verified'
+assert_not_contains "$fixture_dir/rollback-multiple-digests.out" 'both registry moving aliases restored from registry-specific immutable subjects and verified'
 : > "$MOCK_DOCKER_LOG"
 if PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
@@ -887,16 +899,33 @@ if PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   fail "rollback ignored an exact-digest verifier failure"
 fi
 assert_contains "$MOCK_DOCKER_LOG" "dockerhub.example/fpm@${source_digest}"
-assert_not_contains "$fixture_dir/rollback-verifier-failure.out" 'both registry moving aliases restored from durable GHCR and verified'
+assert_not_contains "$fixture_dir/rollback-verifier-failure.out" 'both registry moving aliases restored from registry-specific immutable subjects and verified'
 : > "$MOCK_DOCKER_LOG"
 if ! MOCK_FULL_SUCCESS=1 MANIFEST_RETRY_ATTEMPTS=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
   dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback-success" \
   >"$fixture_dir/rollback-success.out" 2>&1; then
   fail "rollback full success path failed"
 fi
-assert_contains "$fixture_dir/rollback-success.out" 'both registry moving aliases restored from durable GHCR and verified'
+assert_contains "$fixture_dir/rollback-success.out" 'both registry moving aliases restored from registry-specific immutable subjects and verified'
 assert_contains "$MOCK_DOCKER_LOG" "dockerhub.example/fpm@${source_digest}"
 assert_contains "$MOCK_DOCKER_LOG" "ghcr.example/fpm@${source_digest}"
+
+dockerhub_rollback_digest="sha256:$(printf '%064d' 1)"
+ghcr_rollback_digest="sha256:$(printf '%064d' 9)"
+: > "$MOCK_DOCKER_LOG"
+if ! MOCK_FULL_SUCCESS=1 MANIFEST_RETRY_ATTEMPTS=1 \
+    ROLLBACK_DOCKERHUB_DIGEST="$dockerhub_rollback_digest" \
+    ROLLBACK_GHCR_DIGEST="$ghcr_rollback_digest" \
+    PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
+      dockerhub.example/fpm "$dockerhub_rollback_digest" \
+      ghcr.example/fpm "$ghcr_rollback_digest" \
+      8.5 "$fixture_dir/rollback-unequal-success" \
+      >"$fixture_dir/rollback-unequal-success.out" 2>&1; then
+  fail "rollback failed to restore unequal registry baselines"
+fi
+assert_contains "$MOCK_DOCKER_LOG" "dockerhub.example/fpm@${dockerhub_rollback_digest}"
+assert_contains "$MOCK_DOCKER_LOG" "ghcr.example/fpm@${ghcr_rollback_digest}"
+assert_contains "$fixture_dir/rollback-unequal-success.out" 'both registry moving aliases restored from registry-specific immutable subjects and verified'
 
 if ./scripts/scan-image.sh registry.example/fpm "sha256:$(printf '%064d' 1)" "$fixture_dir/scans" '' >/dev/null 2>&1; then
   fail "Trivy wrapper accepted a missing platform"

@@ -43,20 +43,50 @@ class UpdaterWorkflowTests(unittest.TestCase):
         self.assertEqual(
             download["with"]["path"], "${{ runner.temp }}/dependency-candidates"
         )
-        create_prs = next(
+        select = next(
             step
             for step in create["steps"]
-            if step["name"] == "Create the next eligible pull request"
+            if step["name"] == "Select one eligible candidate"
         )
-        candidate_file = create_prs["env"]["CANDIDATE_FILE"]
+        candidate_file = select["env"]["CANDIDATE_FILE"]
         self.assertEqual(
             candidate_file,
             "${{ runner.temp }}/dependency-candidates/candidates.json",
         )
-        self.assertIn("Path(os.environ['CANDIDATE_FILE'])", create_prs["run"])
-        self.assertIn('"$CANDIDATE_FILE" "$candidate_key"', create_prs["run"])
-        self.assertIn("eligible[0]['key']", create_prs["run"])
-        self.assertNotIn("while IFS= read -r candidate_key", create_prs["run"])
+        self.assertIn("Path(os.environ['CANDIDATE_FILE'])", select["run"])
+        self.assertIn("eligible[0]['key']", select["run"])
+        self.assertNotIn("while IFS= read -r candidate_key", select["run"])
+
+        lock = next(
+            step for step in create["steps"]
+            if step["name"] == "Acquire durable conveyor lock"
+        )
+        self.assertIn("refs/heads/automation/conveyor-lock", lock["run"])
+        self.assertIn("repos/$GITHUB_REPOSITORY/git/refs", lock["run"])
+        self.assertIn("acquired=true", lock["run"])
+
+        create_pr = next(
+            step for step in create["steps"]
+            if step["name"] == "Create one update pull request"
+        )
+        self.assertIn("steps.lock.outputs.acquired == 'true'", create_pr["if"])
+        self.assertIn('"$CANDIDATE_FILE"', create_pr["run"])
+        self.assertIn('"$CANDIDATE_KEY"', create_pr["run"])
+        self.assertEqual(
+            create_pr["env"]["CANDIDATE_KEY"],
+            "${{ steps.candidate.outputs.candidate_key }}",
+        )
+        self.assertIn("dependency-proposal", create_pr["env"]["PROPOSAL_DIR"])
+
+        upload = next(
+            step for step in create["steps"]
+            if step["name"] == "Upload immutable dependency proposal"
+        )
+        self.assertIn(
+            "dependency-proposal-${{ github.run_id }}-${{ github.run_attempt }}",
+            upload["with"]["name"],
+        )
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
         self.assertNotIn("persist-credentials: true", text)
         self.assertNotIn("pull_request_target", text)
         self.assertNotIn("packages: write", text)
@@ -80,6 +110,15 @@ class UpdaterWorkflowTests(unittest.TestCase):
             self.assertNotIn(forbidden, text)
         self.assertRegex(text, r"\[\[ \"\$candidate_key\" =~")
         self.assertIn("candidate is not eligible", text)
+        for marker in (
+            "fpm-dependency-proposal:",
+            "candidateSha256",
+            "headVersionsSha256",
+            "updaterAppId",
+            "updaterUser",
+            "GITHUB_RUN_ATTEMPT",
+        ):
+            self.assertIn(marker, text)
 
     def test_pr_script_restores_trusted_source_for_next_candidate(self) -> None:
         text = SCRIPT.read_text()

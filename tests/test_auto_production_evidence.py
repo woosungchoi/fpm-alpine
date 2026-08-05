@@ -39,6 +39,8 @@ def payloads() -> dict[str, dict]:
             "pullRequestHeadSha": "b" * 40,
             "author": "fpm-dependency-updater[bot]",
             "headRef": "automation/pecl-redis-123456789abc",
+            "baseRef": "main",
+            "baseRepository": "woosungchoi/fpm-alpine",
         },
         "canary-pair.json": {
             "schemaVersion": 1,
@@ -74,6 +76,16 @@ class AutoProductionEvidenceTests(unittest.TestCase):
         self.assertEqual(result["currentCanary"], {"runId": 102, "runAttempt": 1})
         self.assertIs(result["productionAuthorized"], True)
 
+    def test_valid_base_evidence_binds_branch_to_affected_minor(self) -> None:
+        rows = payloads()
+        rows["eligibility.json"]["class"] = "base-same-minor"
+        rows["eligibility.json"]["affectedMinors"] = ["8.2"]
+        rows["merged-pr.json"]["headRef"] = "automation/base-8.2-123456789abc"
+        rows["canary-pair.json"]["affectedMinors"] = ["8.2"]
+        result = self.validate(rows)
+        self.assertEqual(result["dependencyClass"], "base-same-minor")
+        self.assertEqual(result["affectedMinors"], ["8.2"])
+
     def test_false_production_authorization_is_rejected(self) -> None:
         rows = payloads()
         rows["canary-pair.json"]["productionAuthorized"] = False
@@ -105,6 +117,18 @@ class AutoProductionEvidenceTests(unittest.TestCase):
         rows = payloads()
         rows["merged-pr.json"]["sourceCommit"] = "c" * 40
         with self.assertRaisesRegex(SystemExit, "merged PR"):
+            self.validate(rows)
+
+    def test_non_main_merged_pr_base_is_rejected(self) -> None:
+        rows = payloads()
+        rows["merged-pr.json"]["baseRef"] = "release"
+        with self.assertRaisesRegex(SystemExit, "base"):
+            self.validate(rows)
+
+    def test_noncanonical_merged_pr_base_repository_is_rejected(self) -> None:
+        rows = payloads()
+        rows["merged-pr.json"]["baseRepository"] = "fork/fpm-alpine"
+        with self.assertRaisesRegex(SystemExit, "repository"):
             self.validate(rows)
 
     def test_duplicate_evidence_filename_is_rejected(self) -> None:

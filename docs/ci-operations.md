@@ -184,11 +184,11 @@ All new automation is fail-closed when its activation variable is absent or not 
   - A successful pair records `productionAuthorized=true`; this is evidence eligibility only and cannot publish without the independent activation variable and controller.
 - `dependency-auto-production`
   - Runs only from the completed trusted-main `dependency-auto-promote` workflow when `DEPENDENCY_AUTO_PRODUCTION_ENABLED=true`.
-  - Revalidates the exact upstream workflow path, push event, current `main` SHA, eligible updater PR identity, affected-minor set, and both canary identities before dispatching production.
+  - Revalidates the exact upstream workflow path, push event, current `main` SHA, immutable updater proposal artifact and App author identity, affected-minor set, and both canary identities before dispatching production.
   - Uses the protected `fpm-auto-production` environment. The existing `fpm-production` environment remains the human-reviewed lane for manual publishing and recovery.
   - Promotes affected minors sequentially through the existing `publish.yml` digest-copy path. A failed dispatch, publisher run, read-back, runtime check, signature check, or rollback check prevents every later minor from being dispatched.
-  - Automatic publication accepts no fresh lease supplied by the controller. Instead, the publisher validates the durable quiescent cutover record and reads live Docker Hub metadata (`is_automated=false`) during prepare, rollback-baseline bootstrap when needed, and immediately before moving-tag mutation.
-  - Only after every affected minor passes production read-back does the controller dispatch `dependency-update-pr` for the next candidate. Any failure freezes the serial conveyor.
+  - A trusted owner-side watchdog dispatches `legacy-cutover-lease` only while a claimed conveyor is active. The workflow independently checks exact source and live Docker Hub `is_automated=false`, then uploads immutable evidence. Each privileged mutation stage selects the newest exact-source lease, requires it to be no more than 15 minutes old, and rechecks current `main` plus `automation/conveyor-lock` after environment approval.
+  - Candidate discovery atomically creates `automation/conveyor-lock` before the updater PR. The merge-to-canary workflow advances that ref from the PR base to the merged source. Only after every affected minor passes production read-back does the controller delete the ref and dispatch `dependency-update-pr` for the next candidate. Any failure preserves the lock and freezes the serial conveyor.
 
 Activation order:
 
@@ -196,7 +196,7 @@ Activation order:
 2. Set `DEPENDENCY_AUTOMATION_ENABLED=true` only after a clean discovery run and one manually reviewed generated PR.
 3. Set `DEPENDENCY_AUTO_MERGE_ENABLED=true` only after exact-head classification and native auto-merge are observed on a real eligible PR.
 4. Set `DEPENDENCY_AUTO_CANARY_ENABLED=true` only after two manually dispatched full-matrix canaries pass for the same exact source contract.
-5. Create `fpm-auto-production` with protected branches only, merge the controller through the required `docker-smoke` check, then set `DEPENDENCY_AUTO_PRODUCTION_ENABLED=true` after explicit repository-owner approval.
+5. Create `fpm-auto-production` with protected branches only, merge the controller through the required `docker-smoke` check, install and verify the owner-side cutover-lease watchdog, then set `DEPENDENCY_AUTO_PRODUCTION_ENABLED=true` after explicit repository-owner approval.
 
 Immediately disable the corresponding variable when a candidate is ambiguous, source metadata moves during observation, required check provenance is missing, package/module drift appears, canary runs are not consecutive, or any evidence cannot be rebound to the exact source SHA. `DEPENDENCY_AUTO_PRODUCTION_ENABLED=false` is the first containment action for the automatic publication lane; existing registry aliases and the manual `fpm-production` recovery path remain available.
 

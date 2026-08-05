@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   evaluate:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -82,12 +83,52 @@ jobs:
           path: auto-promotion-evidence/
           if-no-files-found: error
 
+  claim-conveyor:
+    if: >-
+      ${{ github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          needs.evaluate.outputs.eligible == 'true' }}
+    needs: evaluate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Move durable conveyor lock from PR base to merged source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.before }}
+          SOURCE_SHA: ${{ needs.evaluate.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SOURCE_SHA" = "$GITHUB_SHA"
+          current_main="$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/main" \
+            --jq '.object.sha')"
+          test "$current_main" = "$SOURCE_SHA"
+          lock_endpoint="repos/$GITHUB_REPOSITORY/git/refs/heads/automation/conveyor-lock"
+          lock_sha="$(gh api "$lock_endpoint" --jq '.object.sha')"
+          test "$lock_sha" = "$BASE_SHA"
+          payload="$(mktemp)"
+          trap 'rm -f "$payload"' EXIT
+          python3 - "$payload" "$SOURCE_SHA" <<'PY'
+          import json, sys
+          json.dump({"sha": sys.argv[2], "force": False}, open(sys.argv[1], "w"))
+          PY
+          gh api --method PATCH "$lock_endpoint" --input "$payload" --silent
+          claimed_sha="$(gh api "$lock_endpoint" --jq '.object.sha')"
+          test "$claimed_sha" = "$SOURCE_SHA"
+
   auto-canary:
     if: >-
-      ${{ needs.evaluate.outputs.eligible == 'true' &&
-          vars.DEPENDENCY_AUTO_CANARY_ENABLED == 'true' &&
-          (github.event_name == 'push' || inputs.report_only == false) }}
-    needs: evaluate
+      ${{ github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          needs.evaluate.outputs.eligible == 'true' &&
+          needs.claim-conveyor.result == 'success' &&
+          vars.DEPENDENCY_AUTO_CANARY_ENABLED == 'true' }}
+    needs: [evaluate, claim-conveyor]
     runs-on: ubuntu-latest
     timeout-minutes: 480
     permissions:
@@ -125,7 +166,7 @@ jobs:
           ./scripts/run-auto-canary.sh \
             "$SOURCE_SHA" \
             auto-promotion-evidence/eligibility.json \
-            "auto-${SOURCE_SHA:0:12}-${GITHUB_RUN_ID}" \
+            "auto-${SOURCE_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             auto-promotion-evidence/canary-pair.json
 
       - name: Upload run-bound canary evidence
@@ -144,7 +185,7 @@ jobs:
           github.ref == 'refs/heads/main' &&
           needs.evaluate.outputs.eligible == 'true' &&
           vars.DEPENDENCY_AUTO_PRODUCTION_ENABLED == 'true' }}
-    needs: [evaluate, auto-canary]
+    needs: [evaluate, claim-conveyor, auto-canary]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

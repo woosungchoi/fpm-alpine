@@ -59,17 +59,29 @@ class ControlWorkflowTests(unittest.TestCase):
         merge = data["jobs"]["enable-native-auto-merge"]
         self.assertEqual(
             select["permissions"],
-            {"contents": "read", "pull-requests": "read", "checks": "read"},
+            {
+                "actions": "read",
+                "contents": "read",
+                "pull-requests": "read",
+                "checks": "read",
+            },
         )
         self.assertEqual(
             merge["permissions"],
-            {"contents": "write", "pull-requests": "write", "checks": "read"},
+            {
+                "actions": "read",
+                "contents": "write",
+                "pull-requests": "write",
+                "checks": "read",
+            },
         )
         self.assertIn("DEPENDENCY_AUTO_MERGE_ENABLED", merge["if"])
         rendered = yaml.safe_dump(merge, sort_keys=False)
         self.assertIn("gh pr merge", rendered)
         self.assertIn("--auto", rendered)
         self.assertIn("--match-head-commit", rendered)
+        self.assertIn("evaluate-auto-merge-pr.sh", rendered)
+        self.assertIn("automation/conveyor-lock", rendered)
         self.assertNotIn("--admin", rendered)
         self.assertNotIn("pull_request_target", text)
         self.assert_pinned(text)
@@ -114,6 +126,7 @@ class ControlWorkflowTests(unittest.TestCase):
         text, data = self.load("dependency-auto-promote.yml")
         self.assertEqual(data["permissions"], {})
         evaluate = data["jobs"]["evaluate"]
+        claim = data["jobs"]["claim-conveyor"]
         canary = data["jobs"]["auto-canary"]
         dispatch = data["jobs"]["dispatch-production-controller"]
         self.assertEqual(
@@ -123,12 +136,23 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertEqual(
             canary["permissions"], {"actions": "write", "contents": "read"}
         )
+        self.assertEqual(claim["permissions"], {"contents": "write"})
+        self.assertIn("github.event_name == 'push'", claim["if"])
+        self.assertIn("automation/conveyor-lock", yaml.safe_dump(claim, sort_keys=False))
+        self.assertIn("claim-conveyor", canary["needs"])
+        self.assertIn("github.event_name == 'push'", canary["if"])
         self.assertIn("DEPENDENCY_AUTO_CANARY_ENABLED", canary["if"])
         self.assertEqual(dispatch["permissions"], {"contents": "write"})
-        self.assertEqual(dispatch["needs"], ["evaluate", "auto-canary"])
+        self.assertEqual(dispatch["needs"], ["evaluate", "claim-conveyor", "auto-canary"])
         self.assertIn("DEPENDENCY_AUTO_PRODUCTION_ENABLED", dispatch["if"])
         rendered = yaml.safe_dump(canary, sort_keys=False)
         self.assertIn("run-auto-canary.sh", rendered)
+        self.assertIn("${GITHUB_RUN_ATTEMPT}", rendered)
+        runner = (ROOT / "scripts" / "run-auto-canary.sh").read_text()
+        self.assertIn(
+            "^auto-[0-9a-f]{12}-[1-9][0-9]*-[1-9][0-9]*$",
+            runner,
+        )
         self.assertIn("dependency-auto-production", yaml.safe_dump(dispatch, sort_keys=False))
         self.assertIn("repos/$GITHUB_REPOSITORY/dispatches", text)
         merge_workflow = self.load("dependency-auto-merge.yml")[1]
@@ -139,6 +163,15 @@ class ControlWorkflowTests(unittest.TestCase):
         )
         self.assertIn("read -r pr < auto-merge-selection/preselected.txt", evaluate_run)
         self.assertNotIn("while IFS= read -r pr", evaluate_run)
+        enable_run = next(
+            step["run"]
+            for step in merge_workflow["jobs"]["enable-native-auto-merge"]["steps"]
+            if step.get("name") == "Rebind exact head and enable native auto-merge"
+        )
+        self.assertIn("current_base_ref", enable_run)
+        self.assertIn("current_base_repo", enable_run)
+        self.assertIn('test "$current_base_ref" = main', enable_run)
+        self.assertIn('test "$current_base_repo" = "$GITHUB_REPOSITORY"', enable_run)
         self.assertNotIn("channel=production", text)
         self.assertNotIn("packages: write", text)
         self.assertNotIn("id-token: write", text)
@@ -153,6 +186,8 @@ class ControlWorkflowTests(unittest.TestCase):
             self.assertIn("15368", text)
             self.assertIn('get("name")', text)
             self.assertIn('"docker-smoke"', text)
+        self.assertIn('row.get("base", {}).get("ref") == "main"', merged)
+        self.assertIn('"baseRef": "main"', merged)
         self.assertIn('"productionAuthorized": True', canary)
         self.assertIn("for index in 1 2", canary)
         self.assertIn("first_number + 1", canary)
@@ -181,11 +216,22 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertEqual(data["permissions"], {})
         authorize = data["jobs"]["authorize"]
         production = data["jobs"]["dispatch-production"]
+        continuation = data["jobs"]["continue-conveyor"]
         self.assertEqual(
             authorize["permissions"], {"actions": "read", "contents": "read"}
         )
         self.assertEqual(
             production["permissions"], {"actions": "write", "contents": "read"}
+        )
+        self.assertIn("affected_minors", authorize["outputs"])
+        self.assertEqual(production["strategy"]["max-parallel"], 1)
+        self.assertIs(production["strategy"]["fail-fast"], True)
+        self.assertIn("fromJSON(needs.authorize.outputs.affected_minors)", yaml.safe_dump(production["strategy"]))
+        self.assertEqual(
+            continuation["permissions"], {"actions": "write", "contents": "write"}
+        )
+        self.assertEqual(
+            continuation["needs"], ["authorize", "dispatch-production"]
         )
         self.assertIn("DEPENDENCY_AUTO_PRODUCTION_ENABLED", authorize["if"])
         self.assertIn("github.event.action == 'dependency-auto-production'", authorize["if"])
@@ -193,10 +239,14 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertIn('"event": "push"', text)
         self.assertIn('"head_branch": "main"', text)
         self.assertIn("validate-auto-production-evidence.py", rendered)
-        self.assertIn("validate-settled-publisher-state.py", rendered)
+        self.assertIn("require-fresh-cutover-lease.sh", rendered)
         self.assertIn("run-auto-production.sh", rendered)
-        self.assertIn("dependency-update-pr.yml", rendered)
-        self.assertIn("dry_run=false", rendered)
+        continuation_rendered = yaml.safe_dump(continuation, sort_keys=False)
+        self.assertIn("dependency-update-pr.yml", continuation_rendered)
+        self.assertIn("dry_run=false", continuation_rendered)
+        self.assertIn("automation/conveyor-lock", continuation_rendered)
+        self.assertIn("--method DELETE", continuation_rendered)
+        self.assertIn("upstream_run_id", data["concurrency"]["group"])
         self.assertNotIn("DOCKERHUB_TOKEN", text)
         self.assertNotIn("packages: write", text)
         self.assertNotIn("id-token: write", text)
@@ -218,8 +268,31 @@ class ControlWorkflowTests(unittest.TestCase):
         self.assertIn("fpm-auto-production", text)
         self.assertIn("fpm-production", text)
         self.assertIn("validate-auto-production-evidence.py", text)
-        self.assertGreaterEqual(text.count("validate-settled-publisher-state.py"), 3)
+        self.assertGreaterEqual(text.count("require-fresh-cutover-lease.sh"), 2)
         self.assertIn("DEPENDENCY_AUTO_PRODUCTION_ENABLED", text)
+
+    def test_fresh_cutover_lease_workflow_is_owner_dispatched_and_immutable(self) -> None:
+        text, data = self.load("legacy-cutover-lease.yml")
+        trigger = data.get("on", data.get(True))
+        self.assertEqual(
+            trigger,
+            {"repository_dispatch": {"types": ["legacy-cutover-lease"]}},
+        )
+        job = data["jobs"]["capture"]
+        self.assertEqual(job["permissions"], {"contents": "read"})
+        self.assertIn("github.event.sender.id == 5674610", job["if"])
+        self.assertIn("github.event.sender.login == 'woosungchoi'", job["if"])
+        rendered = yaml.safe_dump(job, sort_keys=False)
+        self.assertIn("validate-legacy-cutover-evidence.py", rendered)
+        self.assertIn('"url_host": "api.snyk.io"', text)
+        self.assertNotIn("api.snyk.io/webhook/github/", text)
+        self.assertIn("no source-capable GitHub legacy publisher hook", text)
+        self.assertIn(
+            "legacy-cutover-lease-${{ github.run_id }}-${{ github.run_attempt }}",
+            rendered,
+        )
+        self.assertIn("retention-days: 90", rendered)
+        self.assert_pinned(text)
 
 
 if __name__ == "__main__":

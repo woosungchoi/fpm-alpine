@@ -8,7 +8,7 @@ output="${4:?output JSON required}"
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid source SHA" >&2; exit 64; }
-[[ "$correlation_prefix" =~ ^auto-[0-9a-f]{12}-[1-9][0-9]*$ ]] || { echo "invalid correlation prefix" >&2; exit 64; }
+[[ "$correlation_prefix" =~ ^auto-[0-9a-f]{12}-[1-9][0-9]*-[1-9][0-9]*$ ]] || { echo "invalid correlation prefix" >&2; exit 64; }
 [ "$(git rev-parse HEAD)" = "$source_sha" ] || { echo "checkout/source mismatch" >&2; exit 65; }
 
 readarray -t active_minors < <(python3 -c 'import json; print("\n".join(json.load(open("build/automation-policy.json"))["lifecycle"]))')

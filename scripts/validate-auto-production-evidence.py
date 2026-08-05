@@ -11,10 +11,11 @@ from typing import Any
 
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 UPDATER_BRANCH = re.compile(
-    r"^automation/(?:(base-8\.[2-5])|pecl-(imagick|redis|apcu))-[0-9a-f]{12}$"
+    r"^automation/(?:(?:base-(8\.[2-5]))|pecl-(imagick|redis|apcu))-[0-9a-f]{12}$"
 )
 UPDATER_BOT = re.compile(r"^[A-Za-z0-9_.-]+\[bot\]$")
 ACTIVE_MINORS = ["8.2", "8.3", "8.4", "8.5"]
+CANONICAL_REPOSITORY = "woosungchoi/fpm-alpine"
 ELIGIBLE_CLASSES = {"base-same-minor", "pecl-patch"}
 
 
@@ -93,6 +94,10 @@ def validate_evidence(
         raise SystemExit("invalid merged PR evidence schema")
     if merged.get("sourceCommit") != source_sha:
         raise SystemExit("merged PR evidence source mismatch")
+    if merged.get("baseRef") != "main":
+        raise SystemExit("merged PR base is not main")
+    if merged.get("baseRepository") != CANONICAL_REPOSITORY:
+        raise SystemExit("merged PR base repository is not canonical")
     if not _positive_int(merged.get("pullRequest")) or not COMMIT.fullmatch(
         str(merged.get("pullRequestHeadSha", ""))
     ):

@@ -77,18 +77,20 @@ for platform, digest in descriptors.items():
 PY
 }
 
-PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
-  ./scripts/report-manifest.sh "$DOCKERHUB_REF" "${EXPECTED_PLATFORMS[@]}"
-PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
-  ./scripts/report-manifest.sh "$GHCR_REF" "${EXPECTED_PLATFORMS[@]}"
-
 dockerhub_digest="$(resolve_digest "$DOCKERHUB_REF")"
 ghcr_digest="$(resolve_digest "$GHCR_REF")"
 [[ "$dockerhub_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "failed to resolve Docker Hub digest" >&2; exit 1; }
 [[ "$ghcr_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "failed to resolve GHCR digest" >&2; exit 1; }
+dockerhub_subject="$(repository_from_ref "$DOCKERHUB_REF")@${dockerhub_digest}"
+ghcr_subject="$(repository_from_ref "$GHCR_REF")@${ghcr_digest}"
 
-inspect_subject dockerhub "$DOCKERHUB_REF" "$dockerhub_digest"
-inspect_subject ghcr "$GHCR_REF" "$ghcr_digest"
+PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
+  ./scripts/report-manifest.sh "$dockerhub_subject" "${EXPECTED_PLATFORMS[@]}"
+PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
+  ./scripts/report-manifest.sh "$ghcr_subject" "${EXPECTED_PLATFORMS[@]}"
+
+inspect_subject dockerhub "$dockerhub_subject" "$dockerhub_digest"
+inspect_subject ghcr "$ghcr_subject" "$ghcr_digest"
 
 ./scripts/verify-provenance.py "$REPORT_DIR/provenance/dockerhub.json" "$EXPECTED_REVISION"
 ./scripts/verify-provenance.py "$REPORT_DIR/provenance/ghcr.json" "$EXPECTED_REVISION"
@@ -155,7 +157,8 @@ for entry in "$DOCKERHUB_REF|$dockerhub_digest" "$GHCR_REF|$ghcr_digest"; do
 done
 
 minor="${EXPECTED_VERSION%.*}"
-mapfile -t runtime_values < <(python3 - "$minor" <<'PY'
+runtime_values_output=
+if ! runtime_values_output="$(python3 - "$minor" <<'PY'
 import json
 import sys
 
@@ -170,7 +173,11 @@ for value in (
 ):
     print(value)
 PY
-)
+)"; then
+  echo "failed to load runtime expectations" >&2
+  exit 1
+fi
+mapfile -t runtime_values <<< "$runtime_values_output"
 [ "${#runtime_values[@]}" -eq 9 ] || { echo "failed to load runtime expectations" >&2; exit 1; }
 export EXPECTED_PHP_MINOR="$minor"
 export EXPECTED_IMAGICK_VERSION="${runtime_values[0]}"
@@ -194,8 +201,6 @@ for entry in "dockerhub|$DOCKERHUB_REF|$dockerhub_digest" "ghcr|$GHCR_REF|$ghcr_
   done
 done
 
-dockerhub_subject="$(repository_from_ref "$DOCKERHUB_REF")@${dockerhub_digest}"
-ghcr_subject="$(repository_from_ref "$GHCR_REF")@${ghcr_digest}"
 cat > "$REPORT_DIR/verification-summary.md" <<EOF
 # Verified multi-registry image
 

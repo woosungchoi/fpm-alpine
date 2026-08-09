@@ -90,13 +90,13 @@ resolve_platform_with_retry() {
   return 1
 }
 
-PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
-  ./scripts/report-manifest.sh "$DOCKERHUB_REF" "${EXPECTED_PLATFORMS[@]}"
-
 dockerhub_digest="$(resolve_digest_with_retry)"
 repository="$(repository_from_ref "$DOCKERHUB_REF")"
 dockerhub_subject="${repository}@${dockerhub_digest}"
 echo "exact Docker Hub subject: $dockerhub_subject"
+
+PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
+  ./scripts/report-manifest.sh "$dockerhub_subject" "${EXPECTED_PLATFORMS[@]}"
 
 inspect_to_file "Docker Hub index" "$REPORT_DIR/verification/dockerhub.index.json" \
   buildx imagetools inspect --raw "$dockerhub_subject"
@@ -170,7 +170,8 @@ print("Docker Hub platform descriptors, labels, provenance, and SBOM verified")
 PY
 
 minor="${EXPECTED_VERSION%.*}"
-mapfile -t runtime_values < <(python3 - "$minor" <<'PY'
+runtime_values_output=
+if ! runtime_values_output="$(python3 - "$minor" <<'PY'
 import json
 import sys
 
@@ -185,7 +186,11 @@ for value in (
 ):
     print(value)
 PY
-)
+)"; then
+  echo "failed to load runtime expectations" >&2
+  exit 1
+fi
+mapfile -t runtime_values <<< "$runtime_values_output"
 [ "${#runtime_values[@]}" -eq 9 ] || { echo "failed to load runtime expectations" >&2; exit 1; }
 export EXPECTED_PHP_MINOR="$minor"
 export EXPECTED_IMAGICK_VERSION="${runtime_values[0]}"

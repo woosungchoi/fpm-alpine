@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '31 6 * * 0'
   workflow_dispatch:
-  # This read-only monitor checks out trusted main, never the upstream run's head.
+  # Verification inputs and scripts are explicitly checked out from main.
   # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: ["publish", "dependency-auto-publish"]
@@ -28,10 +28,6 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       verification_mode: ${{ steps.mode.outputs.verification_mode }}
     steps:
-      - name: Checkout main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
       - name: Select verification mode
         id: mode
         env:
@@ -39,11 +35,35 @@ jobs:
           UPSTREAM_WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
         run: |
           set -euo pipefail
-          verification_mode=dockerhub-only
-          if [ "$EVENT_NAME" = workflow_run ] && [ "$UPSTREAM_WORKFLOW_PATH" = .github/workflows/publish.yml ]; then
-            verification_mode=multi-registry
-          fi
+          case "$EVENT_NAME" in
+            schedule|workflow_dispatch)
+              verification_mode=dockerhub-only
+              ;;
+            workflow_run)
+              case "$UPSTREAM_WORKFLOW_PATH" in
+                .github/workflows/dependency-auto-publish.yml)
+                  verification_mode=dockerhub-only
+                  ;;
+                .github/workflows/publish.yml)
+                  verification_mode=multi-registry
+                  ;;
+                *)
+                  printf 'unsupported workflow_run path: %s\n' "${UPSTREAM_WORKFLOW_PATH:-<missing>}" >&2
+                  exit 64
+                  ;;
+              esac
+              ;;
+            *)
+              printf 'unsupported event for published runtime verification: %s\n' "$EVENT_NAME" >&2
+              exit 64
+              ;;
+          esac
           echo "verification_mode=$verification_mode" >> "$GITHUB_OUTPUT"
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
       - name: Validate and prepare active matrix
         id: matrix
         run: |
@@ -70,6 +90,7 @@ jobs:
       - name: Checkout main with protected history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -94,11 +115,29 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE_INSPECT_ATTEMPTS=5
+          dockerhub_digest=
+          for ((attempt = 1; attempt <= SOURCE_INSPECT_ATTEMPTS; attempt++)); do
+            echo "source digest attempt ${attempt}/${SOURCE_INSPECT_ATTEMPTS}: $IMAGE_REF"
+            if candidate="$(./scripts/resolve-image-digest.sh "$IMAGE_REF")" &&
+               [[ "$candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              dockerhub_digest="$candidate"
+              break
+            fi
+            if [ "$attempt" -lt "$SOURCE_INSPECT_ATTEMPTS" ]; then
+              sleep 2
+            fi
+          done
+          if [ -z "$dockerhub_digest" ]; then
+            echo "source digest resolution failed after ${SOURCE_INSPECT_ATTEMPTS} attempts: $IMAGE_REF" >&2
+            exit 1
+          fi
+          dockerhub_subject="${IMAGE_REF%:*}@${dockerhub_digest}"
+
           inspected=0
           for ((attempt = 1; attempt <= SOURCE_INSPECT_ATTEMPTS; attempt++)); do
-            echo "source inspect attempt ${attempt}/${SOURCE_INSPECT_ATTEMPTS}: $IMAGE_REF"
+            echo "source inspect attempt ${attempt}/${SOURCE_INSPECT_ATTEMPTS}: $dockerhub_subject"
             rm -f /tmp/published-image.json.tmp
-            if docker buildx imagetools inspect "$IMAGE_REF" --format '{{ json .Image }}' > /tmp/published-image.json.tmp; then
+            if docker buildx imagetools inspect "$dockerhub_subject" --format '{{ json .Image }}' > /tmp/published-image.json.tmp; then
               mv /tmp/published-image.json.tmp /tmp/published-image.json
               inspected=1
               break
@@ -108,7 +147,7 @@ jobs:
             fi
           done
           if [ "$inspected" -ne 1 ]; then
-            echo "source inspection failed after ${SOURCE_INSPECT_ATTEMPTS} attempts: $IMAGE_REF" >&2
+            echo "source inspection failed after ${SOURCE_INSPECT_ATTEMPTS} attempts: $dockerhub_subject" >&2
             exit 1
           fi
           revision=$(python3 - "$EXPECTED_PATCH" <<'PY'
@@ -126,19 +165,52 @@ jobs:
           )
           git cat-file -e "${revision}^{commit}"
           git merge-base --is-ancestor "$revision" HEAD
-          signing_ref=$(./scripts/resolve-publisher-signing-ref.sh "$revision")
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "signing_ref=$signing_ref" >> "$GITHUB_OUTPUT"
+          {
+            echo "revision=$revision"
+            echo "dockerhub_digest=$dockerhub_digest"
+            echo "dockerhub_subject=$dockerhub_subject"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve strict multi-registry prerequisites
+        id: multi
+        if: needs.prepare.outputs.verification_mode == 'multi-registry'
+        env:
+          GHCR_REF: ghcr.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
+          EXPECTED_REVISION: ${{ steps.source.outputs.revision }}
+        run: |
+          set -euo pipefail
+          MULTI_INSPECT_ATTEMPTS=5
+          ghcr_digest=
+          for ((attempt = 1; attempt <= MULTI_INSPECT_ATTEMPTS; attempt++)); do
+            echo "GHCR digest attempt ${attempt}/${MULTI_INSPECT_ATTEMPTS}: $GHCR_REF"
+            if candidate="$(./scripts/resolve-image-digest.sh "$GHCR_REF")" &&
+               [[ "$candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              ghcr_digest="$candidate"
+              break
+            fi
+            if [ "$attempt" -lt "$MULTI_INSPECT_ATTEMPTS" ]; then
+              sleep 2
+            fi
+          done
+          if [ -z "$ghcr_digest" ]; then
+            echo "GHCR digest resolution failed after ${MULTI_INSPECT_ATTEMPTS} attempts: $GHCR_REF" >&2
+            exit 1
+          fi
+          signing_ref=$(./scripts/resolve-publisher-signing-ref.sh "$EXPECTED_REVISION")
+          {
+            echo "ghcr_subject=${GHCR_REF%:*}@${ghcr_digest}"
+            echo "signing_ref=$signing_ref"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify exact multi-registry runtime and supply chain
         if: needs.prepare.outputs.verification_mode == 'multi-registry'
         env:
-          DOCKERHUB_REF: docker.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
-          GHCR_REF: ghcr.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
+          DOCKERHUB_REF: ${{ steps.source.outputs.dockerhub_subject }}
+          GHCR_REF: ${{ steps.multi.outputs.ghcr_subject }}
           EXPECTED_REVISION: ${{ steps.source.outputs.revision }}
           EXPECTED_PATCH: ${{ matrix.php_patch }}
           REPORT_DIR: published-runtime-reports/${{ matrix.php_minor }}
-          SIGNING_REF: ${{ steps.source.outputs.signing_ref }}
+          SIGNING_REF: ${{ steps.multi.outputs.signing_ref }}
         run: |
           ./scripts/verify-published-image.sh \
             "$DOCKERHUB_REF" \
@@ -151,7 +223,7 @@ jobs:
       - name: Verify exact Docker Hub runtime and supply chain
         if: needs.prepare.outputs.verification_mode == 'dockerhub-only'
         env:
-          DOCKERHUB_REF: docker.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
+          DOCKERHUB_REF: ${{ steps.source.outputs.dockerhub_subject }}
           EXPECTED_REVISION: ${{ steps.source.outputs.revision }}
           EXPECTED_PATCH: ${{ matrix.php_patch }}
           REPORT_DIR: published-runtime-reports/${{ matrix.php_minor }}
@@ -164,15 +236,15 @@ jobs:
 
       - name: Scan active exact subject for fixable vulnerabilities
         env:
-          DOCKERHUB_REF: docker.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
+          DOCKERHUB_DIGEST: ${{ steps.source.outputs.dockerhub_digest }}
           REPORT_DIR: published-runtime-reports/${{ matrix.php_minor }}
         run: |
           set -euo pipefail
-          digest=$(./scripts/resolve-image-digest.sh "$DOCKERHUB_REF")
+          [[ "$DOCKERHUB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           for platform in linux/amd64 linux/arm64; do
             ./scripts/scan-image.sh \
               docker.io/woosungchoi/fpm-alpine \
-              "$digest" \
+              "$DOCKERHUB_DIGEST" \
               "$REPORT_DIR/scan" \
               "$platform"
           done

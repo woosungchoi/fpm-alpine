@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a dependency publisher transaction result and emit one exact release unit."""
+"""Validate a dependency publisher transaction result and optionally emit one unit."""
 
 from __future__ import annotations
 
@@ -45,9 +45,36 @@ def main() -> int:
     parser.add_argument("--run-id", required=True, type=int)
     parser.add_argument("--run-attempt", required=True, type=int)
     parser.add_argument("--workflow-sha", required=True)
-    parser.add_argument("--minor", required=True)
-    parser.add_argument("--patch", required=True)
+    parser.add_argument("--minor")
+    parser.add_argument("--patch")
+    parser.add_argument("--versions-file", type=Path, default=Path("build/versions.json"))
+    parser.add_argument("--expected-plan-sha256")
+    parser.add_argument("--exact-set", action="store_true")
     args = parser.parse_args()
+    if (args.minor is None) != (args.patch is None):
+        parser.error("--minor and --patch must be supplied together")
+    if args.expected_plan_sha256 is not None and re.fullmatch(
+        r"[0-9a-f]{64}", args.expected_plan_sha256
+    ) is None:
+        parser.error("--expected-plan-sha256 must be a lowercase SHA-256")
+
+    if args.exact_set:
+        observed_files = sorted(
+            path.relative_to(args.evidence_dir).as_posix()
+            for path in args.evidence_dir.rglob("*")
+            if path.is_file()
+        )
+        expected_files = [
+            "promotion-plan.json",
+            "promotion-plan.sha256",
+            "transaction-result.json",
+        ]
+        if observed_files != expected_files:
+            raise SystemExit(
+                f"committed transaction artifact set mismatch: {observed_files}"
+            )
+        if any(path.is_symlink() for path in args.evidence_dir.rglob("*")):
+            raise SystemExit("committed transaction artifact must not contain symlinks")
 
     files = list(args.evidence_dir.glob("**/transaction-result.json"))
     if len(files) != 1:
@@ -89,6 +116,11 @@ def main() -> int:
         raise SystemExit("transaction result plan SHA-256 is invalid")
     if plan_sha256 != observed_plan_sha256:
         raise SystemExit("transaction result does not bind the exact promotion plan bytes")
+    if (
+        args.expected_plan_sha256 is not None
+        and plan_sha256 != args.expected_plan_sha256
+    ):
+        raise SystemExit("transaction result does not match the requested plan SHA-256")
 
     plan = json.loads(plan_bytes)
     if type(plan) is not dict or set(plan) != PLAN_TOP_KEYS:
@@ -123,13 +155,15 @@ def main() -> int:
                 str(payload["run_id"]),
                 "--run-attempt",
                 str(payload["run_attempt"]),
+                "--versions-file",
+                str(args.versions_file),
             ],
             check=True,
         )
     except subprocess.CalledProcessError as error:
         raise SystemExit("promotion plan failed canonical validation") from error
 
-    versions = json.loads(Path("build/versions.json").read_text()).get("versions")
+    versions = json.loads(args.versions_file.read_text()).get("versions")
     active = [
         (minor, row["patch"])
         for minor, row in versions.items()
@@ -154,7 +188,7 @@ def main() -> int:
             if type(value) is not str or DIGEST.fullmatch(value) is None:
                 raise SystemExit(f"transaction result {key} is invalid")
         observed_versions.append((minor, patch))
-        if minor == args.minor:
+        if args.minor is not None and minor == args.minor:
             selected = unit
     if observed_versions != active:
         raise SystemExit("transaction result release units do not match active versions in order")
@@ -183,15 +217,16 @@ def main() -> int:
             raise SystemExit(
                 f"automatic Docker Hub target was not deferred for release unit {index + 1}"
             )
-    if selected is None or selected["php_patch"] != args.patch:
-        raise SystemExit("requested release unit is absent from transaction result")
-    print("\t".join((
-        source_sha,
-        selected["dockerhub_digest"],
-        selected["ghcr_digest"],
-        payload["operation"],
-        plan_sha256,
-    )))
+    if args.minor is not None:
+        if selected is None or selected["php_patch"] != args.patch:
+            raise SystemExit("requested release unit is absent from transaction result")
+        print("\t".join((
+            source_sha,
+            selected["dockerhub_digest"],
+            selected["ghcr_digest"],
+            payload["operation"],
+            plan_sha256,
+        )))
     return 0
 
 

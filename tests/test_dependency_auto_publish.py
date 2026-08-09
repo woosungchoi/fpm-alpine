@@ -296,6 +296,11 @@ class DependencyAutoPublishTests(unittest.TestCase):
             (ROOT / "scripts/verify-published-dockerhub-image.sh").read_text(),
         )
         self.assertIn("promote-auto-canaries.sh recover", text)
+        self.assertIn("publisher-auto-committed-${{ github.run_id }}", WORKFLOW.read_text())
+        self.assertIn("committed_artifact_id", text)
+        self.assertIn("--expected-plan-sha256", text)
+        self.assertIn("--exact-set", text)
+        self.assertIn('"status": "already-verified"', text)
         self.assertNotIn("mapfile -t", text)
 
         steps = data["jobs"]["recover"]["steps"]
@@ -310,7 +315,15 @@ class DependencyAutoPublishTests(unittest.TestCase):
             step for step in steps
             if step["name"] == "Log in to Docker Hub recovery boundary"
         )
-        self.assertEqual(dockerhub_login["if"], "steps.plan.outputs.operation == 'automatic'")
+        self.assertIn("steps.committed.outputs.recovery_required == 'true'", dockerhub_login["if"])
+        self.assertIn("steps.plan.outputs.operation == 'automatic'", dockerhub_login["if"])
+        ghcr_login = next(
+            step for step in steps
+            if step["name"] == "Log in to GHCR recovery boundary"
+        )
+        self.assertEqual(
+            ghcr_login["if"], "steps.committed.outputs.recovery_required == 'true'"
+        )
 
     def test_recovery_request_rejects_a_later_successful_publisher_run(self) -> None:
         _, data = self.load(RECOVERY)
@@ -328,6 +341,8 @@ class DependencyAutoPublishTests(unittest.TestCase):
                 "import os,sys\n"
                 "if '--paginate' in sys.argv:\n"
                 "    print(os.environ['COMPLETED_RUNS'], end='')\n"
+                "elif any('/artifacts?' in arg for arg in sys.argv):\n"
+                "    print(os.environ['ARTIFACTS_JSON'])\n"
                 "else:\n"
                 "    print(os.environ['ORIGINAL_RUN_JSON'])\n"
             )
@@ -345,8 +360,9 @@ class DependencyAutoPublishTests(unittest.TestCase):
                 "head_sha": head,
             })
             for completed_runs, expected_ok in (
-                ("123\t.github/workflows/dependency-auto-publish.yml\tfailure\n", True),
-                ("124\t.github/workflows/dependency-auto-publish.yml\tsuccess\n", False),
+                ("123\t1\t.github/workflows/dependency-auto-publish.yml\tfailure\n", True),
+                ("123\t2\t.github/workflows/dependency-auto-publish.yml\tsuccess\n", False),
+                ("124\t1\t.github/workflows/dependency-auto-publish.yml\tsuccess\n", False),
             ):
                 with self.subTest(later_success=not expected_ok):
                     output = root / f"output-{expected_ok}"
@@ -363,6 +379,7 @@ class DependencyAutoPublishTests(unittest.TestCase):
                         GH_TOKEN="test-token",
                         ORIGINAL_RUN_JSON=original,
                         COMPLETED_RUNS=completed_runs,
+                        ARTIFACTS_JSON=json.dumps({"total_count": 0, "artifacts": []}),
                     )
                     result = subprocess.run(
                         ["bash", "-c", request["run"]],
@@ -377,6 +394,48 @@ class DependencyAutoPublishTests(unittest.TestCase):
                         self.assertIn(f"original_workflow_sha={head}", output.read_text())
                     else:
                         self.assertIn("later successful publisher run", result.stderr)
+
+            committed_output = root / "output-committed"
+            committed_name = f"publisher-auto-committed-123-1-{'a' * 64}"
+            committed_env = os.environ.copy()
+            committed_env.update(
+                PATH=f"{fake_bin}:{committed_env['PATH']}",
+                EVENT_ACTION="fpm-publish-recover",
+                EVENT_REF="refs/heads/main",
+                ORIGINAL_RUN_ID="123",
+                ORIGINAL_RUN_ATTEMPT="1",
+                PLAN_SHA256="a" * 64,
+                GITHUB_REPOSITORY="woosungchoi/fpm-alpine",
+                GITHUB_OUTPUT=str(committed_output),
+                GH_TOKEN="test-token",
+                ORIGINAL_RUN_JSON=original,
+                COMPLETED_RUNS=(
+                    "123\t1\t.github/workflows/dependency-auto-publish.yml\tfailure\n"
+                ),
+                ARTIFACTS_JSON=json.dumps(
+                    {
+                        "total_count": 1,
+                        "artifacts": [
+                            {
+                                "id": 456,
+                                "name": committed_name,
+                                "expired": False,
+                                "workflow_run": {"id": 123},
+                            }
+                        ],
+                    }
+                ),
+            )
+            committed = subprocess.run(
+                ["bash", "-c", request["run"]],
+                cwd=ROOT,
+                env=committed_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+            self.assertIn("committed_artifact_id=456", committed_output.read_text())
 
     def test_transaction_and_validators_enforce_registry_specific_recovery_contract(self) -> None:
         for path in (TRANSACTION, PLAN_VALIDATOR, RESULT_VALIDATOR):

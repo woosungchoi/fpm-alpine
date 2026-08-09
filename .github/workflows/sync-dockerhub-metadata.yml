@@ -1,7 +1,8 @@
 name: sync-dockerhub-metadata
 
 on:
-  workflow_dispatch:
+  repository_dispatch:
+    types: [fpm-sync-dockerhub-metadata]
 
 permissions: {}
 
@@ -18,8 +19,36 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Validate owner dispatch envelope before checkout
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_ACTION" = fpm-sync-dockerhub-metadata
+          test "$EVENT_ACTOR" = woosungchoi
+          test "$EVENT_ACTOR_ID" = 5674610
+          test "$EVENT_REPOSITORY" = woosungchoi/fpm-alpine
+          test "$EVENT_REF" = refs/heads/main
+          [[ "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          python3 - <<'PY'
+          import json
+          import os
+          payload = json.loads(os.environ["EVENT_PAYLOAD_JSON"])
+          if payload != {}:
+              raise SystemExit("metadata sync payload must be empty")
+          PY
+
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Synchronize and read back Docker Hub metadata
         env:

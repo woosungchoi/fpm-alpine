@@ -182,17 +182,6 @@ recover_transaction() {
   while IFS=$'\t' read -r minor patch source_sha canary_ref target_ghcr target_dockerhub \
       dockerhub_source previous_dockerhub previous_ghcr rollback_dockerhub_ref \
       rollback_dockerhub_backup rollback_ghcr_ref rollback_ghcr_digest; do
-    [ "$(resolve_digest "$rollback_ghcr_ref")" = "$rollback_ghcr_digest" ] || {
-      echo "GHCR rollback pin is unavailable during recovery: $minor" >&2
-      unknown=1
-      continue
-    }
-    if [ "$operation" = automatic ] && \
-       [ "$(resolve_digest "$rollback_dockerhub_ref")" != "$rollback_dockerhub_backup" ]; then
-      echo "Docker Hub rollback backup pin is unavailable during recovery: $minor" >&2
-      unknown=1
-      continue
-    fi
     if ! current_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"; then
       echo "unknown Docker Hub alias state during recovery: $minor (read failed)" >&2
       unknown=1
@@ -285,6 +274,27 @@ recover_transaction() {
       restore_ghcr_only "$minor" "$previous_ghcr" "$rollback_ghcr_digest" || recovery_status=1
     fi
   done < "$actions"
+
+  while IFS=$'\t' read -r minor previous_dockerhub previous_ghcr \
+      _rollback_dockerhub_backup _rollback_ghcr_digest _dockerhub_state _ghcr_state \
+      _classified_dockerhub _classified_ghcr; do
+    if ! current_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"; then
+      echo "final recovery Docker Hub read-back failed for $minor" >&2
+      recovery_status=1
+      continue
+    fi
+    if ! current_ghcr="$(resolve_digest "${GHCR_REPOSITORY}:${minor}")"; then
+      echo "final recovery GHCR read-back failed for $minor" >&2
+      recovery_status=1
+      continue
+    fi
+    if [ "$current_dockerhub" != "$previous_dockerhub" ] || \
+       [ "$current_ghcr" != "$previous_ghcr" ]; then
+      echo "final recovery baseline read-back mismatch for $minor" >&2
+      recovery_status=1
+    fi
+  done < "$actions"
+
   if [ "$recovery_status" -ne 0 ]; then
     write_recovery_result failed || echo "failed recovery evidence write failed" >&2
     return 1
@@ -305,6 +315,7 @@ completed="$REPORT_DIR/completed-promotions.tsv"
 : > "$attempted"
 : > "$completed"
 mutation_started=0
+anonymous_docker_config=""
 
 rollback_all() {
   local classification="$REPORT_DIR/rollback-classification.tsv"
@@ -314,7 +325,10 @@ rollback_all() {
   local _rollback_ghcr_ref rollback_ghcr_digest
   local current_dockerhub current_ghcr dockerhub_state ghcr_state
   local restore_dockerhub restore_ghcr
-  : > "$classification"
+  if ! : > "$classification"; then
+    echo "rollback classification evidence could not be initialized" >&2
+    return 1
+  fi
 
   while IFS=$'\t' read -r minor patch source_sha _canary_ref target_ghcr _target_dockerhub \
       _dockerhub_source previous_dockerhub previous_ghcr _rollback_dockerhub_ref \
@@ -357,11 +371,14 @@ rollback_all() {
       continue
     fi
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$minor" "$previous_dockerhub" "$previous_ghcr" \
-      "$rollback_dockerhub_backup" "$rollback_ghcr_digest" \
-      "$dockerhub_state" "$ghcr_state" "$current_dockerhub" "$current_ghcr" \
-      >> "$classification"
+    if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$minor" "$previous_dockerhub" "$previous_ghcr" \
+        "$rollback_dockerhub_backup" "$rollback_ghcr_digest" \
+        "$dockerhub_state" "$ghcr_state" "$current_dockerhub" "$current_ghcr" \
+        >> "$classification"; then
+      echo "rollback classification evidence write failed: $minor" >&2
+      unknown=1
+    fi
   done < "$attempted"
 
   if [ "$unknown" -ne 0 ]; then
@@ -395,6 +412,19 @@ rollback_all() {
       restore_ghcr_only "$minor" "$previous_ghcr" "$rollback_ghcr_digest" || rollback_status=1
     fi
   done < "$classification"
+  while IFS=$'\t' read -r minor previous_dockerhub previous_ghcr _ _ _ _ _ _; do
+    if ! current_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")" || \
+       ! current_ghcr="$(resolve_digest "${GHCR_REPOSITORY}:${minor}")"; then
+      echo "final rollback read-back failed for $minor" >&2
+      rollback_status=1
+      continue
+    fi
+    if [ "$current_dockerhub" != "$previous_dockerhub" ] || \
+       [ "$current_ghcr" != "$previous_ghcr" ]; then
+      echo "final rollback baseline read-back mismatch for $minor" >&2
+      rollback_status=1
+    fi
+  done < "$classification"
   if [ "$rollback_status" -ne 0 ]; then
     echo "one or more attempted release units could not be rolled back" >&2
     return 1
@@ -407,6 +437,11 @@ on_exit() {
   local rollback_status=0
   trap - EXIT
   trap '' INT TERM
+  if [ -n "$anonymous_docker_config" ] && \
+     ! rm -rf -- "$anonymous_docker_config"; then
+    echo "anonymous Docker config cleanup failed" >&2
+    status=1
+  fi
   if [ "$status" -ne 0 ] && [ "$mutation_started" -eq 1 ]; then
     if [ -f "$REPORT_DIR/transaction-result.json" ]; then
       rm -f "$REPORT_DIR/transaction-result.json"
@@ -425,6 +460,8 @@ trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+anonymous_docker_config="$(mktemp -d)"
+chmod 700 "$anonymous_docker_config"
 release_date="$(date -u +'%Y%m%d')"
 while IFS=$'\t' read -r minor patch source_sha canary_ref target_ghcr target_dockerhub \
     dockerhub_source previous_dockerhub previous_ghcr rollback_dockerhub_ref \
@@ -471,6 +508,7 @@ while IFS=$'\t' read -r minor patch source_sha canary_ref target_ghcr target_doc
       "${DOCKERHUB_REPOSITORY}@${dockerhub_actual}"
     verify_dockerhub_signature=1
   fi
+  DOCKER_CONFIG="$anonymous_docker_config" \
   EXPECTED_PUBLISHER_WORKFLOW="$EXPECTED_PUBLISHER_WORKFLOW" \
   VERIFY_DOCKERHUB_SIGNATURE="$verify_dockerhub_signature" \
     ./scripts/verify-published-image.sh \
@@ -478,14 +516,18 @@ while IFS=$'\t' read -r minor patch source_sha canary_ref target_ghcr target_doc
       "${GHCR_REPOSITORY}@${ghcr_actual}" \
       "$source_sha" "$patch" \
       "$REPORT_DIR/post-promotion/$minor" main
-  [ "$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")" = "$dockerhub_actual" ]
-  [ "$(resolve_digest "${GHCR_REPOSITORY}:${minor}")" = "$ghcr_actual" ]
+  [ "$(DOCKER_CONFIG="$anonymous_docker_config" \
+      resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")" = "$dockerhub_actual" ]
+  [ "$(DOCKER_CONFIG="$anonymous_docker_config" \
+      resolve_digest "${GHCR_REPOSITORY}:${minor}")" = "$ghcr_actual" ]
   printf '%s\t%s\t%s\n' "$minor" "$dockerhub_actual" "$ghcr_actual" >> "$completed"
 done < "$REPORT_DIR/validated-plan.tsv"
 
 while IFS=$'\t' read -r minor expected_dockerhub expected_ghcr; do
-  observed_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"
-  observed_ghcr="$(resolve_digest "${GHCR_REPOSITORY}:${minor}")"
+  observed_dockerhub="$(DOCKER_CONFIG="$anonymous_docker_config" \
+    resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"
+  observed_ghcr="$(DOCKER_CONFIG="$anonymous_docker_config" \
+    resolve_digest "${GHCR_REPOSITORY}:${minor}")"
   if [ "$observed_dockerhub" != "$expected_dockerhub" ] || \
      [ "$observed_ghcr" != "$expected_ghcr" ]; then
     echo "transaction-wide final alias read-back mismatch: $minor" >&2

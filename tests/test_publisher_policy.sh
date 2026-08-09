@@ -21,7 +21,10 @@ assert_executable scripts/verify-provenance.py
 
 python3 - <<'PY'
 from pathlib import Path
+import json
+import os
 import re
+import subprocess
 import yaml
 
 path = Path('.github/workflows/publish.yml')
@@ -29,17 +32,9 @@ text = path.read_text()
 validator_text = Path('scripts/validate-legacy-cutover-evidence.py').read_text()
 data = yaml.safe_load(text)
 trigger = data.get('on', data.get(True))
-assert set(trigger) == {'workflow_dispatch'}, trigger
-inputs = trigger['workflow_dispatch']['inputs']
-assert inputs['channel']['type'] == 'choice'
-assert inputs['channel']['options'] == ['canary', 'production']
-assert inputs['channel']['default'] == 'canary'
-assert inputs['source_sha']['required'] is True
-assert inputs['canary_run_id']['required'] is False
-assert inputs['canary_run_attempt']['required'] is False
-assert inputs['prior_canary_run_id']['required'] is False
-assert inputs['prior_canary_run_attempt']['required'] is False
-assert inputs['legacy_cutover_evidence_sha256']['required'] is False
+assert set(trigger) == {'repository_dispatch'}, trigger
+assert trigger['repository_dispatch']['types'] == ['fpm-manual-publish']
+assert 'workflow_dispatch' not in trigger
 assert data['permissions'] == {}
 assert data['concurrency']['cancel-in-progress'] is False
 assert 'fpm-production-promotion' in data['concurrency']['group']
@@ -64,6 +59,41 @@ assert jobs['production-preflight']['permissions'] == {'actions': 'read', 'conte
 assert jobs['bootstrap-ghcr-rollback']['environment'] == 'fpm-production'
 assert jobs['bootstrap-ghcr-rollback']['permissions'] == {'contents': 'read', 'packages': 'write'}
 assert jobs['report-failure']['permissions'] == {'actions': 'read', 'contents': 'read', 'issues': 'write'}
+envelope = next(step['run'] for step in jobs['prepare']['steps'] if step.get('name') == 'Validate owner dispatch envelope before checkout')
+base_env = {
+    **os.environ,
+    'EVENT_ACTION': 'fpm-manual-publish',
+    'EVENT_ACTOR': 'woosungchoi',
+    'EVENT_ACTOR_ID': '5674610',
+    'EVENT_REPOSITORY': 'woosungchoi/fpm-alpine',
+    'EVENT_REF': 'refs/heads/main',
+    'EVENT_SHA': 'a' * 40,
+}
+canary_payload = {'channel': 'canary', 'source_sha': 'a' * 40, 'version': '8.5'}
+production_payload = {
+    'channel': 'production',
+    'source_sha': 'a' * 40,
+    'version': '8.5',
+    'canary_run_id': 123,
+    'canary_run_attempt': 1,
+    'prior_canary_run_id': '122',
+    'prior_canary_run_attempt': '1',
+    'legacy_publisher_disabled': True,
+    'legacy_cutover_evidence_sha256': 'b' * 64,
+}
+for payload in (canary_payload, production_payload):
+    env = {**base_env, 'EVENT_PAYLOAD_JSON': json.dumps(payload)}
+    assert subprocess.run(['bash', '-c', envelope], env=env, capture_output=True, text=True).returncode == 0
+invalid_cases = [
+    ({**canary_payload, 'unknown': 'value'}, {}),
+    ({**canary_payload, 'canary_run_id': 123}, {}),
+    ({key: value for key, value in production_payload.items() if key != 'canary_run_id'}, {}),
+    ({**production_payload, 'legacy_publisher_disabled': 1}, {}),
+    (canary_payload, {'EVENT_ACTOR_ID': '1'}),
+]
+for payload, overrides in invalid_cases:
+    env = {**base_env, **overrides, 'EVENT_PAYLOAD_JSON': json.dumps(payload)}
+    assert subprocess.run(['bash', '-c', envelope], env=env, capture_output=True, text=True).returncode != 0
 
 canary = yaml.safe_dump(jobs['canary'], sort_keys=False)
 production = yaml.safe_dump(jobs['production'], sort_keys=False)
@@ -74,14 +104,16 @@ for required in ('docker/login-action@', 'docker/build-push-action@', 'provenanc
 assert 'refusing to overwrite existing GHCR canary tag' in text
 assert 'DOCKERHUB_REPOSITORY' not in canary
 assert 'dockerhub_digest' not in canary
-assert 'github.event.inputs.channel == \'canary\'' in canary
+assert 'github.event.client_payload.channel == \'canary\'' in canary
 assert 'docker/build-push-action@' not in production
-assert 'github.event.inputs.channel == \'production\'' in production
+assert 'github.event.client_payload.channel == \'production\'' in production
 for required in ('scripts/verify-published-image.sh', 'scripts/promote-image.sh', 'scripts/rollback-moving-aliases.sh',
-                 'canary_run_id', 'canary_run_attempt', 'steps.promote.outputs.dockerhub_digest',
+                 'canary_run_id', 'canary_run_attempt',
                  'steps.canary.outputs.ghcr_digest', '--policy moving-only', '--policy evidence'):
     assert required in production, required
 assert 'test "$SOURCE_SHA" = "$DISPATCH_SHA"' in text
+assert 'validate(run, expected_attempt, "current", {"repository_dispatch"})' in text
+assert 'validate(prior, prior_expected_attempt, "prior", {"repository_dispatch"})' in text
 assert text.count('SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}') == 1
 assert text.count('SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}') == 1
 assert 'git show -s --format=%ct "$GITHUB_SHA"' in text
@@ -104,6 +136,12 @@ bootstrap_run = next(step['run'] for step in jobs['bootstrap-ghcr-rollback']['st
 assert bootstrap_run.index('./scripts/validate-legacy-cutover-evidence.py') < bootstrap_run.index('docker buildx imagetools create')
 promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified GHCR canary without rebuilding')
 assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
+assert promotion_run.index('./scripts/promote-image.sh --policy moving-only') < promotion_run.index('./scripts/verify-published-image.sh')
+assert promotion_run.index('./scripts/verify-published-image.sh') < promotion_run.rindex('trap - EXIT INT TERM')
+assert 'DOCKER_CONFIG="$anonymous_docker_config"' in promotion_run
+assert "trap 'exit 130' INT" in promotion_run
+assert "trap 'exit 143' TERM" in promotion_run
+assert 'echo "dockerhub_digest=' not in promotion_run
 production_step_names = [step.get('name') for step in jobs['production']['steps']]
 assert 'Re-verify exact canary subjects before promotion' not in production_step_names
 assert production_step_names.index('Promote verified GHCR canary without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
@@ -186,8 +224,8 @@ code = textwrap.dedent(tail.split("\n          PY", 1)[0])
 compile(code, "production-canary-contract.py", "exec")
 
 sha = "0123456789abcdef0123456789abcdef01234567"
-current = {"id": 102, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 1, "run_number": 11}
-prior = {"id": 101, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 2, "run_number": 10}
+current = {"id": 102, "conclusion": "success", "event": "repository_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 1, "run_number": 11}
+prior = {"id": 101, "conclusion": "success", "event": "repository_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 2, "run_number": 10}
 current_artifacts = {"artifacts": [{"name": f"publisher-canary-{minor}-102-1", "expired": False} for minor in ("8.2", "8.3", "8.4", "8.5")]}
 prior_artifacts = {"artifacts": [{"name": "publisher-canary-8.5-101-2", "expired": False}]}
 

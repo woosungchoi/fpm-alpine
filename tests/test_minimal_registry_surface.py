@@ -163,15 +163,17 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         path = ROOT / ".github/workflows/prune-dockerhub-tags.yml"
         workflow = yaml.safe_load(path.read_text())
         trigger = workflow.get("on", workflow.get(True))
-        self.assertEqual(set(trigger), {"workflow_dispatch"})
-        self.assertEqual(set(workflow["jobs"]), {"plan", "archive", "apply"})
         self.assertEqual(
-            trigger["workflow_dispatch"]["inputs"]["mode"]["options"],
-            ["plan", "archive", "apply"],
+            trigger,
+            {"repository_dispatch": {"types": ["fpm-dockerhub-prune"]}},
         )
+        self.assertEqual(set(workflow["jobs"]), {"authorize", "plan", "archive", "apply"})
+        self.assertIn("fpm-production-promotion", workflow["concurrency"]["group"])
         self.assertNotIn("environment", workflow["jobs"]["plan"])
+        self.assertEqual(workflow["jobs"]["plan"]["needs"], "authorize")
         for name in ("archive", "apply"):
             job = workflow["jobs"][name]
+            self.assertEqual(job["needs"], "authorize")
             self.assertEqual(job["environment"], "fpm-production")
             self.assertIn("id-token", job["permissions"])
             self.assertEqual(job["permissions"]["packages"], "write")
@@ -181,6 +183,7 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         self.assertNotIn("DOCKERHUB_TOKEN", archive)
         self.assertNotIn("prune-dockerhub-tags.py apply", archive)
         text = path.read_text()
+        self.assertNotIn("workflow_dispatch", text)
         for required in (
             "expected_inventory_sha256",
             "expected_deletion_plan_sha256",

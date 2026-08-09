@@ -7,7 +7,7 @@ on:
   # Verification inputs and scripts are explicitly checked out from main.
   # zizmor: ignore[dangerous-triggers]
   workflow_run:
-    workflows: ["publish", "dependency-auto-publish"]
+    workflows: ["dependency-auto-publish"]
     types: [completed]
     branches: ["main"]
 
@@ -54,12 +54,6 @@ jobs:
                   signing_workflow=dependency-auto-publish.yml
                   bind_upstream_evidence=true
                   ;;
-                .github/workflows/publish.yml)
-                  [[ "$UPSTREAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
-                  verification_mode=multi-registry
-                  signing_workflow=publish.yml
-                  bind_upstream_evidence=false
-                  ;;
                 *)
                   printf 'unsupported workflow_run path: %s\n' "${UPSTREAM_WORKFLOW_PATH:-<missing>}" >&2
                   exit 64
@@ -76,6 +70,46 @@ jobs:
             echo "signing_workflow=$signing_workflow"
             echo "bind_upstream_evidence=$bind_upstream_evidence"
           } >> "$GITHUB_OUTPUT"
+      - name: Revalidate exact upstream workflow run before checkout
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          UPSTREAM_WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          UPSTREAM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UPSTREAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$UPSTREAM_WORKFLOW_PATH" = .github/workflows/dependency-auto-publish.yml
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}" \
+            > /tmp/upstream-run.json
+          python3 - "$UPSTREAM_RUN_ID" "$UPSTREAM_RUN_ATTEMPT" \
+            "$UPSTREAM_HEAD_SHA" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open("/tmp/upstream-run.json"))
+          expected = {
+              "id": int(sys.argv[1]),
+              "run_attempt": int(sys.argv[2]),
+              "path": ".github/workflows/dependency-auto-publish.yml",
+              "head_branch": "main",
+              "head_sha": sys.argv[3],
+              "status": "completed",
+              "conclusion": "success",
+          }
+          for key, value in expected.items():
+              if payload.get(key) != value:
+                  raise SystemExit(f"upstream workflow run mismatch for {key}")
+          if payload.get("event") not in {"push", "repository_dispatch"}:
+              raise SystemExit("unsupported upstream publisher event")
+          repository = payload.get("repository")
+          if type(repository) is not dict or repository.get("full_name") != "woosungchoi/fpm-alpine":
+              raise SystemExit("upstream workflow repository mismatch")
+          PY
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

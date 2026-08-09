@@ -139,7 +139,11 @@ class AutoPromotionTransactionTests(unittest.TestCase):
 import json, os, re, sys
 from pathlib import Path
 ref = sys.argv[1]
-if ref == os.environ.get('MOCK_UNAVAILABLE_REF'):
+unavailable = set(filter(None, (
+    os.environ.get('MOCK_UNAVAILABLE_REF', '') + ',' +
+    os.environ.get('MOCK_UNAVAILABLE_REFS', '')
+).split(',')))
+if ref in unavailable:
     raise SystemExit(1)
 if re.fullmatch(r'.+@sha256:[0-9a-f]{64}', ref):
     print(ref.rsplit('@', 1)[1])
@@ -187,14 +191,30 @@ from pathlib import Path
 _, dockerhub, previous_dockerhub, ghcr, previous_ghcr, minor, report_dir = sys.argv
 state_path = Path(os.environ['MOCK_STATE'])
 state = json.loads(state_path.read_text())
-state[f"{dockerhub}:{minor}"] = previous_dockerhub
-state[f"{ghcr}:{minor}"] = previous_ghcr
+unavailable = set(filter(None, (
+    os.environ.get('MOCK_UNAVAILABLE_REF', '') + ',' +
+    os.environ.get('MOCK_UNAVAILABLE_REFS', '')
+).split(',')))
+status = 0
+if os.environ.get('RESTORE_DOCKERHUB', '1') == '1':
+    primary = os.environ['DOCKERHUB_ROLLBACK_SOURCE']
+    fallback = os.environ.get('DOCKERHUB_ROLLBACK_FALLBACK_SOURCE', '')
+    if primary in unavailable and (not fallback or fallback in unavailable):
+        status = 1
+    else:
+        state[f"{dockerhub}:{minor}"] = previous_dockerhub
+if os.environ.get('RESTORE_GHCR', '1') == '1':
+    if os.environ['GHCR_ROLLBACK_SOURCE'] in unavailable:
+        status = 1
+    else:
+        state[f"{ghcr}:{minor}"] = previous_ghcr
 state_path.write_text(json.dumps(state, sort_keys=True))
 Path(report_dir).mkdir(parents=True, exist_ok=True)
 with open(os.environ['MOCK_LOG'], 'a') as log:
     log.write(f"rollback-dual|{minor}|{previous_dockerhub}|{previous_ghcr}\\n")
 if os.environ.get('MOCK_FAIL_ROLLBACK') == minor:
     raise SystemExit(8)
+raise SystemExit(status)
 """,
         )
         self.write_executable(
@@ -206,7 +226,8 @@ minor = sys.argv[4].rsplit('.', 1)[0]
 Path(sys.argv[5]).mkdir(parents=True, exist_ok=True)
 with open(os.environ['MOCK_LOG'], 'a') as log:
     signature = os.environ.get('VERIFY_DOCKERHUB_SIGNATURE')
-    log.write(f"verify|{minor}|{sys.argv[1]}|{sys.argv[2]}|dockerhub-signature={signature}\\n")
+    docker_config = os.environ.get('DOCKER_CONFIG')
+    log.write(f"verify|{minor}|{sys.argv[1]}|{sys.argv[2]}|dockerhub-signature={signature}|docker-config={docker_config}\\n")
 if os.environ.get('MOCK_LATE_DRIFT') == '1' and minor == '8.5':
     state_path = Path(os.environ['MOCK_STATE'])
     state = json.loads(state_path.read_text())
@@ -342,6 +363,13 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
                     for row in payload["release_units"]
                 )
             )
+            verify_lines = [
+                line for line in fixture.log.read_text().splitlines()
+                if line.startswith("verify|")
+            ]
+            self.assertEqual(len(verify_lines), len(MINORS))
+            self.assertTrue(all("|docker-config=None" not in line for line in verify_lines))
+            self.assertTrue(all("|docker-config=" in line for line in verify_lines))
 
     def test_automatic_rejects_failed_semantic_baseline_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -424,6 +452,19 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
                 self.assertEqual(state[f"{GHCR}:{minor}"], fixture.baseline[minor][1])
                 self.assertIn(f"rollback-dual|{minor}|", fixture.log.read_text())
 
+    def test_rollback_classification_write_failure_is_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self.fixture(root, "automatic")
+            classification = root / "reports/rollback-classification.tsv"
+            classification.mkdir(parents=True)
+            fixture.env["MOCK_FAIL_PROMOTE"] = "evidence:8.2"
+            result = self.run_transaction(root, "automatic", fixture)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("classification evidence could not be initialized", result.stderr)
+            self.assertNotIn("all known attempted release units rolled back", result.stdout)
+            self.assertNotIn("rollback-dual|", fixture.log.read_text())
+
     def test_backfill_failure_restores_only_ghcr_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -479,6 +520,24 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
             recovered = self.state(fixture)
             self.assertEqual(recovered[f"{DOCKERHUB}:8.2"], previous_dockerhub)
             self.assertIn("rollback-dual|8.2", fixture.log.read_text())
+
+    def test_recovery_missing_ghcr_source_still_restores_dockerhub(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self.fixture(root, "automatic")
+            state = self.state(fixture)
+            state[f"{DOCKERHUB}:8.2"], state[f"{GHCR}:8.2"] = fixture.targets["8.2"]
+            fixture.state_path.write_text(json.dumps(state, sort_keys=True))
+            previous_dockerhub, previous_ghcr = fixture.baseline["8.2"]
+            fixture.env["MOCK_UNAVAILABLE_REF"] = f"{GHCR}@{previous_ghcr}"
+            result = self.run_transaction(root, "recover", fixture)
+            self.assertNotEqual(result.returncode, 0)
+            recovered = self.state(fixture)
+            self.assertEqual(recovered[f"{DOCKERHUB}:8.2"], previous_dockerhub)
+            self.assertEqual(recovered[f"{GHCR}:8.2"], fixture.targets["8.2"][1])
+            self.assertIn("final recovery baseline read-back mismatch", result.stderr)
+            payload = json.loads((root / "reports/recovery-result.json").read_text())
+            self.assertEqual(payload["status"], "failed")
 
     def test_recovery_unknown_state_is_no_clobber_for_all_units(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

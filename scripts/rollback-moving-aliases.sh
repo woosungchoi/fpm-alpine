@@ -56,7 +56,10 @@ source_available() {
   [ "$actual" = "$expected" ]
 }
 
-mkdir -p "$REPORT_DIR"
+if ! mkdir -p "$REPORT_DIR"; then
+  echo "rollback report directory could not be created" >&2
+  exit 1
+fi
 rollback_status=0
 dockerhub_actual=""
 ghcr_actual=""

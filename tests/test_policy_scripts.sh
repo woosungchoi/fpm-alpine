@@ -208,7 +208,7 @@ assert_executable scripts/create-php-lifecycle-issue.sh
 assert_contains .github/workflows/php-lifecycle.yml "cron: '19 5 1 * *'"
 assert_contains .github/workflows/php-lifecycle.yml 'workflow_dispatch:'
 assert_contains .github/workflows/php-lifecycle.yml 'scripts/check-php-lifecycle.py'
-assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["publish", "dependency-auto-publish"]'
+assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["dependency-auto-publish"]'
 assert_contains .github/workflows/published-runtime-smoke.yml 'branches: ["main"]'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-image.sh'
 assert_not_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-dockerhub-image.sh'
@@ -462,7 +462,8 @@ path = Path('.github/workflows/sync-dockerhub-metadata.yml')
 text = path.read_text()
 data = yaml.safe_load(text)
 trigger = data.get('on', data.get(True))
-assert set(trigger) == {'workflow_dispatch'}, trigger
+assert set(trigger) == {'repository_dispatch'}, trigger
+assert trigger['repository_dispatch']['types'] == ['fpm-sync-dockerhub-metadata']
 assert data['permissions'] == {}
 assert set(data['jobs']) == {'sync'}
 job = data['jobs']['sync']
@@ -474,6 +475,13 @@ ref, comment = uses[0]
 assert re.fullmatch(r'actions/checkout@[0-9a-f]{40}', ref), ref
 assert comment, ref
 run = '\n'.join(str(step.get('run', '')) for step in job['steps'])
+assert job['steps'][0]['name'] == 'Validate owner dispatch envelope before checkout'
+assert job['steps'][1]['with'] == {
+    'persist-credentials': False,
+    'ref': '${{ github.sha }}',
+}
+assert 'EVENT_ACTOR_ID' in run
+assert 'metadata sync payload must be empty' in run
 assert 'scripts/sync_dockerhub_metadata.py' in run
 assert job['steps'][-1]['env'] == {
     'DOCKERHUB_USERNAME': '${{ secrets.DOCKERHUB_USERNAME }}',

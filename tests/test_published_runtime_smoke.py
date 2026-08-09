@@ -205,7 +205,7 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
         trigger = self.trigger(data)
         self.assertEqual(
             trigger["workflow_run"]["workflows"],
-            ["publish", "dependency-auto-publish"],
+            ["dependency-auto-publish"],
         )
 
         prepare = data["jobs"]["prepare"]
@@ -233,13 +233,6 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
                 "multi-registry",
                 "dependency-auto-publish.yml",
                 "true",
-            ),
-            (
-                "workflow_run",
-                ".github/workflows/publish.yml",
-                "multi-registry",
-                "publish.yml",
-                "false",
             ),
         )
         for event_name, upstream_path, expected_mode, expected_signer, expected_binding in known_cases:
@@ -274,6 +267,7 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
 
         for event_name, upstream_path in (
             ("workflow_run", ""),
+            ("workflow_run", ".github/workflows/publish.yml"),
             ("workflow_run", ".github/workflows/renamed-publisher.yml"),
             ("push", ""),
         ):
@@ -310,6 +304,13 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
             "github.event.workflow_run.head_sha || 'main' }}"
         )
         self.assertEqual(prepare_checkout["with"]["ref"], expected_checkout_ref)
+        upstream_check = next(
+            step for step in prepare["steps"]
+            if step["name"] == "Revalidate exact upstream workflow run before checkout"
+        )
+        self.assertIn("actions/runs/${UPSTREAM_RUN_ID}", upstream_check["run"])
+        self.assertIn('"run_attempt": int(sys.argv[2])', upstream_check["run"])
+        self.assertIn('"conclusion": "success"', upstream_check["run"])
         matrix = next(step for step in prepare["steps"] if step.get("id") == "matrix")
         self.assertIn('{"active", "security-only"}', matrix["run"])
 
@@ -401,6 +402,61 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
             self.assertIn("signing_ref=main\n", output_path.read_text())
             self.assertIn("signing_workflow=dependency-auto-publish.yml\n", output_path.read_text())
             self.assertIn("verify_dockerhub_signature=0\n", output_path.read_text())
+
+    def test_upstream_workflow_run_is_revalidated_against_the_api(self) -> None:
+        _, data = self.load_workflow()
+        step = next(
+            item for item in data["jobs"]["prepare"]["steps"]
+            if item["name"] == "Revalidate exact upstream workflow run before checkout"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_gh = root / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "print(os.environ['RUN_JSON'])\n"
+            )
+            fake_gh.chmod(0o755)
+            run_id = 123
+            attempt = 2
+            head_sha = "a" * 40
+            valid = {
+                "id": run_id,
+                "run_attempt": attempt,
+                "path": ".github/workflows/dependency-auto-publish.yml",
+                "head_branch": "main",
+                "head_sha": head_sha,
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "repository": {"full_name": "woosungchoi/fpm-alpine"},
+            }
+            for conclusion, expected_ok in (("success", True), ("failure", False)):
+                with self.subTest(conclusion=conclusion):
+                    payload = {**valid, "conclusion": conclusion}
+                    env = os.environ.copy()
+                    env.update(
+                        PATH=f"{root}:{env['PATH']}",
+                        GH_TOKEN="test-token",
+                        GITHUB_REPOSITORY="woosungchoi/fpm-alpine",
+                        UPSTREAM_RUN_ID=str(run_id),
+                        UPSTREAM_RUN_ATTEMPT=str(attempt),
+                        UPSTREAM_WORKFLOW_PATH=(
+                            ".github/workflows/dependency-auto-publish.yml"
+                        ),
+                        UPSTREAM_HEAD_SHA=head_sha,
+                        RUN_JSON=json.dumps(payload),
+                    )
+                    completed = subprocess.run(
+                        ["bash", "-c", step["run"]],
+                        cwd=ROOT,
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode == 0, expected_ok, completed.stderr)
 
     def test_dependency_signatures_carry_a_signed_operation_marker(self) -> None:
         auto = (ROOT / ".github/workflows/dependency-auto-publish.yml").read_text()

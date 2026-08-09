@@ -161,6 +161,55 @@ class AutoTransactionEvidenceTests(unittest.TestCase):
             self.assertEqual(fields[3], "automatic")
             self.assertNotEqual(fields[1], fields[2])
 
+    def test_committed_receipt_requires_exact_set_and_requested_plan_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            payload = self.payload("automatic")
+            plan_hash = self.write_evidence(evidence, payload)
+            command = [
+                str(VALIDATOR),
+                str(evidence),
+                "--run-id",
+                str(RUN_ID),
+                "--run-attempt",
+                str(RUN_ATTEMPT),
+                "--workflow-sha",
+                WORKFLOW_SHA,
+                "--expected-plan-sha256",
+                plan_hash,
+                "--exact-set",
+            ]
+            valid = subprocess.run(
+                command,
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+            self.assertEqual(valid.stdout, "")
+
+            wrong_hash = subprocess.run(
+                [*command[:-2], "0" * 64, "--exact-set"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(wrong_hash.returncode, 0)
+            self.assertIn("requested plan", wrong_hash.stderr)
+
+            (evidence / "unexpected.txt").write_text("unexpected\n")
+            extra = subprocess.run(
+                command,
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(extra.returncode, 0)
+            self.assertIn("artifact set mismatch", extra.stderr)
+
     def test_cross_run_or_workflow_substitution_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             evidence = Path(tmp)

@@ -43,11 +43,14 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
         mode = next(step for step in prepare["steps"] if step.get("id") == "mode")
         self.assertEqual(mode["env"]["EVENT_NAME"], "${{ github.event_name }}")
         self.assertEqual(
-            mode["env"]["UPSTREAM_WORKFLOW"],
-            "${{ github.event.workflow_run.name }}",
+            mode["env"]["UPSTREAM_WORKFLOW_PATH"],
+            "${{ github.event.workflow_run.path }}",
         )
         self.assertIn("verification_mode=dockerhub-only", mode["run"])
-        self.assertIn('"$UPSTREAM_WORKFLOW" = publish', mode["run"])
+        self.assertIn(
+            '"$UPSTREAM_WORKFLOW_PATH" = .github/workflows/publish.yml',
+            mode["run"],
+        )
         self.assertIn("verification_mode=multi-registry", mode["run"])
 
         steps = data["jobs"]["verify"]["steps"]

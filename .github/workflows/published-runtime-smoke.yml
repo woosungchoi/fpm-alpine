@@ -36,11 +36,11 @@ jobs:
         id: mode
         env:
           EVENT_NAME: ${{ github.event_name }}
-          UPSTREAM_WORKFLOW: ${{ github.event.workflow_run.name }}
+          UPSTREAM_WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
         run: |
           set -euo pipefail
           verification_mode=dockerhub-only
-          if [ "$EVENT_NAME" = workflow_run ] && [ "$UPSTREAM_WORKFLOW" = publish ]; then
+          if [ "$EVENT_NAME" = workflow_run ] && [ "$UPSTREAM_WORKFLOW_PATH" = .github/workflows/publish.yml ]; then
             verification_mode=multi-registry
           fi
           echo "verification_mode=$verification_mode" >> "$GITHUB_OUTPUT"

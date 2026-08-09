@@ -5,22 +5,32 @@ import hashlib
 import json
 import os
 import sys
+from pathlib import Path
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        raise SystemExit(f"usage: {sys.argv[0]} <expected-source-sha> <expected-evidence-sha256>")
+    if len(sys.argv) not in {3, 4}:
+        raise SystemExit(
+            f"usage: {sys.argv[0]} <expected-source-sha> "
+            "<expected-evidence-sha256> [evidence-dir]"
+        )
 
-    expected_source_sha, expected_hash = sys.argv[1:]
+    expected_source_sha, expected_hash = sys.argv[1:3]
     if len(expected_source_sha) != 40 or any(char not in "0123456789abcdef" for char in expected_source_sha):
         raise SystemExit("invalid expected source SHA")
     if len(expected_hash) != 64 or any(char not in "0123456789abcdef" for char in expected_hash):
         raise SystemExit("invalid expected evidence SHA-256")
 
-    try:
-        raw = base64.b64decode(os.environ["LEGACY_EVIDENCE_B64"], validate=True)
-    except (KeyError, ValueError) as error:
-        raise SystemExit("invalid legacy cutover evidence encoding") from error
+    if len(sys.argv) == 4:
+        try:
+            raw = (Path(sys.argv[3]) / "cutover-evidence.json").read_bytes()
+        except OSError as error:
+            raise SystemExit("invalid legacy cutover evidence file") from error
+    else:
+        try:
+            raw = base64.b64decode(os.environ["LEGACY_EVIDENCE_B64"], validate=True)
+        except (KeyError, ValueError) as error:
+            raise SystemExit("invalid legacy cutover evidence encoding") from error
 
     if hashlib.sha256(raw).hexdigest() != expected_hash:
         raise SystemExit("legacy cutover evidence hash mismatch")
@@ -50,9 +60,30 @@ def main() -> int:
     dockerhub = payload.get("dockerhub") or {}
     github = payload.get("github") or {}
     in_flight_builds = dockerhub.get("in_flight_builds")
-    if dockerhub.get("build_rule_active") is not False or type(in_flight_builds) is not int or in_flight_builds != 0:
+    if (
+        dockerhub.get("build_rule_active") is not False
+        or type(in_flight_builds) is not int
+        or in_flight_builds != 0
+        or dockerhub.get("public_is_automated") is not False
+        or not isinstance(dockerhub.get("repository_last_updated"), str)
+        or not dockerhub.get("repository_last_updated")
+        or dockerhub.get("queue_basis")
+        != "automatic builds disabled and no source-capable GitHub legacy publisher hook"
+    ):
         raise SystemExit("Docker Hub legacy publisher is not quiescent")
-    if github.get("legacy_webhook_present") is not False:
+    expected_hooks = [{
+        "id": 402842509,
+        "name": "web",
+        "active": True,
+        "events": ["pull_request", "push"],
+        "url_host": "api.snyk.io",
+        "url_kind": "github-webhook-uuid",
+    }]
+    if (
+        github.get("repository") != "woosungchoi/fpm-alpine"
+        or github.get("legacy_webhook_present") is not False
+        or github.get("active_hooks") != expected_hooks
+    ):
         raise SystemExit("legacy GitHub webhook is still present")
     return 0
 

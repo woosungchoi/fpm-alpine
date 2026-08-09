@@ -52,8 +52,8 @@ Non-required / report-only workflows:
   - Opens or updates one deduplicated `php-lifecycle` issue when attention is required.
 - `published-runtime-smoke`
   - Weekly, manual, and post-publish exact-digest runtime/supply-chain verification for active PHP 8.2–8.5 tags.
-  - Weekly, manual, and `dependency-auto-publish` runs resolve each Docker Hub moving tag once, then propagate that immutable digest through manifest reporting, platform descriptors, provenance, SBOM, OCI labels, amd64/arm64 runtime behavior, and vulnerability scanning. Bounded retries absorb transient registry-inspection failures without weakening any artifact check or re-resolving the tag after the digest transaction starts.
-  - A successful manual `publish` run uses the stricter multi-registry path: Docker Hub/GHCR platform semantics, provenance, SBOM, Cosign identity, runtime behavior, and cross-registry parity must all pass.
+  - Weekly and manual runs resolve each Docker Hub and GHCR moving tag once. A run triggered by `dependency-auto-publish` instead downloads that exact upstream run's aggregate transaction artifact and never re-resolves its moving tags. The workflow propagates the resulting immutable subjects through manifest reporting, platform descriptors, provenance, SBOM, OCI labels, Cosign, amd64/arm64 runtime behavior, semantic parity, and vulnerability scanning. Bounded retries absorb transient registry-inspection failures without weakening an artifact check.
+  - `publish.yml` and `dependency-auto-publish.yml` are the only authorized signing workflow identities. Unknown workflow paths and signer identities fail closed.
   - The multi-registry path resolves the exact Cosign branch identity from the annotated `archive/php-8.5-final-branch` boundary pinned to commit `f941dde2ff8864e1b056c051d330eb4321afb916`: source revisions at or before the boundary must be signed by `refs/heads/8.5`, while descendants must be signed by `refs/heads/main`. A moved tag or unrelated history is rejected.
 - `sync-dockerhub-metadata`
   - Manual-only and gated by the protected `fpm-production` environment.
@@ -128,7 +128,7 @@ Expected platforms:
 Triage:
 
 1. Check whether the failure happened immediately after a production promotion.
-2. If yes, compare both registries by exact digest and allow only bounded registry propagation delay.
+2. If yes, compare each registry's recorded exact subject and then compare platform config/layer semantics. Do not require the two registries' top-level index digests to be equal.
 3. Re-run the workflow manually with the same image ref after propagation.
 4. If a `manifest-failure` issue was opened, treat it as a triage queue item and close it only after the manifest is verified or the tag is intentionally unsupported.
 5. If the tag still fails, inspect the GitHub Actions publisher logs and generated manifest report artifact.
@@ -178,17 +178,28 @@ The automated path has three stages:
   - It revalidates the exact workflow run, same-repository PR metadata, bot branch, and dependency-only diff before requesting GitHub native auto-merge.
   - `DEPENDENCY_AUTO_MERGE_ENABLED=true` is required. Protected `main` and the strict required `docker-smoke` check remain authoritative; direct/admin merge is not used.
 - `dependency-auto-publish`
-  - It runs only when protected `main` changes `build/versions.json` and the merged diff is accepted by the dependency classifier.
-  - It builds all maintained PHP minors for `linux/amd64` and `linux/arm64` and pushes only `8.2`, `8.3`, `8.4`, and `8.5` to `woosungchoi/fpm-alpine` on Docker Hub.
-  - It verifies that each Docker Hub tag resolves to the build digest and contains both required platforms. It does not use GHCR canaries or a separate promotion controller.
+  - It runs automatically only when protected `main` changes `build/versions.json` and the merged diff is accepted by the dependency classifier. Backfill is not a branch-selectable `workflow_dispatch`; it is the typed `fpm-ghcr-backfill` `repository_dispatch`, so GitHub loads the workflow definition from the default branch. Its payload must name `backfill-ghcr` and an exact ancestor source SHA, and that commit's `build/versions.json` must exactly equal the trusted default-branch release manifest before the active matrix is accepted.
+  - Automatic runs build all maintained PHP minors for `linux/amd64` and `linux/arm64` as unique non-moving GHCR canaries. Backfill runs copy the already-published Docker Hub exact subjects into equivalent GHCR canaries without rebuilding.
+  - Every canary must pass exact provenance, SBOM, OCI labels, Cosign, anonymous amd64/arm64 runtime, full runtime-contract, and Trivy checks. Cosign is pinned to `v3.1.2`; its OCI 1.1 referrer signatures carry a signed `fpm.operation` annotation and do not add public moving aliases to the Docker Hub four-tag surface. Schema-v3 metadata binds mode, minor/patch, source SHA, run ID/attempt, canonical GHCR ref/digest, and the exact Docker Hub source digest for backfill.
+  - A single `fpm-auto-production` controller downloads and revalidates the exact active artifact set before using registry credentials. Automatic mode additionally selects a successful immutable `legacy-cutover-lease` artifact for the exact owner, repository, workflow path, current-main source SHA, run ID, and attempt. The 15-minute evidence is revalidated both before Docker Hub credentials and immediately before moving mutation. `scripts/refresh-cutover-lease.py --dispatch --if-publisher-active` is the owner-authenticated recurring capture entry point; it publishes nothing when no exact-main automatic publisher is queued or running and never records the opaque webhook URL. This environment is a protected-main unattended authority boundary, not a reviewer-approval or environment-secret isolation claim.
+  - The controller records Docker Hub and GHCR baselines independently, verifies semantic parity rather than top-level digest equality, creates no-clobber GHCR rollback pins for both registry baselines, and uploads a strict JSON plan whose SHA is part of the artifact name before moving mutation. The GHCR-held Docker Hub fallback is accepted only when the copy preserves the exact Docker Hub prior top-level digest.
+  - Docker Hub's destination digest is unknown until the cross-registry copy completes and is recorded separately in the aggregate result. Backfill performs no Docker Hub login, alias write, or signature write; historical Docker Hub subjects may predate Cosign, so the source is trusted through exact manifest/provenance/SBOM/labels/platform-runtime binding and the copied GHCR subject is the one signed by the pinned automatic-workflow identity with `fpm.operation=backfill-ghcr`. Scheduled/manual observers verify that signed exact-subject operation before allowing the unsigned Docker Hub exception. Automatic and manual production share the non-cancelling repository-wide `fpm-production-promotion` concurrency group.
+  - Partial promotion or post-promotion verification failure first classifies and rechecks every attempted alias. Known states trigger aggregate rollback for every attempted release unit; any read error or unknown external drift removes the verified result and prevents all trap-driven alias overwrites. The final strict gate verifies registry-specific exact subjects, operation-appropriate signatures, provenance, SBOM, labels, platform runtime, alias read-back, and semantic config/layer parity.
+- `dependency-publish-recovery`
+  - It is an independent default-branch `fpm-publish-recover` repository-dispatch controller in the same production concurrency group.
+  - It accepts only a failed, cancelled, or timed-out `dependency-auto-publish` run, its exact attempt, and the SHA-256 of that run's frozen plan artifact. A later successful `dependency-auto-publish` or `publish` run blocks the stale recovery request.
+  - It classifies the complete active alias set as `prior`, `known-target`, or `unknown` before any write. One unknown state aborts the entire recovery without overwriting an alias.
+  - When every state is known, it restores only changed aliases from the registry-specific rollback subjects and requires exact read-back plus semantic parity. Recovery evidence records `restored`, `unknown`, or `failed` atomically; GHCR-only backfill recovery never logs in to Docker Hub.
 
 Activation order:
 
 1. Create the scoped App/environment and run `dependency-update-pr` manually with `dry_run=true`.
 2. Keep `DEPENDENCY_AUTO_MERGE_ENABLED=true` and verify that protected `main` requires the strict `docker-smoke` check.
-3. Set `DEPENDENCY_AUTOMATION_ENABLED=true` after the updater dry run is clean. Each generated PR then follows the same check, native auto-merge, and Docker Hub publish path.
+3. Require the protected-branch-only `fpm-auto-production` unattended environment and valid repository-scoped Docker Hub credentials before enabling publication. Install the owner-authenticated recurring cutover-lease capture controller and prove that one capture-only run reports disabled Docker Hub automation, zero in-flight legacy builds, the exact redacted nonpublisher hook allowlist, and no raw hook URL. Do not describe the environment as a reviewer gate unless reviewers are actually configured.
+4. Complete the typed GHCR backfill and verify live semantic parity for all active minors. Automatic promotion independently enforces this parity and remains fail-closed before that state exists.
+5. Set `DEPENDENCY_AUTOMATION_ENABLED=true` after the updater dry run is clean. Each generated PR then follows the same check, native auto-merge, GHCR canary, and dual-registry promotion path.
 
-Immediately set `DEPENDENCY_AUTOMATION_ENABLED=false` when discovery is ambiguous or generated PRs are incorrect. Set `DEPENDENCY_AUTO_MERGE_ENABLED=false` to stop automatic merges. To stop publishing, disable `dependency-auto-publish` and keep `main` unchanged until the workflow issue is corrected.
+Immediately set `DEPENDENCY_AUTOMATION_ENABLED=false` when discovery is ambiguous or generated PRs are incorrect. Set `DEPENDENCY_AUTO_MERGE_ENABLED=false` to stop automatic merges. To stop new publisher runs, disable `dependency-auto-publish` on the default branch and keep `main` unchanged; disabling does not cancel an already queued or running run. Inspect queued/running `dependency-auto-publish`, `dependency-publish-recovery`, and `publish` runs before taking further action. Before moving mutation begins, cancel the unwanted run. Once mutation may have begun, preserve Docker Hub/GHCR credentials, allow the controller's aggregate rollback to finish when possible, and use the plan-SHA-bound recovery dispatch after a cancellation or runner loss. Revoke or rotate publisher credentials only after registry-specific alias read-back and recovery evidence are complete.
 
 ### External Snyk webhook
 
@@ -216,6 +227,19 @@ Before merging CI/workflow changes:
 HOME=/home/openclaw XDG_CONFIG_HOME= gh run list --repo woosungchoi/fpm-alpine --branch main --limit 10
 HOME=/home/openclaw XDG_CONFIG_HOME= gh workflow run verify-published-manifest.yml --repo woosungchoi/fpm-alpine --ref main -f image_ref=woosungchoi/fpm-alpine:8.5
 HOME=/home/openclaw XDG_CONFIG_HOME= gh workflow run dependency-freshness.yml --repo woosungchoi/fpm-alpine --ref main
+
+# Default-branch-only GHCR backfill; substitute the verified Docker Hub source revision.
+HOME=/home/openclaw XDG_CONFIG_HOME= gh api --method POST repos/woosungchoi/fpm-alpine/dispatches \
+  -f event_type=fpm-ghcr-backfill \
+  -F 'client_payload[operation]=backfill-ghcr' \
+  -F 'client_payload[source_sha]=<40-hex-source-sha>'
+
+# Recovery; use only after independently verifying the failed run and frozen plan SHA.
+HOME=/home/openclaw XDG_CONFIG_HOME= gh api --method POST repos/woosungchoi/fpm-alpine/dispatches \
+  -f event_type=fpm-publish-recover \
+  -F 'client_payload[original_run_id]=<run-id>' \
+  -F 'client_payload[original_run_attempt]=<attempt>' \
+  -f 'client_payload[plan_sha256]=<64-hex-plan-sha256>'
 ```
 
 ## Branch protection rollback

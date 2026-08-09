@@ -53,7 +53,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: publish-${{ github.event.inputs.channel }}
+  group: ${{ github.event.inputs.channel == 'production' && 'fpm-production-promotion' || 'publish-canary' }}
   cancel-in-progress: false
 
 env:
@@ -197,9 +197,11 @@ jobs:
       - name: Prepare immutable build metadata
         id: metadata
         run: |
-          echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-          echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-          echo "release_date=$(date -u +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+          {
+            echo "created=$(git show -s --format=%cI "$GITHUB_SHA")"
+            echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")"
+            echo "release_date=$(date -u +'%Y%m%d')"
+          } >> "$GITHUB_OUTPUT"
 
   canary:
     if: ${{ github.event.inputs.channel == 'canary' }}
@@ -290,6 +292,8 @@ jobs:
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
 
       - name: Capture and sign exact GHCR canary subject
         id: subjects
@@ -711,6 +715,8 @@ jobs:
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
 
       - name: Load and bind verified canary metadata
         id: canary
@@ -768,8 +774,15 @@ jobs:
           previous_ghcr="$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")"
           [[ "$previous_dockerhub" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$previous_ghcr" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "previous_dockerhub=$previous_dockerhub" >> "$GITHUB_OUTPUT"
-          echo "previous_ghcr=$previous_ghcr" >> "$GITHUB_OUTPUT"
+          ./scripts/verify-rollback-image.sh \
+            "${DOCKERHUB_REPOSITORY}@${previous_dockerhub}" \
+            "${GHCR_REPOSITORY}@${previous_ghcr}" \
+            "$PHP_MINOR" \
+            publisher-reports/preflight-baseline
+          {
+            echo "previous_dockerhub=$previous_dockerhub"
+            echo "previous_ghcr=$previous_ghcr"
+          } >> "$GITHUB_OUTPUT"
 
           ./scripts/promote-image.sh --check-only --policy moving-only \
             "$DOCKERHUB_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \

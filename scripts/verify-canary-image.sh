@@ -6,6 +6,7 @@ EXPECTED_REVISION="${2:-}"
 EXPECTED_VERSION="${3:-}"
 REPORT_DIR="${4:-publisher-reports}"
 EXPECTED_SIGNING_REF="${5:-main}"
+EXPECTED_PUBLISHER_WORKFLOW="${EXPECTED_PUBLISHER_WORKFLOW:-publish.yml}"
 EXPECTED_SOURCE="${EXPECTED_SOURCE:-https://github.com/woosungchoi/fpm-alpine}"
 EXPECTED_LICENSES="${EXPECTED_LICENSES:-GPL-2.0-only}"
 OIDC_ISSUER="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
@@ -18,7 +19,22 @@ PLATFORMS=(linux/amd64 linux/arm64)
 [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo "expected revision must be exact" >&2; exit 64; }
 [[ "$EXPECTED_VERSION" =~ ^8\.[2-5]\.[0-9]+$ ]] || { echo "expected version must be active" >&2; exit 64; }
 case "$EXPECTED_SIGNING_REF" in main|8.5) ;; *) echo "invalid signing ref" >&2; exit 64 ;; esac
-identity="^https://github.com/woosungchoi/fpm-alpine/.github/workflows/publish.yml@refs/heads/${EXPECTED_SIGNING_REF}$"
+case "$EXPECTED_PUBLISHER_WORKFLOW" in
+  publish.yml) publisher_workflow_pattern='publish\.yml' ;;
+  dependency-auto-publish.yml)
+    [ "$EXPECTED_SIGNING_REF" = main ] || { echo "dependency-auto-publish.yml signatures must use refs/heads/main" >&2; exit 64; }
+    publisher_workflow_pattern='dependency-auto-publish\.yml'
+    ;;
+  any-authorized)
+    if [ "$EXPECTED_SIGNING_REF" = main ]; then
+      publisher_workflow_pattern='(publish|dependency-auto-publish)\.yml'
+    else
+      publisher_workflow_pattern='publish\.yml'
+    fi
+    ;;
+  *) echo "invalid expected publisher workflow" >&2; exit 64 ;;
+esac
+identity="^https://github\\.com/woosungchoi/fpm-alpine/\\.github/workflows/${publisher_workflow_pattern}@refs/heads/${EXPECTED_SIGNING_REF}$"
 
 mkdir -p "$REPORT_DIR/manifests" "$REPORT_DIR/verification" "$REPORT_DIR/provenance" "$REPORT_DIR/sbom" "$REPORT_DIR/smoke"
 PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
@@ -63,7 +79,8 @@ cosign verify \
   "$GHCR_SUBJECT" >/dev/null
 
 minor="${EXPECTED_VERSION%.*}"
-mapfile -t runtime_values < <(python3 - "$minor" <<'PY'
+runtime_values_output=
+if ! runtime_values_output="$(python3 - "$minor" <<'PY'
 import json
 import sys
 data = json.load(open("build/versions.json"))
@@ -75,8 +92,12 @@ for value in (
     iconv["ownerPath"], iconv["target"],
 ): print(value)
 PY
-)
-[ "${#runtime_values[@]}" -eq 9 ] || exit 1
+)"; then
+  echo "failed to load runtime expectations" >&2
+  exit 1
+fi
+mapfile -t runtime_values <<< "$runtime_values_output"
+[ "${#runtime_values[@]}" -eq 9 ] || { echo "failed to load runtime expectations" >&2; exit 1; }
 export EXPECTED_PHP_MINOR="$minor"
 export EXPECTED_IMAGICK_VERSION="${runtime_values[0]}"
 export EXPECTED_REDIS_VERSION="${runtime_values[1]}"
@@ -98,6 +119,7 @@ cat > "$REPORT_DIR/verification-summary.md" <<EOF
 - GHCR: \`${GHCR_SUBJECT}\`
 - Source revision: \`${EXPECTED_REVISION}\`
 - PHP version: \`${EXPECTED_VERSION}\`
+- Signing workflow: \`${EXPECTED_PUBLISHER_WORKFLOW}\`
 - Platforms: \`${PLATFORMS[*]}\`
 - Gates: manifest, provenance, SBOM, signature, runtime smoke
 EOF

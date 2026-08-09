@@ -9,6 +9,7 @@ ARG OCI_CREATED=""
 LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
 	org.opencontainers.image.revision="${OCI_REVISION}" \
 	org.opencontainers.image.version="${OCI_VERSION}" \
+	org.opencontainers.image.licenses="GPL-2.0-only" \
 	org.opencontainers.image.created="${OCI_CREATED}"
 
 ARG IMAGICK_URL=https://pecl.php.net/get/imagick-3.8.1.tgz

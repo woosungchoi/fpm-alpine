@@ -211,11 +211,40 @@ assert_contains .github/workflows/php-lifecycle.yml 'scripts/check-php-lifecycle
 assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["publish", "dependency-auto-publish"]'
 assert_contains .github/workflows/published-runtime-smoke.yml 'branches: ["main"]'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-image.sh'
-assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-dockerhub-image.sh'
+assert_not_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-dockerhub-image.sh'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/scan-image.sh'
 assert_contains .github/workflows/published-runtime-smoke.yml '.github/workflows/dependency-auto-publish.yml)'
+assert_contains .github/workflows/published-runtime-smoke.yml 'signing_workflow=dependency-auto-publish.yml'
 assert_contains .github/workflows/published-runtime-smoke.yml 'unsupported workflow_run path:'
 assert_contains .github/workflows/published-runtime-smoke.yml 'DOCKERHUB_DIGEST: ${{ steps.source.outputs.dockerhub_digest }}'
+assert_contains .github/workflows/dependency-auto-publish.yml 'environment: fpm-auto-production'
+assert_contains .github/workflows/dependency-auto-publish.yml 'types: [fpm-ghcr-backfill]'
+assert_not_contains .github/workflows/dependency-auto-publish.yml 'workflow_dispatch:'
+assert_contains .github/workflows/dependency-auto-publish.yml 'scripts/promote-auto-canaries.sh'
+assert_contains .github/workflows/dependency-auto-publish.yml 'scripts/evaluate-auto-promotion.py'
+assert_contains .github/workflows/dependency-auto-publish.yml "if: steps.mode.outputs.mode == 'automatic'"
+for script in \
+  scripts/assert-image-tag-absent.sh \
+  scripts/promote-auto-canaries.sh \
+  scripts/validate-auto-promotion-plan.py \
+  scripts/validate-auto-transaction-result.py; do
+  assert_file "$script"
+  assert_executable "$script"
+done
+assert_contains .github/workflows/dependency-publish-recovery.yml 'types: [fpm-publish-recover]'
+assert_contains .github/workflows/dependency-publish-recovery.yml 'group: fpm-production-promotion'
+for workflow in \
+  .github/workflows/dependency-auto-publish.yml \
+  .github/workflows/dependency-publish-recovery.yml \
+  .github/workflows/publish.yml \
+  .github/workflows/published-runtime-smoke.yml; do
+  assert_contains "$workflow" 'cosign-release: v3.1.2'
+done
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_dependency_auto_publish.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_auto_promotion_transaction.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_auto_transaction_evidence.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_image_tag_absence.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_rollback_sources.py'
 assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_published_runtime_smoke.py'
 assert_contains .github/workflows/published-runtime-smoke.yml 'git merge-base --is-ancestor'
 python3 - <<'PY'

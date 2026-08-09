@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   prepare:
+    name: Prepare validated build matrix
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -40,6 +41,7 @@ jobs:
           echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
   dependency-safety:
+    name: Dependency and publisher safety
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -57,6 +59,16 @@ jobs:
           ./tests/test_policy_scripts.sh
           ./tests/test_reproducible_build_policy.sh
           ./tests/test_publisher_policy.sh
+          python3 tests/test_dependency_auto_publish.py
+          python3 tests/test_backfill_source_manifest.py
+          python3 tests/test_fresh_cutover_lease.py
+          python3 tests/test_require_fresh_cutover_lease.py
+          python3 tests/test_refresh_cutover_lease.py
+          python3 tests/test_published_operation.py
+          python3 tests/test_auto_promotion_transaction.py
+          python3 tests/test_auto_transaction_evidence.py
+          python3 tests/test_image_tag_absence.py
+          python3 tests/test_rollback_sources.py
           python3 tests/test_published_runtime_smoke.py
           ./tests/test_smoke_script.sh
           python3 tests/test_php_lifecycle.py

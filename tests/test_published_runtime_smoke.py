@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Regression tests for Docker-Hub-only published runtime verification."""
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "published-runtime-smoke.yml"
 DOCKERHUB_VERIFIER = ROOT / "scripts" / "verify-published-dockerhub-image.sh"
 STRICT_VERIFIER = ROOT / "scripts" / "verify-published-image.sh"
+OPERATION_RESOLVER = ROOT / "scripts" / "resolve-published-operation.sh"
 
 
 class PublishedRuntimeSmokeTests(unittest.TestCase):
@@ -213,6 +213,10 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
             prepare["outputs"]["verification_mode"],
             "${{ steps.mode.outputs.verification_mode }}",
         )
+        self.assertEqual(
+            prepare["outputs"]["signing_workflow"],
+            "${{ steps.mode.outputs.signing_workflow }}",
+        )
         mode = next(step for step in prepare["steps"] if step.get("id") == "mode")
         self.assertEqual(mode["env"]["EVENT_NAME"], "${{ github.event_name }}")
         self.assertEqual(
@@ -221,23 +225,34 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
         )
 
         known_cases = (
-            ("schedule", "", "dockerhub-only"),
-            ("workflow_dispatch", "", "dockerhub-only"),
+            ("schedule", "", "multi-registry", "any-authorized", "false"),
+            ("workflow_dispatch", "", "multi-registry", "any-authorized", "false"),
             (
                 "workflow_run",
                 ".github/workflows/dependency-auto-publish.yml",
-                "dockerhub-only",
+                "multi-registry",
+                "dependency-auto-publish.yml",
+                "true",
             ),
-            ("workflow_run", ".github/workflows/publish.yml", "multi-registry"),
+            (
+                "workflow_run",
+                ".github/workflows/publish.yml",
+                "multi-registry",
+                "publish.yml",
+                "false",
+            ),
         )
-        for event_name, upstream_path, expected_mode in known_cases:
-            with self.subTest(event_name=event_name, upstream_path=upstream_path):
-                with tempfile.TemporaryDirectory() as temporary:
+        for event_name, upstream_path, expected_mode, expected_signer, expected_binding in known_cases:
+            with (
+                self.subTest(event_name=event_name, upstream_path=upstream_path),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                     output_path = Path(temporary) / "output"
                     env = os.environ.copy()
                     env.update(
                         EVENT_NAME=event_name,
                         UPSTREAM_WORKFLOW_PATH=upstream_path,
+                        UPSTREAM_HEAD_SHA="a" * 40 if event_name == "workflow_run" else "",
                         GITHUB_OUTPUT=str(output_path),
                     )
                     completed = subprocess.run(
@@ -252,7 +267,9 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
                     self.assertEqual(completed.returncode, 0, completed.stdout)
                     self.assertEqual(
                         output_path.read_text(),
-                        f"verification_mode={expected_mode}\n",
+                        f"verification_mode={expected_mode}\n"
+                        f"signing_workflow={expected_signer}\n"
+                        f"bind_upstream_evidence={expected_binding}\n",
                     )
 
         for event_name, upstream_path in (
@@ -260,13 +277,16 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
             ("workflow_run", ".github/workflows/renamed-publisher.yml"),
             ("push", ""),
         ):
-            with self.subTest(rejected_event=event_name, upstream_path=upstream_path):
-                with tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(rejected_event=event_name, upstream_path=upstream_path),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                     output_path = Path(temporary) / "output"
                     env = os.environ.copy()
                     env.update(
                         EVENT_NAME=event_name,
                         UPSTREAM_WORKFLOW_PATH=upstream_path,
+                        UPSTREAM_HEAD_SHA="a" * 40 if event_name == "workflow_run" else "",
                         GITHUB_OUTPUT=str(output_path),
                     )
                     completed = subprocess.run(
@@ -285,7 +305,13 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
         prepare_checkout = next(
             step for step in prepare["steps"] if step["name"] == "Checkout main"
         )
-        self.assertEqual(prepare_checkout["with"]["ref"], "main")
+        expected_checkout_ref = (
+            "${{ github.event_name == 'workflow_run' && "
+            "github.event.workflow_run.head_sha || 'main' }}"
+        )
+        self.assertEqual(prepare_checkout["with"]["ref"], expected_checkout_ref)
+        matrix = next(step for step in prepare["steps"] if step.get("id") == "matrix")
+        self.assertIn('{"active", "security-only"}', matrix["run"])
 
         steps = data["jobs"]["verify"]["steps"]
         verify_checkout = next(
@@ -293,7 +319,7 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
             for step in steps
             if step["name"] == "Checkout main with protected history"
         )
-        self.assertEqual(verify_checkout["with"]["ref"], "main")
+        self.assertEqual(verify_checkout["with"]["ref"], expected_checkout_ref)
         source = next(
             step for step in steps if step["name"] == "Resolve published source revision"
         )
@@ -312,17 +338,18 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
             for step in steps
             if step["name"] == "Verify exact multi-registry runtime and supply chain"
         )
-        dockerhub = next(
-            step
-            for step in steps
-            if step["name"] == "Verify exact Docker Hub runtime and supply chain"
-        )
         for step in (cosign, prerequisites, multi):
             self.assertEqual(
                 step["if"],
                 "needs.prepare.outputs.verification_mode == 'multi-registry'",
             )
         self.assertIn("resolve-publisher-signing-ref.sh", prerequisites["run"])
+        self.assertIn("resolve-published-operation.sh", prerequisites["run"])
+        self.assertEqual(
+            prerequisites["env"]["EXPECTED_SIGNING_WORKFLOW"],
+            "${{ needs.prepare.outputs.signing_workflow }}",
+        )
+        self.assertIn("signing_ref=main", prerequisites["run"])
         self.assertEqual(
             multi["env"]["DOCKERHUB_REF"],
             "${{ steps.source.outputs.dockerhub_subject }}",
@@ -335,19 +362,57 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
             multi["env"]["SIGNING_REF"],
             "${{ steps.multi.outputs.signing_ref }}",
         )
+        self.assertEqual(
+            multi["env"]["EXPECTED_SIGNING_WORKFLOW"],
+            "${{ steps.multi.outputs.signing_workflow }}",
+        )
+        self.assertEqual(
+            multi["env"]["VERIFY_DOCKERHUB_SIGNATURE"],
+            "${{ steps.multi.outputs.verify_dockerhub_signature }}",
+        )
         self.assertIn("scripts/verify-published-image.sh", multi["run"])
         self.assertNotIn("${{", multi["run"])
-        self.assertEqual(
-            dockerhub["if"],
-            "needs.prepare.outputs.verification_mode == 'dockerhub-only'",
+        self.assertNotIn(
+            "Verify exact Docker Hub runtime and supply chain",
+            [step.get("name") for step in steps],
         )
-        self.assertEqual(
-            dockerhub["env"]["DOCKERHUB_REF"],
-            "${{ steps.source.outputs.dockerhub_subject }}",
-        )
-        self.assertIn("scripts/verify-published-dockerhub-image.sh", dockerhub["run"])
-        self.assertNotIn("ghcr.io", str(dockerhub.get("env", {})))
-        self.assertNotIn("${{", dockerhub["run"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output_path = Path(temporary) / "output"
+            digest = "sha256:" + "f" * 64
+            env = os.environ.copy()
+            env.update(
+                GHCR_REF="ghcr.io/woosungchoi/fpm-alpine:8.2",
+                EXPECTED_REVISION="a" * 40,
+                PINNED_GHCR_DIGEST=digest,
+                EXPECTED_SIGNING_WORKFLOW="dependency-auto-publish.yml",
+                UPSTREAM_OPERATION="backfill-ghcr",
+                GITHUB_OUTPUT=str(output_path),
+            )
+            completed = subprocess.run(
+                ["bash", "-c", prerequisites["run"]],
+                cwd=temporary,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("signing_ref=main\n", output_path.read_text())
+            self.assertIn("signing_workflow=dependency-auto-publish.yml\n", output_path.read_text())
+            self.assertIn("verify_dockerhub_signature=0\n", output_path.read_text())
+
+    def test_dependency_signatures_carry_a_signed_operation_marker(self) -> None:
+        auto = (ROOT / ".github/workflows/dependency-auto-publish.yml").read_text()
+        transaction = (ROOT / "scripts/promote-auto-canaries.sh").read_text()
+        self.assertIn('"fpm.operation=$MODE"', auto)
+        self.assertIn('"fpm.operation=$operation"', transaction)
+        self.assertTrue(OPERATION_RESOLVER.is_file())
+        resolver = OPERATION_RESOLVER.read_text()
+        self.assertIn("cosign verify", resolver)
+        self.assertIn("fpm.operation=backfill-ghcr", resolver)
+        self.assertIn("fpm.operation=automatic", resolver)
+        self.assertIn("exactly one signed publication operation", resolver)
 
     def test_source_inspection_is_bounded_and_retried(self) -> None:
         _, data = self.load_workflow()

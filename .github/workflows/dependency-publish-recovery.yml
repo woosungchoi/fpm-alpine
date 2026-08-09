@@ -1,0 +1,227 @@
+name: dependency-publish-recovery
+run-name: dependency-publish-recovery-${{ github.event.client_payload.original_run_id }}-${{ github.event.client_payload.original_run_attempt }}
+
+on:
+  repository_dispatch:
+    types: [fpm-publish-recover]
+
+concurrency:
+  group: fpm-production-promotion
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_REPOSITORY: docker.io/woosungchoi/fpm-alpine
+  GHCR_REPOSITORY: ghcr.io/woosungchoi/fpm-alpine
+
+jobs:
+  prepare:
+    name: Validate frozen recovery request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # Read original workflow status and reject stale recovery.
+      contents: read
+    outputs:
+      original_run_id: ${{ steps.request.outputs.original_run_id }}
+      original_run_attempt: ${{ steps.request.outputs.original_run_attempt }}
+      original_workflow_sha: ${{ steps.request.outputs.original_workflow_sha }}
+      plan_sha256: ${{ steps.request.outputs.plan_sha256 }}
+    steps:
+      - name: Checkout trusted default-branch recovery code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate failed publisher run and pinned plan request
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_REF: ${{ github.ref }}
+          ORIGINAL_RUN_ID: ${{ github.event.client_payload.original_run_id }}
+          ORIGINAL_RUN_ATTEMPT: ${{ github.event.client_payload.original_run_attempt }}
+          PLAN_SHA256: ${{ github.event.client_payload.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_ACTION" = fpm-publish-recover
+          test "$EVENT_REF" = refs/heads/main
+          [[ "$ORIGINAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ORIGINAL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ORIGINAL_RUN_ID}" \
+            > /tmp/original-run.json
+          original_workflow_sha="$(python3 - "$ORIGINAL_RUN_ATTEMPT" <<'PY'
+          import json
+          import re
+          import sys
+          payload = json.load(open("/tmp/original-run.json"))
+          expected = {
+              "path": ".github/workflows/dependency-auto-publish.yml",
+              "head_branch": "main",
+              "status": "completed",
+          }
+          for key, value in expected.items():
+              if payload.get(key) != value:
+                  raise SystemExit(f"original publisher run mismatch for {key}")
+          if payload.get("event") not in {"push", "repository_dispatch"}:
+              raise SystemExit("unsupported original publisher event")
+          if payload.get("conclusion") not in {"failure", "cancelled", "timed_out"}:
+              raise SystemExit("recovery requires a failed, cancelled, or timed-out publisher run")
+          attempt = payload.get("run_attempt")
+          if type(attempt) is not int or attempt != int(sys.argv[1]):
+              raise SystemExit("original publisher run attempt mismatch")
+          sha = payload.get("head_sha")
+          if type(sha) is not str or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+              raise SystemExit("invalid original publisher workflow SHA")
+          print(sha)
+          PY
+          )"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs?status=completed&per_page=100" \
+            --jq '.workflow_runs[] | [.id, .path, .conclusion] | @tsv' \
+            > /tmp/completed-publisher-runs.tsv
+          python3 - "$ORIGINAL_RUN_ID" <<'PY'
+          import sys
+          from pathlib import Path
+
+          original_run_id = int(sys.argv[1])
+          publisher_paths = {
+              ".github/workflows/dependency-auto-publish.yml",
+              ".github/workflows/publish.yml",
+          }
+          for line in Path("/tmp/completed-publisher-runs.tsv").read_text().splitlines():
+              run_id_text, path, conclusion = line.split("\t")
+              run_id = int(run_id_text)
+              if run_id > original_run_id and path in publisher_paths and conclusion == "success":
+                  raise SystemExit(
+                      f"later successful publisher run blocks stale recovery: {run_id} {path}"
+                  )
+          PY
+          {
+            echo "original_run_id=$ORIGINAL_RUN_ID"
+            echo "original_run_attempt=$ORIGINAL_RUN_ATTEMPT"
+            echo "original_workflow_sha=$original_workflow_sha"
+            echo "plan_sha256=$PLAN_SHA256"
+          } >> "$GITHUB_OUTPUT"
+
+  recover:
+    name: Recover frozen publication transaction
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: fpm-auto-production
+    permissions:
+      actions: read # Download the exact frozen plan artifact from the failed run.
+      contents: read
+      id-token: write # Re-sign an exact Docker Hub subject only for automatic recovery.
+      packages: write # Restore GHCR aliases and read/write frozen rollback subjects.
+    steps:
+      - name: Checkout trusted default-branch recovery code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the exact frozen plan artifact from the failed run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v8.0.0
+        with:
+          name: publisher-auto-plan-${{ needs.prepare.outputs.original_run_id }}-${{ needs.prepare.outputs.original_run_attempt }}-${{ needs.prepare.outputs.plan_sha256 }}
+          path: recovery-plan
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.prepare.outputs.original_run_id }}
+
+      - name: Verify artifact bytes and strict plan binding before credentials
+        id: plan
+        env:
+          ORIGINAL_RUN_ID: ${{ needs.prepare.outputs.original_run_id }}
+          ORIGINAL_RUN_ATTEMPT: ${{ needs.prepare.outputs.original_run_attempt }}
+          ORIGINAL_WORKFLOW_SHA: ${{ needs.prepare.outputs.original_workflow_sha }}
+          PLAN_SHA256: ${{ needs.prepare.outputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          plan_path="$(python3 - "$PLAN_SHA256" <<'PY'
+          from pathlib import Path
+          import sys
+          root = Path("recovery-plan")
+          files = {path.relative_to(root).as_posix(): path for path in root.glob("**/*") if path.is_file()}
+          expected = {"promotion-plan.json", "promotion-plan.sha256"}
+          if set(files) != expected:
+              raise SystemExit(f"recovery artifact exact-set mismatch: {sorted(files)}")
+          expected_line = f"{sys.argv[1]}  promotion-plan.json\n"
+          if files["promotion-plan.sha256"].read_text() != expected_line:
+              raise SystemExit("recovery checksum companion does not match the dispatch SHA")
+          print(files["promotion-plan.json"])
+          PY
+          )"
+          actual_sha256="$(sha256sum "$plan_path" | cut -d' ' -f1)"
+          test "$actual_sha256" = "$PLAN_SHA256"
+          cp "$plan_path" recovery-plan/pinned-promotion-plan.json
+          git cat-file -e "${ORIGINAL_WORKFLOW_SHA}^{commit}" 2>/dev/null || \
+            git fetch --no-tags origin "$ORIGINAL_WORKFLOW_SHA"
+          git show "${ORIGINAL_WORKFLOW_SHA}:build/versions.json" \
+            > recovery-plan/original-versions.json
+          ./scripts/validate-auto-promotion-plan.py \
+            recovery-plan/pinned-promotion-plan.json \
+            --workflow-sha "$ORIGINAL_WORKFLOW_SHA" \
+            --run-id "$ORIGINAL_RUN_ID" \
+            --run-attempt "$ORIGINAL_RUN_ATTEMPT" \
+            --versions-file recovery-plan/original-versions.json
+          operation="$(python3 - <<'PY'
+          import json
+          operation = json.load(open("recovery-plan/pinned-promotion-plan.json"))["operation"]
+          if operation not in {"automatic", "backfill-ghcr"}:
+              raise SystemExit("invalid recovery operation")
+          print(operation)
+          PY
+          )"
+          echo "operation=$operation" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+
+      - name: Log in to Docker Hub recovery boundary
+        if: steps.plan.outputs.operation == 'automatic'
+        uses: docker/login-action@c94b6aa0726a9394552c27b90a5be5f3e10e0b9f # v4.0.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR recovery boundary
+        uses: docker/login-action@c94b6aa0726a9394552c27b90a5be5f3e10e0b9f # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Classify every alias before restoring exact baselines
+        env:
+          AUTO_PROMOTION_VERSIONS_FILE: recovery-plan/original-versions.json
+        run: |
+          ./scripts/promote-auto-canaries.sh recover \
+            recovery-plan/pinned-promotion-plan.json recovery-reports
+
+      - name: Upload recovery evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: publisher-auto-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: recovery-reports/
+          if-no-files-found: error

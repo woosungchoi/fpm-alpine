@@ -7,6 +7,8 @@ EXPECTED_REVISION="${3:-}"
 EXPECTED_VERSION="${4:-}"
 REPORT_DIR="${5:-publisher-reports}"
 EXPECTED_SIGNING_REF="${6:-main}"
+EXPECTED_PUBLISHER_WORKFLOW="${EXPECTED_PUBLISHER_WORKFLOW:-publish.yml}"
+VERIFY_DOCKERHUB_SIGNATURE="${VERIFY_DOCKERHUB_SIGNATURE:-1}"
 EXPECTED_SOURCE="${EXPECTED_SOURCE:-https://github.com/woosungchoi/fpm-alpine}"
 EXPECTED_LICENSES="${EXPECTED_LICENSES:-GPL-2.0-only}"
 COSIGN_CERTIFICATE_OIDC_ISSUER="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
@@ -22,7 +24,32 @@ case "$EXPECTED_SIGNING_REF" in
   main|8.5) ;;
   *) echo "expected signing ref must be main or 8.5" >&2; exit 64 ;;
 esac
-COSIGN_CERTIFICATE_IDENTITY_REGEXP="^https://github.com/woosungchoi/fpm-alpine/.github/workflows/publish.yml@refs/heads/${EXPECTED_SIGNING_REF}$"
+case "$EXPECTED_PUBLISHER_WORKFLOW" in
+  publish.yml) publisher_workflow_pattern='publish\.yml' ;;
+  dependency-auto-publish.yml)
+    [ "$EXPECTED_SIGNING_REF" = main ] || { echo "dependency-auto-publish.yml signatures must use refs/heads/main" >&2; exit 64; }
+    publisher_workflow_pattern='dependency-auto-publish\.yml'
+    ;;
+  any-authorized)
+    if [ "$EXPECTED_SIGNING_REF" = main ]; then
+      publisher_workflow_pattern='(publish|dependency-auto-publish)\.yml'
+    else
+      publisher_workflow_pattern='publish\.yml'
+    fi
+    ;;
+  *) echo "expected publisher workflow must be publish.yml, dependency-auto-publish.yml, or any-authorized" >&2; exit 64 ;;
+esac
+[[ "$VERIFY_DOCKERHUB_SIGNATURE" =~ ^[01]$ ]] || {
+  echo "VERIFY_DOCKERHUB_SIGNATURE must be 0 or 1" >&2
+  exit 64
+}
+if [ "$VERIFY_DOCKERHUB_SIGNATURE" = 0 ] && \
+   { [ "$EXPECTED_PUBLISHER_WORKFLOW" != dependency-auto-publish.yml ] || \
+     [ "$EXPECTED_SIGNING_REF" != main ]; }; then
+  echo "Docker Hub signature skip is restricted to dependency backfill on main" >&2
+  exit 64
+fi
+COSIGN_CERTIFICATE_IDENTITY_REGEXP="^https://github\\.com/woosungchoi/fpm-alpine/\\.github/workflows/${publisher_workflow_pattern}@refs/heads/${EXPECTED_SIGNING_REF}$"
 for command in docker cosign python3; do
   command -v "$command" >/dev/null 2>&1 || { echo "$command is required" >&2; exit 69; }
 done
@@ -146,9 +173,13 @@ for registry in ("dockerhub", "ghcr"):
 print("cross-registry platform config/layer/label parity and SBOM verified")
 PY
 
-for entry in "$DOCKERHUB_REF|$dockerhub_digest" "$GHCR_REF|$ghcr_digest"; do
-  IFS='|' read -r ref digest <<< "$entry"
+for entry in "dockerhub|$DOCKERHUB_REF|$dockerhub_digest" "ghcr|$GHCR_REF|$ghcr_digest"; do
+  IFS='|' read -r registry ref digest <<< "$entry"
   subject="$(repository_from_ref "$ref")@${digest}"
+  if [ "$registry" = dockerhub ] && [ "$VERIFY_DOCKERHUB_SIGNATURE" = 0 ]; then
+    echo "Docker Hub signature verification intentionally skipped for GHCR-only backfill: $subject"
+    continue
+  fi
   cosign verify \
     --certificate-identity-regexp "$COSIGN_CERTIFICATE_IDENTITY_REGEXP" \
     --certificate-oidc-issuer "$COSIGN_CERTIFICATE_OIDC_ISSUER" \
@@ -209,6 +240,7 @@ cat > "$REPORT_DIR/verification-summary.md" <<EOF
 - Source revision: \`${EXPECTED_REVISION}\`
 - PHP version: \`${EXPECTED_VERSION}\`
 - Signing ref: \`refs/heads/${EXPECTED_SIGNING_REF}\`
+- Signing workflow: \`${EXPECTED_PUBLISHER_WORKFLOW}\`
 - Platforms: \`${EXPECTED_PLATFORMS[*]}\`
 - Gates: manifest, provenance, SBOM, signature, runtime smoke, semantic cross-registry parity
 EOF

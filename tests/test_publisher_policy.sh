@@ -11,7 +11,7 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 assert_file .github/workflows/publish.yml
-for script in scripts/verify-published-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
+for script in scripts/verify-published-image.sh scripts/verify-published-dockerhub-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
   assert_file "$script"
   assert_executable "$script"
 done
@@ -584,6 +584,11 @@ assert_contains scripts/verify-published-image.sh 'ordered layer digests'
 assert_contains scripts/verify-published-image.sh 'org.opencontainers.image.revision'
 assert_contains scripts/verify-published-image.sh 'cosign verify'
 assert_contains scripts/verify-published-image.sh 'scripts/verify-provenance.py'
+assert_contains scripts/verify-published-dockerhub-image.sh 'scripts/verify-provenance.py'
+assert_contains scripts/verify-published-dockerhub-image.sh 'INSPECT_ATTEMPTS'
+assert_contains scripts/verify-published-dockerhub-image.sh 'exact Docker Hub subject'
+assert_not_contains scripts/verify-published-dockerhub-image.sh 'ghcr.io'
+assert_not_contains scripts/verify-published-dockerhub-image.sh 'cosign'
 assert_contains scripts/scan-image.sh 'aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f'
 assert_contains scripts/scan-image.sh '--ignore-unfixed'
 assert_contains scripts/scan-image.sh '--platform "$PLATFORM"'

@@ -208,9 +208,10 @@ assert_executable scripts/create-php-lifecycle-issue.sh
 assert_contains .github/workflows/php-lifecycle.yml "cron: '19 5 1 * *'"
 assert_contains .github/workflows/php-lifecycle.yml 'workflow_dispatch:'
 assert_contains .github/workflows/php-lifecycle.yml 'scripts/check-php-lifecycle.py'
-assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["publish"]'
+assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["publish", "dependency-auto-publish"]'
 assert_contains .github/workflows/published-runtime-smoke.yml 'branches: ["main"]'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-image.sh'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-dockerhub-image.sh'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/scan-image.sh'
 assert_contains .github/workflows/published-runtime-smoke.yml 'git merge-base --is-ancestor'
 python3 - <<'PY'

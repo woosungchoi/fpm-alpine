@@ -52,8 +52,9 @@ Non-required / report-only workflows:
   - Opens or updates one deduplicated `php-lifecycle` issue when attention is required.
 - `published-runtime-smoke`
   - Weekly, manual, and post-publish exact-digest runtime/supply-chain verification for active PHP 8.2–8.5 tags.
-  - Verifies Docker Hub/GHCR platform semantics, provenance, SBOM, Cosign identity, and amd64/arm64 runtime behavior.
-  - Resolves the exact Cosign branch identity from the annotated `archive/php-8.5-final-branch` boundary pinned to commit `f941dde2ff8864e1b056c051d330eb4321afb916`: source revisions at or before the boundary must be signed by `refs/heads/8.5`, while descendants must be signed by `refs/heads/main`. A moved tag or unrelated history is rejected.
+  - Weekly, manual, and `dependency-auto-publish` runs verify the current Docker Hub exact digest, platform descriptors, provenance, SBOM, OCI labels, and amd64/arm64 runtime behavior. Bounded retries absorb transient registry-inspection failures without weakening any artifact check.
+  - A successful manual `publish` run uses the stricter multi-registry path: Docker Hub/GHCR platform semantics, provenance, SBOM, Cosign identity, runtime behavior, and cross-registry parity must all pass.
+  - The multi-registry path resolves the exact Cosign branch identity from the annotated `archive/php-8.5-final-branch` boundary pinned to commit `f941dde2ff8864e1b056c051d330eb4321afb916`: source revisions at or before the boundary must be signed by `refs/heads/8.5`, while descendants must be signed by `refs/heads/main`. A moved tag or unrelated history is rejected.
 - `sync-dockerhub-metadata`
   - Manual-only and gated by the protected `fpm-production` environment.
   - Uses the existing Docker Hub repository secrets to synchronize the short description and the reviewed `docs/dockerhub-description.md`, then requires exact public API read-back.

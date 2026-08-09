@@ -213,6 +213,10 @@ assert_contains .github/workflows/published-runtime-smoke.yml 'branches: ["main"
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-image.sh'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-dockerhub-image.sh'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/scan-image.sh'
+assert_contains .github/workflows/published-runtime-smoke.yml '.github/workflows/dependency-auto-publish.yml)'
+assert_contains .github/workflows/published-runtime-smoke.yml 'unsupported workflow_run path:'
+assert_contains .github/workflows/published-runtime-smoke.yml 'DOCKERHUB_DIGEST: ${{ steps.source.outputs.dockerhub_digest }}'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_published_runtime_smoke.py'
 assert_contains .github/workflows/published-runtime-smoke.yml 'git merge-base --is-ancestor'
 python3 - <<'PY'
 import re

@@ -57,6 +57,7 @@ jobs:
           ./tests/test_policy_scripts.sh
           ./tests/test_reproducible_build_policy.sh
           ./tests/test_publisher_policy.sh
+          python3 tests/test_published_runtime_smoke.py
           ./tests/test_smoke_script.sh
           python3 tests/test_php_lifecycle.py
           python3 tests/test_dockerhub_metadata.py

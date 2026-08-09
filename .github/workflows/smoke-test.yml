@@ -59,6 +59,7 @@ jobs:
           ./tests/test_policy_scripts.sh
           ./tests/test_reproducible_build_policy.sh
           ./tests/test_publisher_policy.sh
+          python3 tests/test_registry_dispatch_authority.py
           python3 tests/test_dependency_auto_publish.py
           python3 tests/test_backfill_source_manifest.py
           python3 tests/test_fresh_cutover_lease.py

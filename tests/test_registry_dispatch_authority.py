@@ -49,6 +49,10 @@ def run_envelope(script: str, payload: dict, **overrides: str) -> subprocess.Com
 
 
 class RegistryDispatchAuthorityTests(unittest.TestCase):
+    def test_required_dependency_safety_runs_this_contract(self) -> None:
+        smoke = (WORKFLOWS / "smoke-test.yml").read_text()
+        self.assertIn("python3 tests/test_registry_dispatch_authority.py", smoke)
+
     def test_manual_publisher_is_owner_default_branch_repository_dispatch(self) -> None:
         workflow = load_workflow("publish.yml")
         self.assertEqual(

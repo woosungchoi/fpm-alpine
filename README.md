@@ -97,7 +97,7 @@ This repository is maintained through one `main` source trunk and verification w
 - `verify-published-manifest` runs on a schedule and verifies the configured published Docker Hub tags.
 - `dependency-freshness` produces report-only observations; the separate updater may open strictly classified dependency-only pull requests when explicitly enabled.
 - `php-lifecycle` checks the active matrix monthly against configured EOL dates and upstream PHP release availability.
-- `published-runtime-smoke` verifies Docker Hub/GHCR manifests, provenance, SBOM, signatures, runtime behavior, and semantic parity weekly and after a successful production publisher run.
+- `published-runtime-smoke` verifies the active Docker Hub manifests, provenance, SBOM, and runtime behavior weekly and after the Docker-Hub-only dependency publisher runs. After a successful manual production publisher run, it additionally verifies GHCR, Cosign signatures, and cross-registry semantic parity.
 - Dependabot proposes full-SHA GitHub Actions updates, and the repository-scoped updater may propose strictly classified PHP base or PECL patch updates.
 - Active matrix entries use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).

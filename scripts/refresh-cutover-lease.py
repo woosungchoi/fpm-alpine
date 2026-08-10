@@ -163,7 +163,7 @@ def capture(source_sha: str) -> bytes:
         fail("source SHA is not the current default-branch commit")
     now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     evidence = {
-        "schema_version": 1,
+        "schemaVersion": 1,
         "captured_at": now,
         "source_sha": source_sha,
         "dockerhub": _validated_dockerhub(),

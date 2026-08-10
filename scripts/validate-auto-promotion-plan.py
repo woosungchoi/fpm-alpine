@@ -169,8 +169,13 @@ def validate(args: argparse.Namespace) -> dict:
                     raise SystemExit(
                         f"{label} Docker Hub rollback backup does not preserve its exact baseline"
                     )
-            if target_dockerhub is not None or dockerhub_source is not None:
-                raise SystemExit(f"{label} automatic Docker Hub target is resolved only after copy")
+            if args.draft:
+                if target_dockerhub is not None or dockerhub_source is not None:
+                    raise SystemExit(f"{label} automatic draft must defer the Docker Hub target")
+            elif target_dockerhub != target_ghcr or dockerhub_source is not None:
+                raise SystemExit(
+                    f"{label} automatic Docker Hub target must be the digest-preserved staged subject"
+                )
         else:
             if rollback_dockerhub_ref is not None or rollback_dockerhub_backup is not None:
                 raise SystemExit(f"{label} backfill must not carry a Docker Hub rollback pin")

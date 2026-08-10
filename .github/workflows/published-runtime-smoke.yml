@@ -359,9 +359,11 @@ jobs:
           REPORT_DIR: published-runtime-reports/${{ matrix.php_minor }}
           SIGNING_REF: ${{ steps.multi.outputs.signing_ref }}
           EXPECTED_SIGNING_WORKFLOW: ${{ steps.multi.outputs.signing_workflow }}
+          EXPECTED_OPERATION: ${{ steps.multi.outputs.operation }}
           VERIFY_DOCKERHUB_SIGNATURE: ${{ steps.multi.outputs.verify_dockerhub_signature }}
         run: |
           EXPECTED_PUBLISHER_WORKFLOW="$EXPECTED_SIGNING_WORKFLOW" \
+          EXPECTED_OPERATION="$EXPECTED_OPERATION" \
           VERIFY_DOCKERHUB_SIGNATURE="$VERIFY_DOCKERHUB_SIGNATURE" \
             ./scripts/verify-published-image.sh \
             "$DOCKERHUB_REF" \

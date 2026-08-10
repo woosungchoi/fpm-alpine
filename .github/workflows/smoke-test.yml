@@ -62,6 +62,8 @@ jobs:
           python3 tests/test_registry_dispatch_authority.py
           python3 tests/test_dependency_auto_publish.py
           python3 tests/test_permanent_dockerhub_cutover.py
+          python3 tests/test_transaction_journal.py
+          python3 tests/test_transaction_journal_github.py
           python3 tests/test_backfill_source_manifest.py
           python3 tests/test_fresh_cutover_lease.py
           python3 tests/test_require_fresh_cutover_lease.py

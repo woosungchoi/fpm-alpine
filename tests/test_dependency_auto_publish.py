@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -44,7 +45,10 @@ class DependencyAutoPublishTests(unittest.TestCase):
         self.assertNotIn("github.event.inputs", text)
 
         prepare = data["jobs"]["prepare"]
-        checkout = prepare["steps"][0]
+        checkout = next(
+            step for step in prepare["steps"]
+            if step["name"] == "Checkout trusted default-branch revision"
+        )
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
         self.assertIn("scripts/evaluate-auto-promotion.py", text)
         eligibility = next(
@@ -207,33 +211,32 @@ class DependencyAutoPublishTests(unittest.TestCase):
             self.assertTrue(all(("a" * 64) not in line for line in lines))
 
     def test_single_unattended_controller_validates_before_credentials_and_mutation(self) -> None:
-        text, data = self.load(WORKFLOW)
+        _text, data = self.load(WORKFLOW)
         self.assertEqual(data["concurrency"]["group"], "fpm-production-promotion")
         self.assertFalse(data["concurrency"]["cancel-in-progress"])
         controller = data["jobs"]["promote"]
         self.assertEqual(controller["environment"], "fpm-auto-production")
         self.assertEqual(controller["permissions"]["packages"], "write")
         self.assertEqual(controller["permissions"]["id-token"], "write")
+        self.assertEqual(controller["permissions"]["contents"], "write")
         names = [step["name"] for step in controller["steps"]]
-        validation = names.index("Validate exact artifact set and capture unauthenticated baselines")
-        draft_validation = names.index("Validate strict draft plan before credentials")
-        first_cutover = names.index(
-            "Verify permanent Docker Hub cutover before automatic credentials"
-        )
-        dockerhub_login = names.index("Log in to Docker Hub mutation boundary")
-        pin = names.index("Create no-clobber rollback pins and freeze final JSON plan")
-        upload_plan = names.index("Upload frozen pre-mutation plan")
-        second_cutover = names.index(
-            "Revalidate permanent Docker Hub cutover at mutation boundary"
-        )
-        promotion = names.index("Promote exact subjects as one fail-closed transaction")
-        self.assertLess(validation, draft_validation)
-        self.assertLess(draft_validation, first_cutover)
-        self.assertLess(first_cutover, dockerhub_login)
-        self.assertLess(dockerhub_login, pin)
-        self.assertLess(pin, upload_plan)
-        self.assertLess(upload_plan, second_cutover)
-        self.assertLess(second_cutover, promotion)
+        expected_order = [
+            "Validate exact artifact set and capture unauthenticated baselines",
+            "Validate strict draft plan before credentials",
+            "Freeze deterministic final plan before any registry write",
+            "Upload frozen plan before the first registry write",
+            "Verify permanent Docker Hub cutover before automatic credentials",
+            "Acquire durable single-transaction writer fence",
+            "Log in to Docker Hub mutation boundary",
+            "Materialize frozen immutable subjects without moving aliases",
+            "Revalidate permanent Docker Hub cutover at mutation boundary",
+            "Promote exact subjects as one fail-closed transaction",
+            "Commit exact verified transaction receipt",
+            "Upload production transaction evidence",
+            "Close durable writer fence after committed receipt and evidence",
+        ]
+        indices = [names.index(name) for name in expected_order]
+        self.assertEqual(indices, sorted(indices))
         for cutover_name in (
             "Verify permanent Docker Hub cutover before automatic credentials",
             "Revalidate permanent Docker Hub cutover at mutation boundary",
@@ -253,21 +256,47 @@ class DependencyAutoPublishTests(unittest.TestCase):
             )
         dumped = yaml.safe_dump(controller, sort_keys=False)
         self.assertNotIn("require-fresh-cutover-lease.sh", dumped)
-        second = next(
+        for required in (
+            "canary artifact set mismatch",
+            "promotion-plan.json",
+            "target_dockerhub_digest",
+            "target_ghcr_digest",
+            "rollback-auto-dockerhub-",
+            "rollback-auto-ghcr-",
+            "scripts/validate-auto-promotion-plan.py",
+            "scripts/promote-auto-canaries.sh",
+            "scripts/transaction-journal.py begin",
+            "scripts/transaction-journal.py finish",
+            "crane copy",
+            "go-containerregistry_Linux_x86_64.tar.gz",
+            "59b59f68ee37aba51f5523d69ec779ee925d9be4e279f9220eca357267f2ee67",
+            "dockerhub-inventory-before-stage.json",
+            "dockerhub-inventory-after-stage.json",
+            "verify-permanent-dockerhub-cutover.py",
+        ):
+            self.assertIn(required, dumped)
+        freeze = next(
+            step for step in controller["steps"]
+            if step["name"] == "Freeze deterministic final plan before any registry write"
+        )["run"]
+        self.assertIn('unit["target_dockerhub_digest"] = unit["target_ghcr_digest"]', freeze)
+        materialize = next(
+            step for step in controller["steps"]
+            if step["name"] == "Materialize frozen immutable subjects without moving aliases"
+        )["run"]
+        self.assertNotIn('Path("publisher-reports/promotion-plan.json").write', materialize)
+        self.assertIn("cmp --silent", materialize)
+        self.assertIn("--expected-state", materialize)
+        self.assertLess(
+            materialize.index("verify-permanent-dockerhub-cutover.py"),
+            materialize.index("crane copy"),
+        )
+        second_cutover = next(
             step for step in controller["steps"]
             if step["name"] == "Revalidate permanent Docker Hub cutover at mutation boundary"
         )
-        self.assertIn("--expected-state", second["run"])
-        self.assertIn("git ls-remote --exit-code origin refs/heads/main", second["run"])
-        self.assertIn("canary artifact set mismatch", dumped)
-        self.assertIn("promotion-plan.json", dumped)
-        self.assertIn("target_dockerhub_digest", dumped)
-        self.assertIn("target_ghcr_digest", dumped)
-        self.assertIn("rollback-auto-dockerhub-", dumped)
-        self.assertIn('test "$rollback_dockerhub_backup" = "$previous_dockerhub"', text)
-        self.assertIn("rollback-auto-ghcr-", dumped)
-        self.assertIn("scripts/validate-auto-promotion-plan.py", dumped)
-        self.assertIn("scripts/promote-auto-canaries.sh", dumped)
+        self.assertIn("--expected-state", second_cutover["run"])
+        self.assertIn("git ls-remote --exit-code origin refs/heads/main", second_cutover["run"])
         dockerhub_step = next(
             step for step in controller["steps"]
             if step["name"] == "Log in to Docker Hub mutation boundary"
@@ -296,40 +325,69 @@ class DependencyAutoPublishTests(unittest.TestCase):
         text, data = self.load(RECOVERY)
         trigger = self.trigger(data)
         self.assertEqual(trigger["repository_dispatch"]["types"], ["fpm-publish-recover"])
+        self.assertEqual(trigger["schedule"], [{"cron": "*/15 * * * *"}])
         self.assertNotIn("workflow_dispatch", trigger)
         self.assertEqual(data["concurrency"]["group"], "fpm-production-promotion")
         self.assertFalse(data["concurrency"]["cancel-in-progress"])
-        self.assertEqual(data["jobs"]["recover"]["environment"], "fpm-auto-production")
-        self.assertIn("failure\", \"cancelled\", \"timed_out", text)
-        self.assertIn("later successful publisher run blocks stale recovery", text)
-        self.assertIn("publisher-auto-plan-${{ needs.prepare.outputs.original_run_id }}", text)
-        self.assertIn("actual_sha256", text)
-        self.assertIn("--workflow-sha", text)
-        self.assertIn("recovery artifact exact-set mismatch", text)
-        self.assertIn("promotion-plan.sha256", text)
-        self.assertIn("original-versions.json", text)
-        self.assertIn("--versions-file recovery-plan/original-versions.json", text)
-        self.assertIn("AUTO_PROMOTION_VERSIONS_FILE", text)
+        recover = data["jobs"]["recover"]
+        self.assertEqual(recover["environment"], "fpm-auto-production")
+        self.assertEqual(recover["permissions"]["contents"], "write")
+        self.assertIn("needs.prepare.outputs.has_pending == 'true'", recover["if"])
+        for required in (
+            "failure\", \"cancelled\", \"timed_out",
+            "later successful publisher run blocks stale recovery",
+            "publisher-auto-plan-${{ needs.prepare.outputs.original_run_id }}",
+            "recovery artifact exact-set mismatch",
+            "promotion-plan.sha256",
+            "original-versions.json",
+            "--versions-file recovery-plan/original-versions.json",
+            "AUTO_PROMOTION_VERSIONS_FILE",
+            "promote-auto-canaries.sh recover",
+            "committed_artifact_id",
+            "--expected-plan-sha256",
+            "--exact-set",
+            '"status": "already-verified"',
+            "transaction-journal.py pending",
+            "transaction-journal.py assert-owner",
+            "transaction-journal.py finish",
+            "has_pending=false",
+            "event_name == \"schedule\"",
+        ):
+            self.assertIn(required, text)
+        self.assertIn("publisher-auto-committed-${{ github.run_id }}", WORKFLOW.read_text())
         self.assertIn(
             "AUTO_PROMOTION_VERSIONS_FILE",
             (ROOT / "scripts/verify-published-dockerhub-image.sh").read_text(),
         )
-        self.assertIn("promote-auto-canaries.sh recover", text)
-        self.assertIn("publisher-auto-committed-${{ github.run_id }}", WORKFLOW.read_text())
-        self.assertIn("committed_artifact_id", text)
-        self.assertIn("--expected-plan-sha256", text)
-        self.assertIn("--exact-set", text)
-        self.assertIn('"status": "already-verified"', text)
         self.assertNotIn("mapfile -t", text)
 
-        steps = data["jobs"]["recover"]["steps"]
+        steps = recover["steps"]
         names = [step["name"] for step in steps]
         self.assertLess(
             names.index("Verify artifact bytes and strict plan binding before credentials"),
+            names.index(
+                "Verify permanent Docker Hub cutover before automatic recovery credentials"
+            ),
+        )
+        self.assertLess(
+            names.index(
+                "Verify permanent Docker Hub cutover before automatic recovery credentials"
+            ),
             names.index("Log in to Docker Hub recovery boundary"),
+        )
+        self.assertNotIn("require-fresh-cutover-lease.sh", text)
+        self.assertIn("verify-permanent-dockerhub-cutover.py", text)
+        self.assertLess(
+            names.index("Classify every alias before restoring exact baselines"),
+            names.index("Upload recovery evidence"),
+        )
+        self.assertLess(
+            names.index("Upload recovery evidence"),
+            names.index("Close durable writer fence after recovery evidence"),
         )
         plan = next(step for step in steps if step.get("id") == "plan")
         self.assertIn("operation=", plan["run"])
+        self.assertIn("transaction-journal.py assert-owner", plan["run"])
         dockerhub_login = next(
             step for step in steps
             if step["name"] == "Log in to Docker Hub recovery boundary"
@@ -357,7 +415,7 @@ class DependencyAutoPublishTests(unittest.TestCase):
             gh = fake_bin / "gh"
             gh.write_text(
                 "#!/usr/bin/env python3\n"
-                "import os,sys\n"
+                "import json,os,sys\n"
                 "if '--paginate' in sys.argv:\n"
                 "    print(os.environ['COMPLETED_RUNS'], end='')\n"
                 "elif any('/artifacts?' in arg for arg in sys.argv):\n"
@@ -369,6 +427,38 @@ class DependencyAutoPublishTests(unittest.TestCase):
             head = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip()
+            digest = lambda value: "sha256:" + f"{value:064x}"
+            units = []
+            for index, minor in enumerate(("8.2", "8.3", "8.4", "8.5"), start=1):
+                units.append({
+                    "php_minor": minor,
+                    "previous_dockerhub_digest": digest(100 + index),
+                    "previous_ghcr_digest": digest(300 + index),
+                    "target_dockerhub_digest": digest(200 + index),
+                    "target_ghcr_digest": digest(200 + index),
+                })
+            plan = root / "promotion-plan.json"
+            plan.write_text(json.dumps({
+                "schema_version": 1,
+                "operation": "automatic",
+                "repository": "woosungchoi/fpm-alpine",
+                "workflow_path": ".github/workflows/dependency-auto-publish.yml",
+                "workflow_sha": head,
+                "run_id": 123,
+                "run_attempt": 1,
+                "source_sha": head,
+                "release_units": units,
+            }, indent=2, sort_keys=True) + "\n")
+            plan_sha256 = hashlib.sha256(plan.read_bytes()).hexdigest()
+            journal_dir = root / "journal"
+            journal_env = os.environ.copy()
+            journal_env["TRANSACTION_JOURNAL_DIR"] = str(journal_dir)
+            subprocess.run(
+                [str(ROOT / "scripts/transaction-journal.py"), "begin", str(plan)],
+                cwd=ROOT,
+                env=journal_env,
+                check=True,
+            )
             original = json.dumps({
                 "path": ".github/workflows/dependency-auto-publish.yml",
                 "head_branch": "main",
@@ -388,14 +478,16 @@ class DependencyAutoPublishTests(unittest.TestCase):
                     env = os.environ.copy()
                     env.update(
                         PATH=f"{fake_bin}:{env['PATH']}",
+                        EVENT_NAME="repository_dispatch",
                         EVENT_ACTION="fpm-publish-recover",
                         EVENT_REF="refs/heads/main",
                         ORIGINAL_RUN_ID="123",
                         ORIGINAL_RUN_ATTEMPT="1",
-                        PLAN_SHA256="a" * 64,
+                        PLAN_SHA256=plan_sha256,
                         GITHUB_REPOSITORY="woosungchoi/fpm-alpine",
                         GITHUB_OUTPUT=str(output),
                         GH_TOKEN="test-token",
+                        TRANSACTION_JOURNAL_DIR=str(journal_dir),
                         ORIGINAL_RUN_JSON=original,
                         COMPLETED_RUNS=completed_runs,
                         ARTIFACTS_JSON=json.dumps({"total_count": 0, "artifacts": []}),
@@ -415,18 +507,20 @@ class DependencyAutoPublishTests(unittest.TestCase):
                         self.assertIn("later successful publisher run", result.stderr)
 
             committed_output = root / "output-committed"
-            committed_name = f"publisher-auto-committed-123-1-{'a' * 64}"
+            committed_name = f"publisher-auto-committed-123-1-{plan_sha256}"
             committed_env = os.environ.copy()
             committed_env.update(
                 PATH=f"{fake_bin}:{committed_env['PATH']}",
+                EVENT_NAME="repository_dispatch",
                 EVENT_ACTION="fpm-publish-recover",
                 EVENT_REF="refs/heads/main",
                 ORIGINAL_RUN_ID="123",
                 ORIGINAL_RUN_ATTEMPT="1",
-                PLAN_SHA256="a" * 64,
+                PLAN_SHA256=plan_sha256,
                 GITHUB_REPOSITORY="woosungchoi/fpm-alpine",
                 GITHUB_OUTPUT=str(committed_output),
                 GH_TOKEN="test-token",
+                TRANSACTION_JOURNAL_DIR=str(journal_dir),
                 ORIGINAL_RUN_JSON=original,
                 COMPLETED_RUNS=(
                     "123\t1\t.github/workflows/dependency-auto-publish.yml\tfailure\n"
@@ -512,9 +606,11 @@ class DependencyAutoPublishTests(unittest.TestCase):
             if step["name"] == "Run policy and mutation tests"
         )
         self.assertIn("python3 tests/test_dependency_auto_publish.py", step["run"])
-        self.assertIn("python3 tests/test_permanent_dockerhub_cutover.py", step["run"])
         self.assertIn("python3 tests/test_auto_promotion_transaction.py", step["run"])
         for test in (
+            "test_permanent_dockerhub_cutover.py",
+            "test_transaction_journal.py",
+            "test_transaction_journal_github.py",
             "test_backfill_source_manifest.py",
             "test_fresh_cutover_lease.py",
             "test_require_fresh_cutover_lease.py",

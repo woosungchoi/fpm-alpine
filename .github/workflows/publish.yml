@@ -8,7 +8,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: ${{ github.event.client_payload.channel == 'production' && 'fpm-production-promotion' || 'publish-canary' }}
+  group: publish-canary
   cancel-in-progress: false
 
 env:
@@ -20,7 +20,6 @@ jobs:
     name: Prepare trusted manual publication
     runs-on: ubuntu-latest
     permissions:
-      actions: read # inspect exact prior canary workflow runs and artifacts
       contents: read
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -62,26 +61,15 @@ jobs:
           payload = json.loads(os.environ["EVENT_PAYLOAD_JSON"])
           if not isinstance(payload, dict):
               fail("manual publication payload must be an object")
-          allowed = {
-              "channel",
-              "version",
-              "source_sha",
-              "correlation_id",
-              "canary_run_id",
-              "canary_run_attempt",
-              "prior_canary_run_id",
-              "prior_canary_run_attempt",
-              "legacy_publisher_disabled",
-              "legacy_cutover_evidence_sha256",
-          }
+          allowed = {"channel", "version", "source_sha", "correlation_id"}
           unknown = set(payload) - allowed
           if unknown:
               fail(f"manual publication payload has unknown keys: {sorted(unknown)}")
           if not {"channel", "source_sha"} <= set(payload):
               fail("manual publication payload is missing channel or source_sha")
           channel = payload.get("channel")
-          if channel not in {"canary", "production"}:
-              fail("manual publication channel is invalid")
+          if channel != "canary":
+              fail("manual publication supports only immutable GHCR canaries")
           source_sha = payload.get("source_sha")
           if not isinstance(source_sha, str) or source_sha != event_sha:
               fail("manual publication source_sha is not exact default-branch HEAD")
@@ -97,40 +85,6 @@ jobs:
           ):
               fail("manual publication version is invalid")
 
-          production_fields = {
-              "canary_run_id",
-              "canary_run_attempt",
-              "prior_canary_run_id",
-              "prior_canary_run_attempt",
-              "legacy_publisher_disabled",
-              "legacy_cutover_evidence_sha256",
-          }
-          if channel == "canary":
-              forbidden = production_fields & set(payload)
-              if forbidden:
-                  fail(f"canary payload contains production-only keys: {sorted(forbidden)}")
-          else:
-              required = production_fields | {"version"}
-              missing = required - set(payload)
-              if missing:
-                  fail(f"production payload is missing keys: {sorted(missing)}")
-              for name in (
-                  "canary_run_id",
-                  "canary_run_attempt",
-                  "prior_canary_run_id",
-                  "prior_canary_run_attempt",
-              ):
-                  value = payload.get(name)
-                  if isinstance(value, bool) or not (
-                      isinstance(value, int) and value > 0
-                      or isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value)
-                  ):
-                      fail(f"production payload {name} is invalid")
-              if payload.get("legacy_publisher_disabled") is not True:
-                  fail("production payload does not attest legacy publisher disablement")
-              evidence_sha = payload.get("legacy_cutover_evidence_sha256")
-              if not isinstance(evidence_sha, str) or re.fullmatch(r"[0-9a-f]{64}", evidence_sha) is None:
-                  fail("production cutover evidence SHA-256 is invalid")
           PY
 
       - name: Checkout exact source revision
@@ -146,18 +100,8 @@ jobs:
           CORRELATION_ID: ${{ github.event.client_payload.correlation_id }}
           CHANNEL: ${{ github.event.client_payload.channel }}
           REQUESTED_VERSION: ${{ github.event.client_payload.version }}
-          CANARY_RUN_ID: ${{ github.event.client_payload.canary_run_id }}
-          CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.canary_run_attempt }}
-          PRIOR_CANARY_RUN_ID: ${{ github.event.client_payload.prior_canary_run_id }}
-          PRIOR_CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.prior_canary_run_attempt }}
-          LEGACY_DISABLED_INPUT: ${{ github.event.client_payload.legacy_publisher_disabled }}
-          LEGACY_DISABLED_VARIABLE: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
-          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.client_payload.legacy_cutover_evidence_sha256 }}
-          LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
-          LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
           DISPATCH_SHA: ${{ github.sha }}
           DISPATCH_REF: ${{ github.ref }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -168,70 +112,9 @@ jobs:
           if [ -n "$CORRELATION_ID" ]; then
             [[ "$CORRELATION_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
           fi
-          if [ "$CHANNEL" = production ]; then
+          test "$CHANNEL" = canary
+          if [ -n "$REQUESTED_VERSION" ]; then
             [[ "$REQUESTED_VERSION" =~ ^8\.[2-5]$ ]]
-            [[ "$CANARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-            [[ "$CANARY_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PRIOR_CANARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-            [[ "$PRIOR_CANARY_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-            test "$CANARY_RUN_ID" != "$PRIOR_CANARY_RUN_ID"
-            test "$LEGACY_DISABLED_INPUT" = true
-            test "$LEGACY_DISABLED_VARIABLE" = true
-            [[ "$LEGACY_EVIDENCE_SHA256_INPUT" =~ ^[0-9a-f]{64}$ ]]
-            test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
-            ./scripts/validate-legacy-cutover-evidence.py "$SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANARY_RUN_ID}" > /tmp/canary-run.json
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PRIOR_CANARY_RUN_ID}" > /tmp/prior-canary-run.json
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANARY_RUN_ID}/artifacts?per_page=100" > /tmp/canary-artifacts.json
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PRIOR_CANARY_RUN_ID}/artifacts?per_page=100" > /tmp/prior-canary-artifacts.json
-            python3 - /tmp/canary-run.json /tmp/prior-canary-run.json /tmp/canary-artifacts.json /tmp/prior-canary-artifacts.json "$SOURCE_SHA" "$CANARY_RUN_ATTEMPT" "$PRIOR_CANARY_RUN_ATTEMPT" <<'PY'
-          import json
-          import sys
-
-          run = json.load(open(sys.argv[1]))
-          prior = json.load(open(sys.argv[2]))
-          artifacts = json.load(open(sys.argv[3])).get("artifacts") or []
-          prior_artifacts = json.load(open(sys.argv[4])).get("artifacts") or []
-          expected_sha = sys.argv[5]
-          expected_attempt = int(sys.argv[6])
-          prior_expected_attempt = int(sys.argv[7])
-
-          def validate(candidate, attempt, label, allowed_events):
-              checks = {
-                  "conclusion": candidate.get("conclusion") == "success",
-                  "event": candidate.get("event") in allowed_events,
-                  "head_sha": candidate.get("head_sha") == expected_sha,
-                  "head_branch": candidate.get("head_branch") == "main",
-                  "path": candidate.get("path") == ".github/workflows/publish.yml",
-                  "run_attempt": candidate.get("run_attempt") == attempt,
-              }
-              failed = sorted(key for key, value in checks.items() if not value)
-              if failed:
-                  raise SystemExit(f"{label} canary run validation failed: {failed}")
-
-          validate(run, expected_attempt, "current", {"repository_dispatch"})
-          validate(prior, prior_expected_attempt, "prior", {"repository_dispatch"})
-          if run.get("run_number") != prior.get("run_number", -2) + 1:
-              raise SystemExit("canary runs are not consecutive workflow run numbers")
-
-          current_id = run["id"]
-          prior_id = prior["id"]
-          active_minors = [minor for minor, row in json.load(open("build/versions.json"))["versions"].items() if row["support"] in {"active", "security-only"}]
-          current_names = {item.get("name") for item in artifacts if not item.get("expired")}
-          expected_names = {f"publisher-canary-{minor}-{current_id}-{expected_attempt}" for minor in active_minors}
-          missing = sorted(expected_names - current_names)
-          if missing:
-              raise SystemExit("current canary is not a complete active matrix: " + ", ".join(missing))
-          prior_name = f"publisher-canary-8.5-{prior_id}-{prior_expected_attempt}"
-          if not any(item.get("name") == prior_name and not item.get("expired") for item in prior_artifacts):
-              raise SystemExit("prior successful canary has no unexpired PHP 8.5 evidence artifact")
-          PY
-          else
-            test -z "$CANARY_RUN_ID"
-            test -z "$CANARY_RUN_ATTEMPT"
-            test -z "$PRIOR_CANARY_RUN_ID"
-            test -z "$PRIOR_CANARY_RUN_ATTEMPT"
-            test -z "$LEGACY_EVIDENCE_SHA256_INPUT"
           fi
           ./scripts/validate-versions.py
 
@@ -369,7 +252,7 @@ jobs:
           ghcr_digest="$(./scripts/resolve-image-digest.sh "$GHCR_REF")"
           [[ "$ghcr_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           test "$ghcr_digest" = "$BUILD_DIGEST"
-          cosign sign --yes "${GHCR_REF%:*}@${ghcr_digest}"
+          cosign sign --yes -a fpm.operation=manual "${GHCR_REF%:*}@${ghcr_digest}"
           echo "ghcr_digest=$ghcr_digest" >> "$GITHUB_OUTPUT"
           mkdir -p publisher-reports
           python3 - "$ghcr_digest" "$GHCR_REF" <<'PY'
@@ -416,6 +299,7 @@ jobs:
           GHCR_REF: ${{ env.GHCR_REPOSITORY }}@${{ steps.subjects.outputs.ghcr_digest }}
           EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
           PHP_PATCH: ${{ matrix.php_patch }}
+          EXPECTED_OPERATION: manual
         run: |
           ./scripts/verify-canary-image.sh \
             "$GHCR_REF" \
@@ -440,498 +324,10 @@ jobs:
           path: publisher-reports/
           if-no-files-found: error
 
-  production-preflight:
-    name: Validate complete production canary evidence
-    if: ${{ github.event.client_payload.channel == 'production' }}
-    needs: prepare
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read # download exact canary artifacts from pinned run attempts
-      contents: read
-    steps:
-      - name: Checkout trusted source revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.client_payload.source_sha }}
-
-      - name: Require verified canary evidence for every production target
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CANARY_RUN_ID: ${{ github.event.client_payload.canary_run_id }}
-          CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.canary_run_attempt }}
-          PRIOR_CANARY_RUN_ID: ${{ github.event.client_payload.prior_canary_run_id }}
-          PRIOR_CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.prior_canary_run_attempt }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-        run: |
-          set -euo pipefail
-          rm -rf production-preflight
-          mkdir -p production-preflight
-          python3 - <<'PY' > /tmp/active-production-targets.tsv
-          import json
-
-          versions = json.load(open("build/versions.json"))["versions"]
-          for minor, row in versions.items():
-              if row["support"] in {"active", "security-only"}:
-                  print(f"{minor}\t{row['patch']}")
-          PY
-          while IFS=$'\t' read -r minor patch; do
-            artifact="publisher-canary-${minor}-${CANARY_RUN_ID}-${CANARY_RUN_ATTEMPT}"
-            destination="production-preflight/current-${minor}"
-            gh run download "$CANARY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir "$destination"
-            ./scripts/validate-canary-metadata.py "$destination" "$EXPECTED_SOURCE_SHA" "$minor" "$patch" "$CANARY_RUN_ID" "$CANARY_RUN_ATTEMPT"
-          done < /tmp/active-production-targets.tsv
-
-          prior_patch="$(python3 -c 'import json; print(json.load(open("build/versions.json"))["versions"]["8.5"]["patch"])')"
-          prior_artifact="publisher-canary-8.5-${PRIOR_CANARY_RUN_ID}-${PRIOR_CANARY_RUN_ATTEMPT}"
-          prior_destination="production-preflight/prior-8.5"
-          gh run download "$PRIOR_CANARY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$prior_artifact" --dir "$prior_destination"
-          ./scripts/validate-canary-metadata.py "$prior_destination" "$EXPECTED_SOURCE_SHA" 8.5 "$prior_patch" "$PRIOR_CANARY_RUN_ID" "$PRIOR_CANARY_RUN_ATTEMPT"
-
-  bootstrap-ghcr-rollback:
-    name: Freeze durable GHCR rollback baseline
-    if: ${{ github.event.client_payload.channel == 'production' }}
-    needs: [prepare, production-preflight]
-    runs-on: ubuntu-latest
-    environment: fpm-production
-    timeout-minutes: 90
-    permissions:
-      contents: read
-      packages: write # create and verify the no-clobber rollback subject
-    steps:
-      - name: Checkout trusted source revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.client_payload.source_sha }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Establish idempotent GHCR rollback baselines
-        env:
-          MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.client_payload.legacy_cutover_evidence_sha256 }}
-          LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
-          LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY' > /tmp/production-targets.tsv
-          import json
-          import os
-
-          for row in json.loads(os.environ["MATRIX_JSON"])["include"]:
-              print(row["php_minor"])
-          PY
-          while IFS= read -r minor; do
-            dockerhub_ref="${DOCKERHUB_REPOSITORY}:${minor}"
-            ghcr_ref="${GHCR_REPOSITORY}:${minor}"
-            evidence_dir="publisher-reports/bootstrap-${minor}"
-            evidence_file="${evidence_dir}/bootstrap-evidence.json"
-            mkdir -p "$evidence_dir"
-            python3 - "$evidence_file" "$RUN_ID" "$RUN_ATTEMPT" "$EXPECTED_SOURCE_SHA" "$minor" "$dockerhub_ref" "$ghcr_ref" <<'PY'
-          import datetime as dt
-          import json
-          import sys
-          from pathlib import Path
-
-          path, run_id, run_attempt, source_sha, minor, dockerhub_ref, ghcr_ref = sys.argv[1:]
-          created_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-          payload = {
-              "schemaVersion": 1,
-              "source_sha": source_sha,
-              "run_id": int(run_id),
-              "run_attempt": int(run_attempt),
-              "minor": minor,
-              "dockerhub_ref": dockerhub_ref,
-              "dockerhub_resolution_status": "inspect_pending",
-              "dockerhub_inspect_exit_code": None,
-              "dockerhub_digest_parse_exit_code": None,
-              "dockerhub_digest": None,
-              "ghcr_ref": ghcr_ref,
-              "baseline_state": "not_started",
-              "baseline_inspect_exit_code": None,
-              "cutover_validation_status": "not_run",
-              "cutover_validation_exit_code": None,
-              "create_status": "not_attempted",
-              "create_exit_code": None,
-              "readback_status": "not_attempted",
-              "readback_exit_code": None,
-              "readback_digest_parse_exit_code": None,
-              "readback_digest": None,
-              "verifier_status": "not_run",
-              "verifier_exit_code": None,
-              "final_status": "in_progress",
-              "created_at": created_at,
-              "updated_at": created_at,
-          }
-          Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-          PY
-            update_evidence() {
-              python3 - "$evidence_file" "$1" "$2" <<'PY'
-          import datetime as dt
-          import json
-          import sys
-          from pathlib import Path
-
-          path, key, encoded = sys.argv[1:]
-          target = Path(path)
-          payload = json.loads(target.read_text())
-          payload[key] = json.loads(encoded)
-          payload["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-          temporary = target.with_suffix(".tmp")
-          temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-          temporary.replace(target)
-          PY
-            }
-
-            set +e
-            dockerhub_output="$(docker buildx imagetools inspect "$dockerhub_ref" 2>&1)"
-            dockerhub_inspect_status=$?
-            set -e
-            update_evidence dockerhub_inspect_exit_code "$dockerhub_inspect_status"
-            if [ "$dockerhub_inspect_status" -ne 0 ]; then
-              update_evidence dockerhub_resolution_status '"failed"'
-              update_evidence final_status '"failed"'
-              printf '%s\n' "$dockerhub_output" >&2
-              exit "$dockerhub_inspect_status"
-            fi
-            set +e
-            dockerhub_digest="$(printf '%s\n' "$dockerhub_output" | ./scripts/extract-image-digest.sh)"
-            dockerhub_parse_status=$?
-            set -e
-            update_evidence dockerhub_digest_parse_exit_code "$dockerhub_parse_status"
-            if [ "$dockerhub_parse_status" -ne 0 ]; then
-              update_evidence dockerhub_resolution_status '"failed"'
-              update_evidence final_status '"failed"'
-              exit "$dockerhub_parse_status"
-            fi
-            update_evidence dockerhub_digest "\"${dockerhub_digest}\""
-            update_evidence dockerhub_resolution_status '"success"'
-            update_evidence baseline_state '"inspect_pending"'
-
-            set +e
-            inspect_output="$(docker buildx imagetools inspect "$ghcr_ref" 2>&1)"
-            inspect_status=$?
-            set -e
-            update_evidence baseline_inspect_exit_code "$inspect_status"
-            if [ "$inspect_status" -eq 0 ]; then
-              update_evidence baseline_state '"existing"'
-              update_evidence readback_status '"in_progress"'
-              update_evidence readback_exit_code "$inspect_status"
-              set +e
-              ghcr_digest="$(printf '%s\n' "$inspect_output" | ./scripts/extract-image-digest.sh)"
-              readback_parse_status=$?
-              set -e
-              update_evidence readback_digest_parse_exit_code "$readback_parse_status"
-              if [ "$readback_parse_status" -ne 0 ]; then
-                update_evidence readback_status '"failed"'
-                update_evidence final_status '"failed"'
-                exit "$readback_parse_status"
-              fi
-              update_evidence readback_status '"success"'
-              update_evidence readback_digest "\"${ghcr_digest}\""
-            elif printf '%s\n' "$inspect_output" | ./scripts/is-manifest-absent.sh "$ghcr_ref"; then
-              update_evidence baseline_state '"absent"'
-              update_evidence cutover_validation_status '"in_progress"'
-              set +e
-              test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE" && \
-                ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
-              cutover_status=$?
-              set -e
-              update_evidence cutover_validation_exit_code "$cutover_status"
-              if [ "$cutover_status" -ne 0 ]; then
-                update_evidence cutover_validation_status '"failed"'
-                update_evidence final_status '"failed"'
-                exit "$cutover_status"
-              fi
-              update_evidence cutover_validation_status '"success"'
-              update_evidence create_status '"in_progress"'
-              set +e
-              docker buildx imagetools create \
-                --tag "$ghcr_ref" \
-                "${DOCKERHUB_REPOSITORY}@${dockerhub_digest}"
-              create_status=$?
-              set -e
-              update_evidence create_exit_code "$create_status"
-              if [ "$create_status" -ne 0 ]; then
-                update_evidence create_status '"failed"'
-                update_evidence final_status '"failed"'
-                exit "$create_status"
-              fi
-              update_evidence create_status '"success"'
-              update_evidence readback_status '"in_progress"'
-              set +e
-              readback_output="$(docker buildx imagetools inspect "$ghcr_ref" 2>&1)"
-              readback_status=$?
-              set -e
-              update_evidence readback_exit_code "$readback_status"
-              if [ "$readback_status" -ne 0 ]; then
-                update_evidence readback_status '"failed"'
-                update_evidence final_status '"failed"'
-                printf '%s\n' "$readback_output" >&2
-                exit "$readback_status"
-              fi
-              set +e
-              ghcr_digest="$(printf '%s\n' "$readback_output" | ./scripts/extract-image-digest.sh)"
-              readback_parse_status=$?
-              set -e
-              update_evidence readback_digest_parse_exit_code "$readback_parse_status"
-              if [ "$readback_parse_status" -ne 0 ]; then
-                update_evidence readback_status '"failed"'
-                update_evidence final_status '"failed"'
-                exit "$readback_parse_status"
-              fi
-              update_evidence readback_status '"success"'
-              update_evidence readback_digest "\"${ghcr_digest}\""
-            else
-              update_evidence baseline_state '"inspect_failed"'
-              update_evidence final_status '"failed"'
-              printf '%s\n' "$inspect_output" >&2
-              echo "GHCR rollback baseline inspection failed for ${minor}" >&2
-              exit "$inspect_status"
-            fi
-
-            update_evidence verifier_status '"in_progress"'
-            set +e
-            ./scripts/verify-rollback-image.sh \
-              "${DOCKERHUB_REPOSITORY}@${dockerhub_digest}" \
-              "${GHCR_REPOSITORY}@${ghcr_digest}" \
-              "$minor" \
-              "$evidence_dir"
-            verifier_status=$?
-            set -e
-            update_evidence verifier_exit_code "$verifier_status"
-            if [ "$verifier_status" -ne 0 ]; then
-              update_evidence verifier_status '"failed"'
-              update_evidence final_status '"failed"'
-              exit "$verifier_status"
-            fi
-            update_evidence verifier_status '"success"'
-            update_evidence final_status '"success"'
-          done < /tmp/production-targets.tsv
-
-      - name: Upload GHCR rollback bootstrap evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: publisher-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
-          path: publisher-reports/bootstrap-*
-          if-no-files-found: error
-
-  production:
-    name: production (${{ matrix.php_minor }}, publish)
-    if: ${{ github.event.client_payload.channel == 'production' }}
-    needs: [prepare, production-preflight, bootstrap-ghcr-rollback]
-    runs-on: ubuntu-latest
-    environment: fpm-production
-    timeout-minutes: 180
-    permissions:
-      actions: read # download exact canary and bootstrap artifacts
-      contents: read
-      packages: write # promote and compensate GHCR/Docker Hub exact subjects
-      id-token: write # sign promoted or restored exact subjects with Cosign
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-    steps:
-      - name: Checkout exact source revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.client_payload.source_sha }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.1.2
-
-      - name: Load and bind verified canary metadata
-        id: canary
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CANARY_RUN_ID: ${{ github.event.client_payload.canary_run_id }}
-          CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.canary_run_attempt }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          EXPECTED_MINOR: ${{ matrix.php_minor }}
-          EXPECTED_PATCH: ${{ matrix.php_patch }}
-        run: |
-          set -euo pipefail
-          artifact="publisher-canary-${EXPECTED_MINOR}-${CANARY_RUN_ID}-${CANARY_RUN_ATTEMPT}"
-          rm -rf canary-evidence
-          gh run download "$CANARY_RUN_ID" --name "$artifact" --dir canary-evidence
-          ./scripts/validate-canary-metadata.py \
-            canary-evidence \
-            "$EXPECTED_SOURCE_SHA" \
-            "$EXPECTED_MINOR" \
-            "$EXPECTED_PATCH" \
-            "$CANARY_RUN_ID" \
-            "$CANARY_RUN_ATTEMPT"
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          files = list(Path("canary-evidence").glob("**/canary-metadata.json"))
-          if len(files) != 1:
-              raise SystemExit(f"expected one canary metadata file, found {len(files)}")
-          payload = json.loads(files[0].read_text())
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"ghcr_digest={payload['ghcr_digest']}\n")
-          Path("/tmp/canary-digests.env").write_text(
-              f"ghcr_digest={payload['ghcr_digest']}\n"
-          )
-          PY
-          source /tmp/canary-digests.env
-          test "$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:canary-${EXPECTED_MINOR}-${CANARY_RUN_ID}-${CANARY_RUN_ATTEMPT}")" = "$ghcr_digest"
-
-      - name: Promote verified GHCR canary without rebuilding
-        id: promote
-        env:
-          GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          PHP_MINOR: ${{ matrix.php_minor }}
-          PHP_PATCH: ${{ matrix.php_patch }}
-          RELEASE_DATE: ${{ needs.prepare.outputs.release_date }}
-          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.client_payload.legacy_cutover_evidence_sha256 }}
-          LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
-          LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
-        run: |
-          set -euo pipefail
-          previous_dockerhub="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
-          previous_ghcr="$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")"
-          [[ "$previous_dockerhub" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$previous_ghcr" =~ ^sha256:[0-9a-f]{64}$ ]]
-          ./scripts/verify-rollback-image.sh \
-            "${DOCKERHUB_REPOSITORY}@${previous_dockerhub}" \
-            "${GHCR_REPOSITORY}@${previous_ghcr}" \
-            "$PHP_MINOR" \
-            publisher-reports/preflight-baseline
-          {
-            echo "previous_dockerhub=$previous_dockerhub"
-            echo "previous_ghcr=$previous_ghcr"
-          } >> "$GITHUB_OUTPUT"
-
-          ./scripts/promote-image.sh --check-only --policy moving-only \
-            "$DOCKERHUB_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
-            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
-          ./scripts/promote-image.sh --check-only --policy evidence \
-            "$GHCR_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
-            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
-
-          test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
-          ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
-          mutated=0
-          rollback_on_exit() {
-            rc=$?
-            trap - EXIT INT TERM
-            if [ "$mutated" -eq 1 ]; then
-              set +e
-              COSIGN_SIGN_DESTINATION=1 ./scripts/rollback-moving-aliases.sh \
-                "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" \
-                "$GHCR_REPOSITORY" "$previous_ghcr" "$PHP_MINOR" \
-                publisher-reports/rollback-trap
-              if [ -n "${anonymous_docker_config:-}" ]; then
-                rm -rf -- "$anonymous_docker_config"
-              fi
-            fi
-            exit "$rc"
-          }
-          trap rollback_on_exit EXIT
-          trap 'exit 130' INT
-          trap 'exit 143' TERM
-          mutated=1
-          echo "mutated=true" >> "$GITHUB_OUTPUT"
-          ./scripts/promote-image.sh --policy evidence \
-            "$GHCR_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
-            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
-          ./scripts/promote-image.sh --policy moving-only \
-            "$DOCKERHUB_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
-            "$PHP_MINOR" "$PHP_PATCH" "$EXPECTED_SOURCE_SHA" "$RELEASE_DATE"
-          dockerhub_digest="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
-          [[ "$dockerhub_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          cosign sign --yes "${DOCKERHUB_REPOSITORY}@${dockerhub_digest}"
-          anonymous_docker_config="$(mktemp -d)"
-          chmod 700 "$anonymous_docker_config"
-          DOCKER_CONFIG="$anonymous_docker_config" \
-            ./scripts/verify-published-image.sh \
-              "${DOCKERHUB_REPOSITORY}@${dockerhub_digest}" \
-              "${GHCR_REPOSITORY}@${GHCR_DIGEST}" \
-              "$EXPECTED_SOURCE_SHA" \
-              "$PHP_PATCH" \
-              "publisher-reports/post-promotion"
-          test "$(DOCKER_CONFIG="$anonymous_docker_config" \
-            ./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")" = "$dockerhub_digest"
-          test "$(DOCKER_CONFIG="$anonymous_docker_config" \
-            ./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")" = "$GHCR_DIGEST"
-          rm -rf -- "$anonymous_docker_config"
-          trap - EXIT INT TERM
-
-      - name: Roll back both moving aliases after promotion failure
-        if: ${{ failure() && steps.promote.outputs.mutated == 'true' }}
-        env:
-          PREVIOUS_DOCKERHUB: ${{ steps.promote.outputs.previous_dockerhub }}
-          PREVIOUS_GHCR: ${{ steps.promote.outputs.previous_ghcr }}
-          PHP_MINOR: ${{ matrix.php_minor }}
-          COSIGN_SIGN_DESTINATION: "1"
-        run: |
-          ./scripts/rollback-moving-aliases.sh \
-            "$DOCKERHUB_REPOSITORY" \
-            "$PREVIOUS_DOCKERHUB" \
-            "$GHCR_REPOSITORY" \
-            "$PREVIOUS_GHCR" \
-            "$PHP_MINOR" \
-            "publisher-reports/rollback"
-
-      - name: Upload production verification evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: publisher-production-${{ matrix.php_minor }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: publisher-reports/
-          if-no-files-found: error
-
   report-failure:
     name: Report deterministic publisher failures
-    if: ${{ always() && github.ref == 'refs/heads/main' && github.event.client_payload.source_sha == github.sha && needs.prepare.result == 'success' && (needs.canary.result == 'failure' || needs.production-preflight.result == 'failure' || needs.bootstrap-ghcr-rollback.result == 'failure' || needs.production.result == 'failure') }}
-    needs: [prepare, canary, production-preflight, bootstrap-ghcr-rollback, production]
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event.client_payload.source_sha == github.sha && needs.prepare.result == 'success' && needs.canary.result == 'failure' }}
+    needs: [prepare, canary]
     runs-on: ubuntu-latest
     permissions:
       actions: read # classify failed matrix jobs from this exact workflow run
@@ -966,7 +362,7 @@ jobs:
           for job in jobs:
               if job.get("conclusion") != "failure":
                   continue
-              match = re.fullmatch(r"(?:canary|production) \((8\.[2-5]),.*", str(job.get("name", "")))
+              match = re.fullmatch(r"canary \((8\.[2-5]),.*", str(job.get("name", "")))
               if match:
                   failed.append(match.group(1))
           if failed:

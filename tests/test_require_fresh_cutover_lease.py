@@ -36,7 +36,7 @@ class FreshCutoverLeaseLoaderTests(unittest.TestCase):
     def _write_evidence(self) -> None:
         captured = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
         payload = {
-            "schemaVersion": 1,
+            "schema_version": 2,
             "source_sha": SOURCE,
             "captured_at": captured,
             "dockerhub": {
@@ -44,7 +44,8 @@ class FreshCutoverLeaseLoaderTests(unittest.TestCase):
                 "in_flight_builds": 0,
                 "public_is_automated": False,
                 "repository_last_updated": "2026-08-10T00:00:00Z",
-                "queue_basis": "automatic builds disabled and no source-capable GitHub legacy publisher hook",
+                "queue_evidence": "dockerhub-ui-owner-observation",
+                "queue_observed_at": captured,
             },
             "github": {
                 "repository": REPOSITORY,

@@ -69,20 +69,22 @@ def _owner_identity() -> None:
 
 
 def _active_publisher_for(source_sha: str) -> bool:
-    encoded = urllib.parse.quote("dependency-auto-publish.yml", safe="")
     payload = _gh_json(
-        f"repos/{REPOSITORY}/actions/workflows/{encoded}/runs"
-        "?branch=main&event=push&per_page=100"
+        f"repos/{REPOSITORY}/actions/runs?branch=main&per_page=100"
     )
     runs = payload.get("workflow_runs")
     if not isinstance(runs, list):
         fail("publisher workflow run response is malformed")
+    allowed = {
+        (".github/workflows/dependency-auto-publish.yml", "push"),
+        (".github/workflows/dependency-publish-recovery.yml", "repository_dispatch"),
+        (".github/workflows/dependency-publish-recovery.yml", "schedule"),
+    }
     return any(
         isinstance(run, dict)
         and run.get("head_sha") == source_sha
         and run.get("status") in ACTIVE_STATUSES
-        and run.get("event") == "push"
-        and run.get("path") == ".github/workflows/dependency-auto-publish.yml"
+        and (run.get("path"), run.get("event")) in allowed
         for run in runs
     )
 
@@ -105,10 +107,8 @@ def _validated_dockerhub() -> dict[str, Any]:
         fail("Docker Hub metadata is missing last_updated")
     return {
         "build_rule_active": False,
-        "in_flight_builds": 0,
         "public_is_automated": False,
         "repository_last_updated": last_updated,
-        "queue_basis": "automatic builds disabled and no source-capable GitHub legacy publisher hook",
     }
 
 
@@ -155,18 +155,35 @@ def _validated_hooks() -> list[dict[str, Any]]:
     return normalized
 
 
-def capture(source_sha: str) -> bytes:
+def capture(
+    source_sha: str,
+    *,
+    in_flight_builds: int,
+    queue_evidence: str,
+) -> bytes:
     if not SHA_RE.fullmatch(source_sha):
         fail("source SHA must be 40 lowercase hex characters")
     _owner_identity()
     if _current_main_sha() != source_sha:
         fail("source SHA is not the current default-branch commit")
+    if type(in_flight_builds) is not int or in_flight_builds != 0:
+        fail("owner-attested Docker Hub in-flight build count must be exactly zero")
+    if queue_evidence != "dockerhub-ui-owner-observation":
+        fail("unsupported Docker Hub queue evidence")
     now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    dockerhub = _validated_dockerhub()
+    dockerhub.update(
+        {
+            "in_flight_builds": in_flight_builds,
+            "queue_evidence": queue_evidence,
+            "queue_observed_at": now,
+        }
+    )
     evidence = {
-        "schemaVersion": 1,
+        "schema_version": 2,
         "captured_at": now,
         "source_sha": source_sha,
-        "dockerhub": _validated_dockerhub(),
+        "dockerhub": dockerhub,
         "github": {
             "repository": REPOSITORY,
             "legacy_webhook_present": False,
@@ -207,12 +224,22 @@ def main() -> int:
     action.add_argument("--dispatch", action="store_true")
     parser.add_argument("--source-sha")
     parser.add_argument("--if-publisher-active", action="store_true")
+    parser.add_argument("--in-flight-builds", type=int, required=True)
+    parser.add_argument(
+        "--queue-evidence",
+        choices=("dockerhub-ui-owner-observation",),
+        required=True,
+    )
     args = parser.parse_args()
 
     source_sha = args.source_sha or _current_main_sha()
     if args.if_publisher_active and not _active_publisher_for(source_sha):
         return 0
-    raw = capture(source_sha)
+    raw = capture(
+        source_sha,
+        in_flight_builds=args.in_flight_builds,
+        queue_evidence=args.queue_evidence,
+    )
     if args.capture_only:
         _write_no_clobber(args.capture_only, raw)
         digest = hashlib.sha256(raw).hexdigest()

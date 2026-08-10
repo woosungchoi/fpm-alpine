@@ -213,9 +213,9 @@ def main() -> int:
                 raise SystemExit(
                     f"backfill Docker Hub plan/result mismatch for release unit {index + 1}"
                 )
-        elif plan_unit.get("target_dockerhub_digest") is not None:
+        elif plan_unit.get("target_dockerhub_digest") != unit["dockerhub_digest"]:
             raise SystemExit(
-                f"automatic Docker Hub target was not deferred for release unit {index + 1}"
+                f"automatic Docker Hub plan/result mismatch for release unit {index + 1}"
             )
     if args.minor is not None:
         if selected is None or selected["php_patch"] != args.patch:

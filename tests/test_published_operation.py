@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/resolve-published-operation.sh"
 SUBJECT = "ghcr.io/woosungchoi/fpm-alpine@sha256:" + "a" * 64
+DOCKERHUB_SUBJECT = "docker.io/woosungchoi/fpm-alpine@sha256:" + "a" * 64
 
 
 class PublishedOperationResolverTests(unittest.TestCase):
@@ -19,14 +20,22 @@ class PublishedOperationResolverTests(unittest.TestCase):
             fake = root / "cosign"
             fake.write_text("""#!/usr/bin/env python3
 import os, sys
-args = ' '.join(sys.argv[1:])
+argv = sys.argv[1:]
+args = ' '.join(argv)
 valid = set(filter(None, os.environ.get('VALID_MODES', '').split(',')))
-if 'fpm.operation=backfill-ghcr' in args and 'dependency-auto-publish\\.yml' in args:
+identity = argv[argv.index('--certificate-identity-regexp') + 1]
+if r'github\\.com' not in identity or r'github\\\\.com' in identity:
+    raise SystemExit(3)
+if 'fpm.operation=backfill-ghcr' in args and r'dependency-auto-publish\\.yml' in args:
     raise SystemExit(0 if 'backfill-ghcr' in valid else 1)
-if 'fpm.operation=automatic' in args and 'dependency-auto-publish\\.yml' in args:
+if 'fpm.operation=automatic' in args and r'dependency-auto-publish\\.yml' in args:
     raise SystemExit(0 if 'automatic' in valid else 1)
-if 'publish\\.yml' in args and 'fpm.operation=' not in args:
+if 'fpm.operation=manual' in args and r'publish\\.yml' in args:
     raise SystemExit(0 if 'manual' in valid else 1)
+if 'fpm.operation=recovery' in args and r'dependency-publish-recovery\\.yml' in args:
+    raise SystemExit(0 if 'recovery-workflow' in valid else 1)
+if 'fpm.operation=recovery' in args and r'dependency-auto-publish\\.yml' in args:
+    raise SystemExit(0 if 'recovery-auto' in valid else 1)
 raise SystemExit(2)
 """)
             fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -49,6 +58,8 @@ raise SystemExit(2)
             "backfill-ghcr": "backfill-ghcr\tdependency-auto-publish.yml\tmain\n",
             "automatic": "automatic\tdependency-auto-publish.yml\tmain\n",
             "manual": "manual\tpublish.yml\tmain\n",
+            "recovery-workflow": "recovery\tdependency-publish-recovery.yml\tmain\n",
+            "recovery-auto": "recovery\tdependency-auto-publish.yml\tmain\n",
         }
         for mode, output in expected.items():
             with self.subTest(mode=mode):
@@ -62,6 +73,23 @@ raise SystemExit(2)
                 completed = self.run_resolver(modes)
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertIn("exactly one", completed.stderr)
+
+    def test_dockerhub_exact_subject_is_classified_with_the_same_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake = root / "cosign"
+            fake.write_text("#!/usr/bin/env bash\n[[ \" $* \" == *\" fpm.operation=recovery \"* && \"$*\" == *\"dependency-publish-recovery\\.yml\"* ]]\n")
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            completed = subprocess.run(
+                [str(SCRIPT), DOCKERHUB_SUBJECT, "main"],
+                cwd=ROOT,
+                env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}"},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("recovery", completed.stdout)
 
     def test_invalid_subject_or_signing_ref_is_rejected_before_cosign(self) -> None:
         for subject, signing_ref in (("ghcr.io/repo:tag", "main"), (SUBJECT, "topic")):

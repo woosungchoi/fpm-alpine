@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 DOCKERHUB_REPOSITORY="${1:-}"
 PREVIOUS_DOCKERHUB_DIGEST="${2:-}"
@@ -8,16 +10,18 @@ PREVIOUS_GHCR_DIGEST="${4:-}"
 MINOR="${5:-}"
 REPORT_DIR="${6:-rollback-reports}"
 SIGN_DESTINATION="${COSIGN_SIGN_DESTINATION:-0}"
+TRANSACTION_PLAN_FILE="${TRANSACTION_PLAN_FILE:-}"
 RESTORE_DOCKERHUB="${RESTORE_DOCKERHUB:-1}"
 RESTORE_GHCR="${RESTORE_GHCR:-1}"
-EXPECTED_PUBLISHER_WORKFLOW="${EXPECTED_PUBLISHER_WORKFLOW:-publish.yml}"
+EXPECTED_PUBLISHER_WORKFLOW="${EXPECTED_PUBLISHER_WORKFLOW:-dependency-auto-publish.yml}"
 OIDC_ISSUER="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 case "$EXPECTED_PUBLISHER_WORKFLOW" in
   publish.yml) publisher_workflow_pattern='publish\.yml' ;;
   dependency-auto-publish.yml) publisher_workflow_pattern='dependency-auto-publish\.yml' ;;
+  dependency-publish-recovery.yml) publisher_workflow_pattern='dependency-publish-recovery\.yml' ;;
   *) echo "invalid expected publisher workflow for rollback" >&2; exit 2 ;;
 esac
-IDENTITY="^https://github\\.com/woosungchoi/fpm-alpine/\\.github/workflows/${publisher_workflow_pattern}@refs/heads/main$"
+IDENTITY="^https://github\.com/woosungchoi/fpm-alpine/\.github/workflows/${publisher_workflow_pattern}@refs/heads/main$"
 [[ "$RESTORE_DOCKERHUB" =~ ^[01]$ ]] || { echo "invalid Docker Hub restore flag" >&2; exit 2; }
 [[ "$RESTORE_GHCR" =~ ^[01]$ ]] || { echo "invalid GHCR restore flag" >&2; exit 2; }
 
@@ -27,6 +31,12 @@ done
 [[ "$MINOR" =~ ^8\.[2-5]$ ]] || { echo "rollback minor must be active" >&2; exit 2; }
 [ "$DOCKERHUB_REPOSITORY" = docker.io/woosungchoi/fpm-alpine ] || { echo "invalid Docker Hub repository" >&2; exit 2; }
 [ "$GHCR_REPOSITORY" = ghcr.io/woosungchoi/fpm-alpine ] || { echo "invalid GHCR repository" >&2; exit 2; }
+if [ "$SIGN_DESTINATION" = 1 ]; then
+  [ -f "$TRANSACTION_PLAN_FILE" ] || {
+    echo "recovery signing requires the frozen transaction plan" >&2
+    exit 2
+  }
+fi
 
 DOCKERHUB_ROLLBACK_SOURCE="${DOCKERHUB_ROLLBACK_SOURCE:-${DOCKERHUB_REPOSITORY}@${PREVIOUS_DOCKERHUB_DIGEST}}"
 DOCKERHUB_ROLLBACK_FALLBACK_SOURCE="${DOCKERHUB_ROLLBACK_FALLBACK_SOURCE:-}"
@@ -133,11 +143,29 @@ else
 fi
 
 if [ "$rollback_status" -eq 0 ] && [ "$SIGN_DESTINATION" = 1 ] && [ "$RESTORE_DOCKERHUB" = 1 ]; then
-  if ! cosign sign --yes "${DOCKERHUB_REPOSITORY}@${dockerhub_actual}" || \
-     ! cosign verify --certificate-identity-regexp "$IDENTITY" \
-       --certificate-oidc-issuer "$OIDC_ISSUER" \
-       "${DOCKERHUB_REPOSITORY}@${dockerhub_actual}" >/dev/null; then
-    echo "restored Docker Hub subject signing or verification failed" >&2
+  restored_subject="${DOCKERHUB_REPOSITORY}@${dockerhub_actual}"
+  set +e
+  existing_operation="$("$(dirname "$0")/resolve-published-operation.sh" "$restored_subject" main 2>/dev/null)"
+  existing_status=$?
+  set -e
+  if [ "$existing_status" -eq 0 ]; then
+    echo "restored Docker Hub subject retains authorized signature: $existing_operation"
+  elif [ "$existing_status" -eq 3 ]; then
+    if ! "$(dirname "$0")/transaction-journal.py" recovery-referrer-attempt \
+         "$TRANSACTION_PLAN_FILE" "$MINOR" || \
+       ! cosign sign --yes -a fpm.operation=recovery "$restored_subject" || \
+       ! cosign verify --certificate-identity-regexp "$IDENTITY" \
+         --certificate-oidc-issuer "$OIDC_ISSUER" \
+         -a fpm.operation=recovery \
+         "$restored_subject" >/dev/null || \
+       ! "$(dirname "$0")/transaction-journal.py" recovery-referrer-complete \
+         "$TRANSACTION_PLAN_FILE" "$MINOR" "$dockerhub_actual"; then
+      echo "restored Docker Hub subject signing or verification failed" >&2
+      dockerhub_restore_status=failed
+      rollback_status=1
+    fi
+  else
+    echo "restored Docker Hub subject has ambiguous or invalid signature state" >&2
     dockerhub_restore_status=failed
     rollback_status=1
   fi

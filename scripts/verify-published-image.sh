@@ -233,8 +233,9 @@ for entry in "dockerhub|$DOCKERHUB_REF|$dockerhub_digest" "ghcr|$GHCR_REF|$ghcr_
   repository="$(repository_from_ref "$ref")"
   for platform in "${EXPECTED_PLATFORMS[@]}"; do
     platform_subject="$(./scripts/resolve-platform-image.py "${repository}@${digest}" "$platform")"
-    EXPECTED_PLATFORM="$platform" \
-    SMOKE_REPORT_MD="$REPORT_DIR/smoke/${registry}-${platform//\//-}.md" \
+    report_path="$REPORT_DIR/smoke/${registry}-${platform//\//-}.md"
+    ./scripts/run-qemu-runtime-with-retry.sh "$platform" "$report_path" -- \
+      env EXPECTED_PLATFORM="$platform" SMOKE_REPORT_MD="$report_path" \
       ./scripts/smoke-test-image.sh "$platform_subject"
   done
 done

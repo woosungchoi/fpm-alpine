@@ -116,7 +116,9 @@ export EXPECTED_ICONV_OWNER_PATH="${runtime_values[7]}"
 export EXPECTED_ICONV_TARGET="${runtime_values[8]}"
 for platform in "${PLATFORMS[@]}"; do
   platform_subject="$(./scripts/resolve-platform-image.py "$GHCR_SUBJECT" "$platform")"
-  EXPECTED_PLATFORM="$platform" SMOKE_REPORT_MD="$REPORT_DIR/smoke/ghcr-${platform//\//-}.md" \
+  report_path="$REPORT_DIR/smoke/ghcr-${platform//\//-}.md"
+  ./scripts/run-qemu-runtime-with-retry.sh "$platform" "$report_path" -- \
+    env EXPECTED_PLATFORM="$platform" SMOKE_REPORT_MD="$report_path" \
     ./scripts/smoke-test-image.sh "$platform_subject"
 done
 cat > "$REPORT_DIR/verification-summary.md" <<EOF

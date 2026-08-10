@@ -17,6 +17,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "published-runtime-smoke.yml"
 DOCKERHUB_VERIFIER = ROOT / "scripts" / "verify-published-dockerhub-image.sh"
 STRICT_VERIFIER = ROOT / "scripts" / "verify-published-image.sh"
 OPERATION_RESOLVER = ROOT / "scripts" / "resolve-published-operation.sh"
+QEMU_RUNTIME_RETRY = ROOT / "scripts" / "run-qemu-runtime-with-retry.sh"
 
 
 class PublishedRuntimeSmokeTests(unittest.TestCase):
@@ -48,6 +49,7 @@ class PublishedRuntimeSmokeTests(unittest.TestCase):
 
         verifier = scripts / DOCKERHUB_VERIFIER.name
         shutil.copy2(DOCKERHUB_VERIFIER, verifier)
+        shutil.copy2(QEMU_RUNTIME_RETRY, scripts / QEMU_RUNTIME_RETRY.name)
 
         digest = "sha256:" + "a" * 64
         platform_digests = {

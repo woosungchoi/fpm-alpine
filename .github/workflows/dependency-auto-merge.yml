@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   enable-native-auto-merge:
+    name: Enable native auto-merge
     if: >-
       ${{ vars.DEPENDENCY_AUTO_MERGE_ENABLED == 'true' &&
           github.event.workflow_run.event == 'pull_request' &&
@@ -24,9 +25,9 @@ jobs:
     environment: dependency-updater
     timeout-minutes: 15
     permissions:
-      actions: read
-      contents: read
-      pull-requests: read
+      actions: read # Revalidate the exact successful smoke workflow run.
+      contents: read # Checkout and inspect trusted default-branch policy code.
+      pull-requests: read # Validate the same-repository dependency PR metadata.
     steps:
       - name: Checkout trusted main workflow code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

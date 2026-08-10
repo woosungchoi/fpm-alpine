@@ -38,7 +38,7 @@ class PromotionEligibilityTests(unittest.TestCase):
         self.assertTrue(result["eligible"])
         self.assertEqual(result["affectedMinors"], ["8.5"])
 
-    def test_pecl_patch_selects_all_minors(self) -> None:
+    def test_pecl_patch_is_not_automatically_published(self) -> None:
         head = copy.deepcopy(VERSIONS)
         row = head["dependencies"]["apcu"]
         row["version"] = "5.1.29"
@@ -47,8 +47,9 @@ class PromotionEligibilityTests(unittest.TestCase):
         result = self.module.evaluate(
             VERSIONS, head, POLICY, ["build/versions.json"], "a" * 40
         )
-        self.assertTrue(result["eligible"])
-        self.assertEqual(result["affectedMinors"], ["8.2", "8.3", "8.4", "8.5"])
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["class"], "manual-only")
+        self.assertEqual(result["affectedMinors"], [])
 
     def test_actions_only_update_is_no_publish(self) -> None:
         result = self.module.evaluate(

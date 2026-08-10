@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from functools import lru_cache
 import hashlib
 import importlib.util
 import io
@@ -13,9 +12,11 @@ import re
 import subprocess
 import tarfile
 import urllib.request
-from urllib.parse import quote, urlsplit
+from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from urllib.parse import quote, urlsplit
 
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -266,13 +267,12 @@ def discover(
         if not valid_tgz(archive):
             warnings.append(f"PECL {name} archive validation failed")
             continue
-        eligible = new_version[:2] == old_version[:2]
         candidates.append(
             {
                 "key": f"pecl-{name}",
-                "class": "pecl-patch" if eligible else "pecl-manual-review",
-                "eligible": eligible,
-                "affectedMinors": list(policy["lifecycle"]) if eligible else [],
+                "class": "pecl-manual-review",
+                "eligible": False,
+                "affectedMinors": [],
                 "old": dict(current),
                 "new": {
                     "version": latest,

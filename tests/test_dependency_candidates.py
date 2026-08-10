@@ -147,7 +147,7 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(result["candidates"], [])
         self.assertIn("wrong minor", " ".join(result["warnings"]))
 
-    def test_pecl_patch_candidate_records_real_archive_hash(self) -> None:
+    def test_pecl_patch_candidate_is_manual_and_records_real_archive_hash(self) -> None:
         archive = tgz_bytes()
         result = self.discover(
             latest={
@@ -158,10 +158,10 @@ class CandidateTests(unittest.TestCase):
         )
         candidate = result["candidates"][0]
         self.assertEqual(candidate["key"], "pecl-imagick")
-        self.assertTrue(candidate["eligible"])
+        self.assertFalse(candidate["eligible"])
+        self.assertEqual(candidate["class"], "pecl-manual-review")
+        self.assertEqual(candidate["affectedMinors"], [])
         self.assertEqual(len(candidate["new"]["sha256"]), 64)
-        applied = self.module.apply_candidate(copy.deepcopy(VERSIONS), candidate)
-        self.assertEqual(applied["dependencies"]["imagick"]["version"], "3.8.2")
 
     def test_pecl_minor_candidate_requires_manual_review(self) -> None:
         result = self.discover(

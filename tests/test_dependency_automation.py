@@ -84,6 +84,20 @@ class DependencyAutomationTests(unittest.TestCase):
                 self.assertFalse(result["eligible"])
                 self.assertIn("manual-only", " ".join(result["blockedReasons"]))
 
+    def test_new_php_minor_is_rejected(self) -> None:
+        head = copy.deepcopy(VERSIONS)
+        head["versions"]["8.6"] = {
+            "minor": "8.6",
+            "patch": "8.6.0",
+            "base_image": "php:8.6-fpm-alpine@sha256:" + "9" * 64,
+            "support": "active",
+            "eol": "2029-12-31",
+        }
+        result = self.classify(head)
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["class"], "invalid")
+        self.assertTrue(self.validator.validate(head, self.policy))
+
     def test_runtime_contract_change_is_manual_only(self) -> None:
         head = copy.deepcopy(VERSIONS)
         head["runtimeContracts"]["libiconv"]["version"] = "9.9"

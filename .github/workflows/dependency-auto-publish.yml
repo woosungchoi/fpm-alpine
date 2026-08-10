@@ -481,24 +481,23 @@ jobs:
             --run-attempt "$RUN_ATTEMPT" \
             --draft
 
-      - name: Recheck legacy publisher cutover at mutation boundary
+      - name: Verify permanent Docker Hub cutover before automatic credentials
         if: needs.prepare.outputs.mode == 'automatic'
         env:
           LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
           DOCKERHUB_TAG_POLICY_ENFORCED: ${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         run: |
           set -euo pipefail
           test "$LEGACY_PUBLISHER_DISABLED" = true
           test "$DOCKERHUB_TAG_POLICY_ENFORCED" = true
-
-      - name: Require fresh immutable cutover lease before automatic credentials
-        if: needs.prepare.outputs.mode == 'automatic'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: |
-          ./scripts/require-fresh-cutover-lease.sh \
-            "$SOURCE_SHA" cutover-lease-before-credentials
+          read -r current_main current_ref < <(
+            git ls-remote --exit-code origin refs/heads/main
+          )
+          test "$current_ref" = refs/heads/main
+          test "$current_main" = "$SOURCE_SHA"
+          ./scripts/verify-permanent-dockerhub-cutover.py \
+            --output publisher-reports/dockerhub-cutover-before-credentials.json
 
       - name: Log in to Docker Hub mutation boundary
         if: needs.prepare.outputs.mode == 'automatic'
@@ -598,14 +597,24 @@ jobs:
             publisher-reports/promotion-plan.sha256
           if-no-files-found: error
 
-      - name: Revalidate fresh immutable cutover lease at mutation boundary
+      - name: Revalidate permanent Docker Hub cutover at mutation boundary
         if: needs.prepare.outputs.mode == 'automatic'
         env:
-          GH_TOKEN: ${{ github.token }}
+          LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
+          DOCKERHUB_TAG_POLICY_ENFORCED: ${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         run: |
-          ./scripts/require-fresh-cutover-lease.sh \
-            "$SOURCE_SHA" cutover-lease-at-mutation
+          set -euo pipefail
+          test "$LEGACY_PUBLISHER_DISABLED" = true
+          test "$DOCKERHUB_TAG_POLICY_ENFORCED" = true
+          read -r current_main current_ref < <(
+            git ls-remote --exit-code origin refs/heads/main
+          )
+          test "$current_ref" = refs/heads/main
+          test "$current_main" = "$SOURCE_SHA"
+          ./scripts/verify-permanent-dockerhub-cutover.py \
+            --expected-state publisher-reports/dockerhub-cutover-before-credentials.json \
+            --output publisher-reports/dockerhub-cutover-at-mutation.json
 
       - name: Promote exact subjects as one fail-closed transaction
         env:

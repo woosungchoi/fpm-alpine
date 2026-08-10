@@ -61,20 +61,8 @@ jobs:
           ./tests/test_publisher_policy.sh
           python3 tests/test_registry_dispatch_authority.py
           python3 tests/test_dependency_auto_publish.py
-          python3 tests/test_permanent_dockerhub_cutover.py
-          python3 tests/test_transaction_journal.py
-          python3 tests/test_transaction_journal_github.py
           python3 tests/test_qemu_runtime_retry.py
-          python3 tests/test_backfill_source_manifest.py
-          python3 tests/test_fresh_cutover_lease.py
-          python3 tests/test_require_fresh_cutover_lease.py
-          python3 tests/test_refresh_cutover_lease.py
           python3 tests/test_published_operation.py
-          python3 tests/test_auto_promotion_transaction.py
-          python3 tests/test_auto_transaction_evidence.py
-          python3 tests/test_image_tag_absence.py
-          python3 tests/test_rollback_sources.py
-          python3 tests/test_published_runtime_smoke.py
           ./tests/test_smoke_script.sh
           python3 tests/test_php_lifecycle.py
           python3 tests/test_dockerhub_metadata.py
@@ -86,7 +74,6 @@ jobs:
           python3 tests/test_auto_merge_selection.py
           python3 tests/test_auto_promotion_eligibility.py
           python3 tests/test_dependency_control_workflows.py
-          python3 tests/test_post_publish_failure_classifier.py
           python3 tests/test_reproducibility_archive.py
 
       - name: Verify action-only update provenance

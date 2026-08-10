@@ -63,7 +63,7 @@ class DependencyAutomationTests(unittest.TestCase):
         self.assertTrue(result["eligible"])
         self.assertEqual(result["affectedMinors"], ["8.4"])
 
-    def test_pecl_patch_is_eligible_for_all_active_minors(self) -> None:
+    def test_pecl_patch_is_manual_only(self) -> None:
         head = copy.deepcopy(VERSIONS)
         head["dependencies"]["imagick"] = {
             "version": "3.8.2",
@@ -71,9 +71,9 @@ class DependencyAutomationTests(unittest.TestCase):
             "sha256": "c" * 64,
         }
         result = self.classify(head)
-        self.assertTrue(result["eligible"])
-        self.assertEqual(result["class"], "pecl-patch")
-        self.assertEqual(result["affectedMinors"], ["8.2", "8.3", "8.4", "8.5"])
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["class"], "manual-only")
+        self.assertEqual(result["affectedMinors"], [])
 
     def test_support_and_eol_changes_are_manual_only(self) -> None:
         for field, value in (("support", "active"), ("eol", "2099-12-31")):

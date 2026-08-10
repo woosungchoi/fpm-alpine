@@ -134,50 +134,14 @@ class RegistryDispatchAuthorityTests(unittest.TestCase):
             )
             self.assertNotEqual(invalid.returncode, 0)
 
-    def test_dependency_backfill_and_recovery_are_owner_bound_before_checkout(self) -> None:
-        cases = (
-            (
-                "dependency-auto-publish.yml",
-                "fpm-ghcr-backfill",
-                {"operation": "backfill-ghcr", "source_sha": "a" * 40},
-            ),
-            (
-                "dependency-auto-publish.yml",
-                "fpm-dependency-publish-replay",
-                {"operation": "automatic-replay", "source_sha": "a" * 40},
-            ),
-            (
-                "dependency-publish-recovery.yml",
-                "fpm-publish-recover",
-                {
-                    "operation": "recovery",
-                    "original_run_id": 123,
-                    "original_run_attempt": 1,
-                    "plan_sha256": "b" * 64,
-                },
-            ),
-        )
-        for workflow_name, action, payload in cases:
-            with self.subTest(workflow=workflow_name):
-                workflow = load_workflow(workflow_name)
-                prepare = workflow["jobs"]["prepare"]
-                first = prepare["steps"][0]
-                self.assertEqual(first["name"], "Validate owner dispatch envelope before checkout")
-                completed = run_envelope(first["run"], payload, EVENT_ACTION=action)
-                self.assertEqual(completed.returncode, 0, completed.stderr)
-                for bad_payload, overrides in (
-                    ({**payload, "unknown": True}, {}),
-                    (payload, {"EVENT_ACTOR_ID": "1"}),
-                    (payload, {"EVENT_REPOSITORY": "other/repository"}),
-                    (payload, {"EVENT_REF": "refs/heads/topic"}),
-                ):
-                    rejected = run_envelope(
-                        first["run"],
-                        bad_payload,
-                        EVENT_ACTION=action,
-                        **overrides,
-                    )
-                    self.assertNotEqual(rejected.returncode, 0)
+    def test_dependency_publisher_has_no_repository_dispatch_bypass(self) -> None:
+        workflow = load_workflow("dependency-auto-publish.yml")
+        event = trigger(workflow)
+        self.assertIsInstance(event, dict)
+        assert isinstance(event, dict)
+        self.assertEqual(set(event), {"push", "workflow_dispatch"})
+        self.assertNotIn("repository_dispatch", event)
+        self.assertFalse((WORKFLOWS / "dependency-publish-recovery.yml").exists())
 
     def test_prune_is_owner_bound_read_only_plan_only(self) -> None:
         workflow = load_workflow("prune-dockerhub-tags.yml")

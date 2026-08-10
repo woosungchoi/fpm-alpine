@@ -88,39 +88,31 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         self.assertNotIn("repository_dispatch:", text)
         self.assert_actions_are_pinned(text)
 
-    def test_versions_merge_publishes_through_verified_ghcr_canaries(self) -> None:
+    def test_versions_merge_publishes_directly_to_both_registries(self) -> None:
         text, data = self.load("dependency-auto-publish.yml")
         trigger = self.trigger(data)
-        self.assertEqual(set(trigger), {"push", "repository_dispatch"})
-        self.assertEqual(
-            trigger["repository_dispatch"]["types"],
-            ["fpm-ghcr-backfill", "fpm-dependency-publish-replay"],
-        )
+        self.assertEqual(set(trigger), {"push", "workflow_dispatch"})
         self.assertEqual(trigger["push"]["branches"], ["main"])
         self.assertEqual(trigger["push"]["paths"], ["build/versions.json"])
         self.assertEqual(data["permissions"], {"contents": "read"})
         prepare = data["jobs"]["prepare"]
-        canary = data["jobs"]["canary"]
-        controller = data["jobs"]["promote"]
+        publisher = data["jobs"]["publish"]
         self.assertIn("validate-versions.py", yaml.safe_dump(prepare))
         self.assertIn("evaluate-auto-promotion.py", yaml.safe_dump(prepare))
         self.assertEqual(
-            canary["strategy"]["matrix"],
+            publisher["strategy"]["matrix"],
             "${{ fromJSON(needs.prepare.outputs.matrix) }}",
         )
-        rendered_canary = yaml.safe_dump(canary, sort_keys=False)
-        self.assertIn("linux/amd64,linux/arm64", rendered_canary)
-        self.assertIn("docker/build-push-action@", rendered_canary)
-        self.assertIn("push: true", rendered_canary)
-        self.assertIn(":canary-", rendered_canary)
-        self.assertNotIn("secrets.DOCKERHUB_TOKEN", rendered_canary)
-        self.assertEqual(controller["environment"], "fpm-auto-production")
-        self.assertNotIn("strategy", controller)
-        rendered_controller = yaml.safe_dump(controller, sort_keys=False)
-        self.assertIn("secrets.DOCKERHUB_USERNAME", rendered_controller)
-        self.assertIn("secrets.DOCKERHUB_TOKEN", rendered_controller)
-        self.assertIn("scripts/promote-auto-canaries.sh", rendered_controller)
-        self.assertIn("backfill-ghcr", text)
+        rendered = yaml.safe_dump(publisher, sort_keys=False)
+        self.assertEqual(publisher["environment"], "fpm-auto-production")
+        self.assertIn("linux/amd64,linux/arm64", rendered)
+        self.assertIn("docker/build-push-action@", rendered)
+        self.assertIn("push: true", rendered)
+        self.assertIn("secrets.DOCKERHUB_TOKEN", rendered)
+        self.assertIn("DOCKERHUB_REPOSITORY", rendered)
+        self.assertIn("GHCR_REPOSITORY", rendered)
+        self.assertNotIn("repository_dispatch", text)
+        self.assertNotIn("transaction-journal", text)
         self.assert_actions_are_pinned(text)
 
 

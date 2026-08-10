@@ -181,11 +181,11 @@ def classify(
                 ["only a strictly newer PECL patch-level update is eligible"],
             )
         return _result(
-            True,
-            "pecl-patch",
-            list(policy["lifecycle"]),
-            [f"dependencies.{name}.{field}" for field in fields],
+            False,
+            "manual-only",
             [],
+            [f"dependencies.{name}.{field}" for field in fields],
+            ["PECL updates require manual review"],
         )
 
     return _result(

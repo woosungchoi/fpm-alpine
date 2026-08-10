@@ -200,7 +200,6 @@ assert_file .github/dependabot.yml
 assert_contains .github/dependabot.yml 'package-ecosystem: github-actions'
 assert_contains .github/dependabot.yml 'interval: weekly'
 assert_file .github/workflows/php-lifecycle.yml
-assert_file .github/workflows/published-runtime-smoke.yml
 assert_file scripts/check-php-lifecycle.py
 assert_executable scripts/check-php-lifecycle.py
 assert_file scripts/create-php-lifecycle-issue.sh
@@ -208,47 +207,19 @@ assert_executable scripts/create-php-lifecycle-issue.sh
 assert_contains .github/workflows/php-lifecycle.yml "cron: '19 5 1 * *'"
 assert_contains .github/workflows/php-lifecycle.yml 'workflow_dispatch:'
 assert_contains .github/workflows/php-lifecycle.yml 'scripts/check-php-lifecycle.py'
-assert_contains .github/workflows/published-runtime-smoke.yml 'workflows: ["dependency-auto-publish"]'
-assert_contains .github/workflows/published-runtime-smoke.yml 'branches: ["main"]'
-assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-image.sh'
-assert_not_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-published-dockerhub-image.sh'
-assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/scan-image.sh'
-assert_contains .github/workflows/published-runtime-smoke.yml '.github/workflows/dependency-auto-publish.yml)'
-assert_contains .github/workflows/published-runtime-smoke.yml 'signing_workflow=dependency-auto-publish.yml'
-assert_contains .github/workflows/published-runtime-smoke.yml 'unsupported workflow_run path:'
-assert_contains .github/workflows/published-runtime-smoke.yml 'DOCKERHUB_DIGEST: ${{ steps.source.outputs.dockerhub_digest }}'
 assert_contains .github/workflows/dependency-auto-publish.yml 'environment: fpm-auto-production'
-assert_contains .github/workflows/dependency-auto-publish.yml 'types: [fpm-ghcr-backfill, fpm-dependency-publish-replay]'
-assert_contains .github/workflows/dependency-auto-publish.yml 'test "$REQUESTED_OPERATION" = automatic-replay'
-assert_contains .github/workflows/dependency-auto-publish.yml 'path: image-source'
-assert_not_contains .github/workflows/dependency-auto-publish.yml 'workflow_dispatch:'
-assert_contains .github/workflows/dependency-auto-publish.yml 'scripts/promote-auto-canaries.sh'
+assert_contains .github/workflows/dependency-auto-publish.yml 'workflow_dispatch:'
 assert_contains .github/workflows/dependency-auto-publish.yml 'scripts/evaluate-auto-promotion.py'
-assert_contains .github/workflows/dependency-auto-publish.yml "if: steps.mode.outputs.mode == 'automatic'"
-for script in \
-  scripts/assert-image-tag-absent.sh \
-  scripts/promote-auto-canaries.sh \
-  scripts/validate-auto-promotion-plan.py \
-  scripts/validate-auto-transaction-result.py; do
-  assert_file "$script"
-  assert_executable "$script"
-done
-assert_contains .github/workflows/dependency-publish-recovery.yml 'types: [fpm-publish-recover]'
-assert_contains .github/workflows/dependency-publish-recovery.yml 'group: fpm-production-promotion'
-for workflow in \
-  .github/workflows/dependency-auto-publish.yml \
-  .github/workflows/dependency-publish-recovery.yml \
-  .github/workflows/publish.yml \
-  .github/workflows/published-runtime-smoke.yml; do
-  assert_contains "$workflow" 'cosign-release: v3.1.2'
-done
+assert_contains .github/workflows/dependency-auto-publish.yml 'docker/build-push-action@'
+assert_contains .github/workflows/dependency-auto-publish.yml '${{ env.DOCKERHUB_REPOSITORY }}:${{ matrix.php_minor }}'
+assert_contains .github/workflows/dependency-auto-publish.yml '${{ env.GHCR_REPOSITORY }}:${{ matrix.php_minor }}'
+assert_contains .github/workflows/dependency-auto-publish.yml 'test "$dockerhub_digest" = "$ghcr_digest"'
+assert_not_contains .github/workflows/dependency-auto-publish.yml 'repository_dispatch:'
+assert_not_file .github/workflows/dependency-publish-recovery.yml
+assert_not_file .github/workflows/legacy-cutover-lease.yml
+assert_not_file .github/workflows/published-runtime-smoke.yml
+assert_not_file .github/dockerhub-cutover-attestation.json
 assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_dependency_auto_publish.py'
-assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_auto_promotion_transaction.py'
-assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_auto_transaction_evidence.py'
-assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_image_tag_absence.py'
-assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_rollback_sources.py'
-assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_published_runtime_smoke.py'
-assert_contains .github/workflows/published-runtime-smoke.yml 'git merge-base --is-ancestor'
 python3 - <<'PY'
 import re
 from pathlib import Path

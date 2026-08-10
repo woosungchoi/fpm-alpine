@@ -13,7 +13,27 @@ ROOT = Path(__file__).resolve().parents[1]
 TRANSACTION = ROOT / "scripts" / "promote-auto-canaries.sh"
 PLAN_VALIDATOR = ROOT / "scripts" / "validate-auto-promotion-plan.py"
 MINORS = ("8.2", "8.3", "8.4", "8.5")
-PATCHES = {"8.2": "8.2.33", "8.3": "8.3.32", "8.4": "8.4.23", "8.5": "8.5.8"}
+
+
+def load_fixture_patches(path: Path) -> dict[str, str]:
+    payload = json.loads(path.read_text())
+    versions = payload.get("versions") if isinstance(payload, dict) else None
+    if not isinstance(versions, dict) or tuple(versions) != MINORS:
+        raise ValueError("fixture version matrix must be exactly PHP 8.2-8.5")
+    patches: dict[str, str] = {}
+    for minor in MINORS:
+        row = versions.get(minor)
+        patch = row.get("patch") if isinstance(row, dict) else None
+        if not isinstance(patch, str):
+            raise TypeError(f"invalid fixture patch for PHP {minor}")
+        parts = patch.split(".")
+        if len(parts) != 3 or ".".join(parts[:2]) != minor or not all(part.isdigit() for part in parts):
+            raise ValueError(f"invalid fixture patch for PHP {minor}")
+        patches[minor] = patch
+    return patches
+
+
+PATCHES = load_fixture_patches(ROOT / "build/versions.json")
 SOURCE_SHA = "d" * 40
 WORKFLOW_SHA = "e" * 40
 DOCKERHUB = "docker.io/woosungchoi/fpm-alpine"
@@ -41,6 +61,19 @@ class AutoPromotionTransactionTests(unittest.TestCase):
     def write_executable(path: Path, content: str) -> None:
         path.write_text(content)
         path.chmod(0o755)
+
+    def test_fixture_patches_follow_checked_out_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = json.loads((ROOT / "build/versions.json").read_text())
+            manifest["versions"]["8.3"]["patch"] = "8.3.99"
+            path = Path(tmp) / "versions.json"
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(load_fixture_patches(path)["8.3"], "8.3.99")
+
+            manifest["versions"]["8.6"] = {"patch": "8.6.0"}
+            path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "exactly PHP 8.2-8.5"):
+                load_fixture_patches(path)
 
     def fixture(self, root: Path, mode: str) -> Fixture:
         scripts = root / "scripts"

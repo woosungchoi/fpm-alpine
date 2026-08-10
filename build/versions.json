@@ -37,8 +37,8 @@
     },
     "8.3": {
       "minor": "8.3",
-      "patch": "8.3.32",
-      "base_image": "php:8.3-fpm-alpine@sha256:9fcec48321d890240d700ccdc2b475420c87d398826e68c3d8830b8fca663e5c",
+      "patch": "8.3.33",
+      "base_image": "php:8.3-fpm-alpine@sha256:bf90236449d333cef008b1f01c72a3d4f11a6470a74629665e4c6b6158f03fc8",
       "support": "security-only",
       "eol": "2027-12-31"
     },

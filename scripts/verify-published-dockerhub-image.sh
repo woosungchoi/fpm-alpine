@@ -10,6 +10,7 @@ EXPECTED_LICENSES="${EXPECTED_LICENSES:-GPL-2.0-only}"
 INSPECT_ATTEMPTS="${INSPECT_ATTEMPTS:-5}"
 INSPECT_RETRY_DELAY_SECONDS="${INSPECT_RETRY_DELAY_SECONDS:-2}"
 EXPECTED_PLATFORMS=(linux/amd64 linux/arm64)
+VERSIONS_FILE="${AUTO_PROMOTION_VERSIONS_FILE:-build/versions.json}"
 
 if [[ ! "$DOCKERHUB_REF" =~ ^(docker\.io/)?woosungchoi/fpm-alpine(:8\.[2-5]|@sha256:[0-9a-f]{64})$ ]] ||
    [[ ! "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]] ||
@@ -19,6 +20,7 @@ if [[ ! "$DOCKERHUB_REF" =~ ^(docker\.io/)?woosungchoi/fpm-alpine(:8\.[2-5]|@sha
 fi
 [[ "$INSPECT_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || { echo "INSPECT_ATTEMPTS must be a positive integer" >&2; exit 64; }
 [[ "$INSPECT_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]] || { echo "INSPECT_RETRY_DELAY_SECONDS must be a non-negative integer" >&2; exit 64; }
+[ -r "$VERSIONS_FILE" ] || { echo "versions manifest is not readable: $VERSIONS_FILE" >&2; exit 66; }
 for command in docker python3; do
   command -v "$command" >/dev/null 2>&1 || { echo "$command is required" >&2; exit 69; }
 done
@@ -171,11 +173,11 @@ PY
 
 minor="${EXPECTED_VERSION%.*}"
 runtime_values_output=
-if ! runtime_values_output="$(python3 - "$minor" <<'PY'
+if ! runtime_values_output="$(python3 - "$minor" "$VERSIONS_FILE" <<'PY'
 import json
 import sys
 
-data = json.load(open("build/versions.json"))
+data = json.load(open(sys.argv[2]))
 minor = sys.argv[1]
 deps = data["dependencies"]
 iconv = data["runtimeContracts"]["libiconv"]

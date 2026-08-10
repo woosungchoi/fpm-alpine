@@ -1,44 +1,98 @@
 name: prune-dockerhub-tags
-run-name: prune-dockerhub-tags-${{ inputs.mode }}-${{ github.run_id }}
+run-name: prune-dockerhub-tags-${{ github.event.client_payload.mode }}-${{ github.run_id }}
 
 on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: Read-only plan or protected archive/apply
-        required: true
-        type: choice
-        options:
-          - plan
-          - archive
-          - apply
-        default: plan
-      plan_run_id:
-        description: Required for apply; successful plan workflow run ID
-        required: false
-        type: string
-      expected_inventory_sha256:
-        description: Required for apply; inventory SHA-256 from plan
-        required: false
-        type: string
-      expected_deletion_plan_sha256:
-        description: Required for apply; deletion plan SHA-256 from plan
-        required: false
-        type: string
-      confirmation:
-        description: Required for apply; exact destructive confirmation phrase
-        required: false
-        type: string
+  repository_dispatch:
+    types: [fpm-dockerhub-prune]
 
 permissions: {}
 
 concurrency:
-  group: prune-dockerhub-tags
+  group: ${{ github.event.client_payload.mode == 'plan' && 'prune-dockerhub-tags-plan' || 'fpm-production-promotion' }}
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    name: Validate owner prune dispatch
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      mode: ${{ steps.envelope.outputs.mode }}
+    steps:
+      - name: Validate owner dispatch envelope before checkout
+        id: envelope
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          def fail(message):
+              raise SystemExit(message)
+
+          if os.environ["EVENT_ACTION"] != "fpm-dockerhub-prune":
+              fail("unexpected prune repository_dispatch action")
+          if os.environ["EVENT_ACTOR"] != "woosungchoi" or os.environ["EVENT_ACTOR_ID"] != "5674610":
+              fail("prune dispatcher is not the pinned owner")
+          if os.environ["EVENT_REPOSITORY"] != "woosungchoi/fpm-alpine":
+              fail("prune repository mismatch")
+          if os.environ["EVENT_REF"] != "refs/heads/main" or re.fullmatch(
+              r"[0-9a-f]{40}", os.environ["EVENT_SHA"]
+          ) is None:
+              fail("prune event is not exact default-branch HEAD")
+
+          payload = json.loads(os.environ["EVENT_PAYLOAD_JSON"])
+          if not isinstance(payload, dict):
+              fail("prune payload must be an object")
+          mode = payload.get("mode")
+          expected = {
+              "plan": {"mode"},
+              "archive": {
+                  "mode",
+                  "plan_run_id",
+                  "expected_inventory_sha256",
+                  "expected_deletion_plan_sha256",
+              },
+              "apply": {
+                  "mode",
+                  "plan_run_id",
+                  "expected_inventory_sha256",
+                  "expected_deletion_plan_sha256",
+                  "confirmation",
+              },
+          }
+          if mode not in expected or set(payload) != expected[mode]:
+              fail("prune payload keys do not exactly match the requested mode")
+          if mode != "plan":
+              run_id = payload.get("plan_run_id")
+              if isinstance(run_id, bool) or not (
+                  isinstance(run_id, int) and run_id > 0
+                  or isinstance(run_id, str) and re.fullmatch(r"[1-9][0-9]*", run_id)
+              ):
+                  fail("prune plan_run_id is invalid")
+              for name in ("expected_inventory_sha256", "expected_deletion_plan_sha256"):
+                  value = payload.get(name)
+                  if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                      fail(f"prune {name} is invalid")
+          if mode == "apply" and payload.get("confirmation") != "DELETE NON-ACTIVE DOCKER HUB TAGS":
+              fail("prune confirmation phrase is invalid")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"mode={mode}\n")
+          PY
+
   plan:
-    if: ${{ inputs.mode == 'plan' }}
+    name: Create read-only Docker Hub prune plan
+    if: ${{ needs.authorize.outputs.mode == 'plan' }}
+    needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -48,6 +102,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Create read-only live deletion plan
         run: |
@@ -76,26 +131,29 @@ jobs:
           retention-days: 30
 
   archive:
-    if: ${{ inputs.mode == 'archive' }}
+    name: Archive exact Docker Hub deletion candidates
+    if: ${{ needs.authorize.outputs.mode == 'archive' }}
+    needs: authorize
     runs-on: ubuntu-latest
     environment: fpm-production
     timeout-minutes: 240
     permissions:
-      actions: read
+      actions: read # download the exact plan artifact from its pinned run
       contents: read
-      packages: write
-      id-token: write
+      packages: write # create no-clobber GHCR archive subjects
+      id-token: write # sign archived exact subjects with Cosign
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Validate archive dispatch contract
         env:
-          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
-          INVENTORY_SHA256: ${{ inputs.expected_inventory_sha256 }}
-          PLAN_SHA256: ${{ inputs.expected_deletion_plan_sha256 }}
+          PLAN_RUN_ID: ${{ github.event.client_payload.plan_run_id }}
+          INVENTORY_SHA256: ${{ github.event.client_payload.expected_inventory_sha256 }}
+          PLAN_SHA256: ${{ github.event.client_payload.expected_deletion_plan_sha256 }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -110,7 +168,7 @@ jobs:
           run = json.load(open(sys.argv[1]))
           checks = {
               "conclusion": run.get("conclusion") == "success",
-              "event": run.get("event") == "workflow_dispatch",
+              "event": run.get("event") == "repository_dispatch",
               "head_branch": run.get("head_branch") == "main",
               "head_sha": run.get("head_sha") == os.environ["GITHUB_SHA"],
               "path": run.get("path") == ".github/workflows/prune-dockerhub-tags.yml",
@@ -123,9 +181,9 @@ jobs:
       - name: Download bound deletion plan
         env:
           GH_TOKEN: ${{ github.token }}
-          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
-          INVENTORY_SHA256: ${{ inputs.expected_inventory_sha256 }}
-          PLAN_SHA256: ${{ inputs.expected_deletion_plan_sha256 }}
+          PLAN_RUN_ID: ${{ github.event.client_payload.plan_run_id }}
+          INVENTORY_SHA256: ${{ github.event.client_payload.expected_inventory_sha256 }}
+          PLAN_SHA256: ${{ github.event.client_payload.expected_deletion_plan_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p prune-evidence
@@ -183,27 +241,30 @@ jobs:
           retention-days: 90
 
   apply:
-    if: ${{ inputs.mode == 'apply' }}
+    name: Apply exact archived Docker Hub deletion plan
+    if: ${{ needs.authorize.outputs.mode == 'apply' }}
+    needs: authorize
     runs-on: ubuntu-latest
     environment: fpm-production
     timeout-minutes: 240
     permissions:
-      actions: read
+      actions: read # download the exact plan artifact from its pinned run
       contents: read
-      packages: write
-      id-token: write
+      packages: write # verify bound GHCR archive subjects before deletion
+      id-token: write # sign the revalidated archive subjects before deletion
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Validate destructive dispatch contract
         env:
-          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
-          INVENTORY_SHA256: ${{ inputs.expected_inventory_sha256 }}
-          PLAN_SHA256: ${{ inputs.expected_deletion_plan_sha256 }}
-          CONFIRMATION: ${{ inputs.confirmation }}
+          PLAN_RUN_ID: ${{ github.event.client_payload.plan_run_id }}
+          INVENTORY_SHA256: ${{ github.event.client_payload.expected_inventory_sha256 }}
+          PLAN_SHA256: ${{ github.event.client_payload.expected_deletion_plan_sha256 }}
+          CONFIRMATION: ${{ github.event.client_payload.confirmation }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -219,7 +280,7 @@ jobs:
           run = json.load(open(sys.argv[1]))
           checks = {
               "conclusion": run.get("conclusion") == "success",
-              "event": run.get("event") == "workflow_dispatch",
+              "event": run.get("event") == "repository_dispatch",
               "head_branch": run.get("head_branch") == "main",
               "head_sha": run.get("head_sha") == os.environ["GITHUB_SHA"],
               "path": run.get("path") == ".github/workflows/prune-dockerhub-tags.yml",
@@ -232,9 +293,9 @@ jobs:
       - name: Download bound deletion plan
         env:
           GH_TOKEN: ${{ github.token }}
-          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
-          INVENTORY_SHA256: ${{ inputs.expected_inventory_sha256 }}
-          PLAN_SHA256: ${{ inputs.expected_deletion_plan_sha256 }}
+          PLAN_RUN_ID: ${{ github.event.client_payload.plan_run_id }}
+          INVENTORY_SHA256: ${{ github.event.client_payload.expected_inventory_sha256 }}
+          PLAN_SHA256: ${{ github.event.client_payload.expected_deletion_plan_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p prune-evidence
@@ -286,9 +347,9 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          INVENTORY_SHA256: ${{ inputs.expected_inventory_sha256 }}
-          PLAN_SHA256: ${{ inputs.expected_deletion_plan_sha256 }}
-          CONFIRMATION: ${{ inputs.confirmation }}
+          INVENTORY_SHA256: ${{ github.event.client_payload.expected_inventory_sha256 }}
+          PLAN_SHA256: ${{ github.event.client_payload.expected_deletion_plan_sha256 }}
+          CONFIRMATION: ${{ github.event.client_payload.confirmation }}
         run: |
           ./scripts/prune-dockerhub-tags.py apply \
             --plan prune-evidence/deletion-plan.json \

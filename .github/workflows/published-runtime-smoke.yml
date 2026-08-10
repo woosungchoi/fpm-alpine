@@ -7,7 +7,7 @@ on:
   # Verification inputs and scripts are explicitly checked out from main.
   # zizmor: ignore[dangerous-triggers]
   workflow_run:
-    workflows: ["publish", "dependency-auto-publish"]
+    workflows: ["dependency-auto-publish"]
     types: [completed]
     branches: ["main"]
 
@@ -16,36 +16,43 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read # Download exact publisher plan and transaction artifacts.
   contents: read
-  packages: read
+  packages: read # Read exact GHCR subjects and their OCI referrers.
 
 jobs:
   prepare:
+    name: Resolve immutable publisher evidence
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       verification_mode: ${{ steps.mode.outputs.verification_mode }}
+      signing_workflow: ${{ steps.mode.outputs.signing_workflow }}
+      bind_upstream_evidence: ${{ steps.mode.outputs.bind_upstream_evidence }}
     steps:
       - name: Select verification mode
         id: mode
         env:
           EVENT_NAME: ${{ github.event_name }}
           UPSTREAM_WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          UPSTREAM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           case "$EVENT_NAME" in
             schedule|workflow_dispatch)
-              verification_mode=dockerhub-only
+              verification_mode=multi-registry
+              signing_workflow=any-authorized
+              bind_upstream_evidence=false
               ;;
             workflow_run)
               case "$UPSTREAM_WORKFLOW_PATH" in
                 .github/workflows/dependency-auto-publish.yml)
-                  verification_mode=dockerhub-only
-                  ;;
-                .github/workflows/publish.yml)
+                  [[ "$UPSTREAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
                   verification_mode=multi-registry
+                  signing_workflow=dependency-auto-publish.yml
+                  bind_upstream_evidence=true
                   ;;
                 *)
                   printf 'unsupported workflow_run path: %s\n' "${UPSTREAM_WORKFLOW_PATH:-<missing>}" >&2
@@ -58,11 +65,55 @@ jobs:
               exit 64
               ;;
           esac
-          echo "verification_mode=$verification_mode" >> "$GITHUB_OUTPUT"
+          {
+            echo "verification_mode=$verification_mode"
+            echo "signing_workflow=$signing_workflow"
+            echo "bind_upstream_evidence=$bind_upstream_evidence"
+          } >> "$GITHUB_OUTPUT"
+      - name: Revalidate exact upstream workflow run before checkout
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          UPSTREAM_WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          UPSTREAM_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UPSTREAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$UPSTREAM_WORKFLOW_PATH" = .github/workflows/dependency-auto-publish.yml
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}" \
+            > /tmp/upstream-run.json
+          python3 - "$UPSTREAM_RUN_ID" "$UPSTREAM_RUN_ATTEMPT" \
+            "$UPSTREAM_HEAD_SHA" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open("/tmp/upstream-run.json"))
+          expected = {
+              "id": int(sys.argv[1]),
+              "run_attempt": int(sys.argv[2]),
+              "path": ".github/workflows/dependency-auto-publish.yml",
+              "head_branch": "main",
+              "head_sha": sys.argv[3],
+              "status": "completed",
+              "conclusion": "success",
+          }
+          for key, value in expected.items():
+              if payload.get(key) != value:
+                  raise SystemExit(f"upstream workflow run mismatch for {key}")
+          if payload.get("event") not in {"push", "repository_dispatch"}:
+              raise SystemExit("unsupported upstream publisher event")
+          repository = payload.get("repository")
+          if type(repository) is not dict or repository.get("full_name") != "woosungchoi/fpm-alpine":
+              raise SystemExit("upstream workflow repository mismatch")
+          PY
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
           persist-credentials: false
       - name: Validate and prepare active matrix
         id: matrix
@@ -74,12 +125,14 @@ jobs:
           print(json.dumps({'include': [
               {'php_minor': minor, 'php_patch': item['patch']}
               for minor,item in data['versions'].items()
+              if item['support'] in {"active", "security-only"}
           ]}, separators=(',', ':')))
           PY
           )
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   verify:
+    name: Verify published runtime and supply chain
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -90,7 +143,7 @@ jobs:
       - name: Checkout main with protected history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -106,27 +159,78 @@ jobs:
       - name: Install Cosign
         if: needs.prepare.outputs.verification_mode == 'multi-registry'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+
+      - name: Download exact dependency publisher transaction evidence
+        if: needs.prepare.outputs.bind_upstream_evidence == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v8.0.0
+        with:
+          name: publisher-auto-production-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: upstream-transaction
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Bind exact subjects from dependency publisher result
+        id: upstream
+        if: needs.prepare.outputs.bind_upstream_evidence == 'true'
+        env:
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          UPSTREAM_WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          PHP_MINOR: ${{ matrix.php_minor }}
+          PHP_PATCH: ${{ matrix.php_patch }}
+        run: |
+          set -euo pipefail
+          values_output="$(./scripts/validate-auto-transaction-result.py \
+            upstream-transaction \
+            --run-id "$UPSTREAM_RUN_ID" \
+            --run-attempt "$UPSTREAM_RUN_ATTEMPT" \
+            --workflow-sha "$UPSTREAM_WORKFLOW_SHA" \
+            --minor "$PHP_MINOR" \
+            --patch "$PHP_PATCH")"
+          IFS=$'\t' read -r source_sha dockerhub_digest ghcr_digest operation plan_sha256 \
+            <<< "$values_output"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$dockerhub_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ghcr_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$plan_sha256" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "source_sha=$source_sha"
+            echo "dockerhub_digest=$dockerhub_digest"
+            echo "ghcr_digest=$ghcr_digest"
+            echo "operation=$operation"
+            echo "plan_sha256=$plan_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve published source revision
         id: source
         env:
           IMAGE_REF: docker.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
           EXPECTED_PATCH: ${{ matrix.php_patch }}
+          PINNED_DOCKERHUB_DIGEST: ${{ steps.upstream.outputs.dockerhub_digest }}
+          PINNED_SOURCE_SHA: ${{ steps.upstream.outputs.source_sha }}
         run: |
           set -euo pipefail
           SOURCE_INSPECT_ATTEMPTS=5
           dockerhub_digest=
-          for ((attempt = 1; attempt <= SOURCE_INSPECT_ATTEMPTS; attempt++)); do
-            echo "source digest attempt ${attempt}/${SOURCE_INSPECT_ATTEMPTS}: $IMAGE_REF"
-            if candidate="$(./scripts/resolve-image-digest.sh "$IMAGE_REF")" &&
-               [[ "$candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              dockerhub_digest="$candidate"
-              break
-            fi
-            if [ "$attempt" -lt "$SOURCE_INSPECT_ATTEMPTS" ]; then
-              sleep 2
-            fi
-          done
+          if [ -n "$PINNED_DOCKERHUB_DIGEST" ]; then
+            [[ "$PINNED_DOCKERHUB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+            dockerhub_digest="$PINNED_DOCKERHUB_DIGEST"
+          else
+            for ((attempt = 1; attempt <= SOURCE_INSPECT_ATTEMPTS; attempt++)); do
+              echo "source digest attempt ${attempt}/${SOURCE_INSPECT_ATTEMPTS}: $IMAGE_REF"
+              if candidate="$(./scripts/resolve-image-digest.sh "$IMAGE_REF")" &&
+                 [[ "$candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                dockerhub_digest="$candidate"
+                break
+              fi
+              if [ "$attempt" -lt "$SOURCE_INSPECT_ATTEMPTS" ]; then
+                sleep 2
+              fi
+            done
+          fi
           if [ -z "$dockerhub_digest" ]; then
             echo "source digest resolution failed after ${SOURCE_INSPECT_ATTEMPTS} attempts: $IMAGE_REF" >&2
             exit 1
@@ -163,6 +267,9 @@ jobs:
           print(revision)
           PY
           )
+          if [ -n "$PINNED_SOURCE_SHA" ]; then
+            test "$revision" = "$PINNED_SOURCE_SHA"
+          fi
           git cat-file -e "${revision}^{commit}"
           git merge-base --is-ancestor "$revision" HEAD
           {
@@ -177,29 +284,69 @@ jobs:
         env:
           GHCR_REF: ghcr.io/woosungchoi/fpm-alpine:${{ matrix.php_minor }}
           EXPECTED_REVISION: ${{ steps.source.outputs.revision }}
+          PINNED_GHCR_DIGEST: ${{ steps.upstream.outputs.ghcr_digest }}
+          EXPECTED_SIGNING_WORKFLOW: ${{ needs.prepare.outputs.signing_workflow }}
+          UPSTREAM_OPERATION: ${{ steps.upstream.outputs.operation }}
         run: |
           set -euo pipefail
           MULTI_INSPECT_ATTEMPTS=5
           ghcr_digest=
-          for ((attempt = 1; attempt <= MULTI_INSPECT_ATTEMPTS; attempt++)); do
-            echo "GHCR digest attempt ${attempt}/${MULTI_INSPECT_ATTEMPTS}: $GHCR_REF"
-            if candidate="$(./scripts/resolve-image-digest.sh "$GHCR_REF")" &&
-               [[ "$candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              ghcr_digest="$candidate"
-              break
-            fi
-            if [ "$attempt" -lt "$MULTI_INSPECT_ATTEMPTS" ]; then
-              sleep 2
-            fi
-          done
+          if [ -n "$PINNED_GHCR_DIGEST" ]; then
+            [[ "$PINNED_GHCR_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+            ghcr_digest="$PINNED_GHCR_DIGEST"
+          else
+            for ((attempt = 1; attempt <= MULTI_INSPECT_ATTEMPTS; attempt++)); do
+              echo "GHCR digest attempt ${attempt}/${MULTI_INSPECT_ATTEMPTS}: $GHCR_REF"
+              if candidate="$(./scripts/resolve-image-digest.sh "$GHCR_REF")" &&
+                 [[ "$candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                ghcr_digest="$candidate"
+                break
+              fi
+              if [ "$attempt" -lt "$MULTI_INSPECT_ATTEMPTS" ]; then
+                sleep 2
+              fi
+            done
+          fi
           if [ -z "$ghcr_digest" ]; then
             echo "GHCR digest resolution failed after ${MULTI_INSPECT_ATTEMPTS} attempts: $GHCR_REF" >&2
             exit 1
           fi
-          signing_ref=$(./scripts/resolve-publisher-signing-ref.sh "$EXPECTED_REVISION")
+          ghcr_subject="${GHCR_REF%:*}@${ghcr_digest}"
+          case "$EXPECTED_SIGNING_WORKFLOW" in
+            dependency-auto-publish.yml)
+              case "$UPSTREAM_OPERATION" in
+                automatic|backfill-ghcr) ;;
+                *) echo "invalid dependency publisher operation binding" >&2; exit 1 ;;
+              esac
+              operation="$UPSTREAM_OPERATION"
+              signing_workflow=dependency-auto-publish.yml
+              signing_ref=main
+              ;;
+            publish.yml)
+              operation=manual
+              signing_workflow=publish.yml
+              signing_ref="$(./scripts/resolve-publisher-signing-ref.sh "$EXPECTED_REVISION")"
+              ;;
+            any-authorized)
+              manual_signing_ref="$(./scripts/resolve-publisher-signing-ref.sh "$EXPECTED_REVISION")"
+              resolved_operation="$(
+                ./scripts/resolve-published-operation.sh \
+                  "$ghcr_subject" "$manual_signing_ref"
+              )"
+              IFS=$'\t' read -r operation signing_workflow signing_ref <<< "$resolved_operation"
+              ;;
+            *) echo "unsupported signing workflow policy" >&2; exit 1 ;;
+          esac
+          verify_dockerhub_signature=1
+          if [ "$operation" = backfill-ghcr ]; then
+            verify_dockerhub_signature=0
+          fi
           {
-            echo "ghcr_subject=${GHCR_REF%:*}@${ghcr_digest}"
+            echo "ghcr_subject=$ghcr_subject"
+            echo "operation=$operation"
+            echo "signing_workflow=$signing_workflow"
             echo "signing_ref=$signing_ref"
+            echo "verify_dockerhub_signature=$verify_dockerhub_signature"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify exact multi-registry runtime and supply chain
@@ -211,28 +358,18 @@ jobs:
           EXPECTED_PATCH: ${{ matrix.php_patch }}
           REPORT_DIR: published-runtime-reports/${{ matrix.php_minor }}
           SIGNING_REF: ${{ steps.multi.outputs.signing_ref }}
+          EXPECTED_SIGNING_WORKFLOW: ${{ steps.multi.outputs.signing_workflow }}
+          VERIFY_DOCKERHUB_SIGNATURE: ${{ steps.multi.outputs.verify_dockerhub_signature }}
         run: |
-          ./scripts/verify-published-image.sh \
+          EXPECTED_PUBLISHER_WORKFLOW="$EXPECTED_SIGNING_WORKFLOW" \
+          VERIFY_DOCKERHUB_SIGNATURE="$VERIFY_DOCKERHUB_SIGNATURE" \
+            ./scripts/verify-published-image.sh \
             "$DOCKERHUB_REF" \
             "$GHCR_REF" \
             "$EXPECTED_REVISION" \
             "$EXPECTED_PATCH" \
             "$REPORT_DIR" \
             "$SIGNING_REF"
-
-      - name: Verify exact Docker Hub runtime and supply chain
-        if: needs.prepare.outputs.verification_mode == 'dockerhub-only'
-        env:
-          DOCKERHUB_REF: ${{ steps.source.outputs.dockerhub_subject }}
-          EXPECTED_REVISION: ${{ steps.source.outputs.revision }}
-          EXPECTED_PATCH: ${{ matrix.php_patch }}
-          REPORT_DIR: published-runtime-reports/${{ matrix.php_minor }}
-        run: |
-          ./scripts/verify-published-dockerhub-image.sh \
-            "$DOCKERHUB_REF" \
-            "$EXPECTED_REVISION" \
-            "$EXPECTED_PATCH" \
-            "$REPORT_DIR"
 
       - name: Scan active exact subject for fixable vulnerabilities
         env:

@@ -1,59 +1,14 @@
 name: publish
-run-name: publish-${{ github.event.inputs.channel }}-${{ github.event.inputs.correlation_id || github.run_id }}
+run-name: publish-${{ github.event.client_payload.channel }}-${{ github.event.client_payload.correlation_id || github.run_id }}
 
 on:
-  workflow_dispatch:
-    inputs:
-      channel:
-        description: Publication channel
-        required: true
-        type: choice
-        options:
-          - canary
-          - production
-        default: canary
-      version:
-        description: "Optional single active PHP minor: 8.2-8.5"
-        required: false
-        type: string
-      source_sha:
-        description: Exact 40-character source commit SHA
-        required: true
-        type: string
-      correlation_id:
-        description: Optional unique controller correlation ID
-        required: false
-        type: string
-      canary_run_id:
-        description: Required for production; verified canary workflow run ID
-        required: false
-        type: string
-      canary_run_attempt:
-        description: Required for production; verified canary workflow run attempt
-        required: false
-        type: string
-      prior_canary_run_id:
-        description: Required for production; immediately preceding successful canary run ID
-        required: false
-        type: string
-      prior_canary_run_attempt:
-        description: Required for production; immediately preceding successful canary run attempt
-        required: false
-        type: string
-      legacy_publisher_disabled:
-        description: Required for production after Docker Hub build rule and legacy webhook removal
-        required: false
-        type: boolean
-        default: false
-      legacy_cutover_evidence_sha256:
-        description: Required for production; SHA-256 of fresh repository cutover evidence
-        required: false
-        type: string
+  repository_dispatch:
+    types: [fpm-manual-publish]
 
 permissions: {}
 
 concurrency:
-  group: publish-${{ github.event.inputs.channel }}
+  group: ${{ github.event.client_payload.channel == 'production' && 'fpm-production-promotion' || 'publish-canary' }}
   cancel-in-progress: false
 
 env:
@@ -62,9 +17,10 @@ env:
 
 jobs:
   prepare:
+    name: Prepare trusted manual publication
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      actions: read # inspect exact prior canary workflow runs and artifacts
       contents: read
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -72,26 +28,131 @@ jobs:
       source_date_epoch: ${{ steps.metadata.outputs.source_date_epoch }}
       release_date: ${{ steps.metadata.outputs.release_date }}
     steps:
+      - name: Validate owner dispatch envelope before checkout
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          def fail(message):
+              raise SystemExit(message)
+
+          if os.environ["EVENT_ACTION"] != "fpm-manual-publish":
+              fail("unexpected repository_dispatch action")
+          if os.environ["EVENT_ACTOR"] != "woosungchoi" or os.environ["EVENT_ACTOR_ID"] != "5674610":
+              fail("manual publication dispatcher is not the pinned owner")
+          if os.environ["EVENT_REPOSITORY"] != "woosungchoi/fpm-alpine":
+              fail("manual publication repository mismatch")
+          if os.environ["EVENT_REF"] != "refs/heads/main":
+              fail("manual publication must execute from the default branch")
+          event_sha = os.environ["EVENT_SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", event_sha):
+              fail("manual publication event SHA is invalid")
+
+          payload = json.loads(os.environ["EVENT_PAYLOAD_JSON"])
+          if not isinstance(payload, dict):
+              fail("manual publication payload must be an object")
+          allowed = {
+              "channel",
+              "version",
+              "source_sha",
+              "correlation_id",
+              "canary_run_id",
+              "canary_run_attempt",
+              "prior_canary_run_id",
+              "prior_canary_run_attempt",
+              "legacy_publisher_disabled",
+              "legacy_cutover_evidence_sha256",
+          }
+          unknown = set(payload) - allowed
+          if unknown:
+              fail(f"manual publication payload has unknown keys: {sorted(unknown)}")
+          if not {"channel", "source_sha"} <= set(payload):
+              fail("manual publication payload is missing channel or source_sha")
+          channel = payload.get("channel")
+          if channel not in {"canary", "production"}:
+              fail("manual publication channel is invalid")
+          source_sha = payload.get("source_sha")
+          if not isinstance(source_sha, str) or source_sha != event_sha:
+              fail("manual publication source_sha is not exact default-branch HEAD")
+          correlation_id = payload.get("correlation_id")
+          if correlation_id is not None and (
+              not isinstance(correlation_id, str)
+              or re.fullmatch(r"[A-Za-z0-9._-]{1,64}", correlation_id) is None
+          ):
+              fail("manual publication correlation_id is invalid")
+          version = payload.get("version")
+          if version is not None and (
+              not isinstance(version, str) or re.fullmatch(r"8\.[2-5]", version) is None
+          ):
+              fail("manual publication version is invalid")
+
+          production_fields = {
+              "canary_run_id",
+              "canary_run_attempt",
+              "prior_canary_run_id",
+              "prior_canary_run_attempt",
+              "legacy_publisher_disabled",
+              "legacy_cutover_evidence_sha256",
+          }
+          if channel == "canary":
+              forbidden = production_fields & set(payload)
+              if forbidden:
+                  fail(f"canary payload contains production-only keys: {sorted(forbidden)}")
+          else:
+              required = production_fields | {"version"}
+              missing = required - set(payload)
+              if missing:
+                  fail(f"production payload is missing keys: {sorted(missing)}")
+              for name in (
+                  "canary_run_id",
+                  "canary_run_attempt",
+                  "prior_canary_run_id",
+                  "prior_canary_run_attempt",
+              ):
+                  value = payload.get(name)
+                  if isinstance(value, bool) or not (
+                      isinstance(value, int) and value > 0
+                      or isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value)
+                  ):
+                      fail(f"production payload {name} is invalid")
+              if payload.get("legacy_publisher_disabled") is not True:
+                  fail("production payload does not attest legacy publisher disablement")
+              evidence_sha = payload.get("legacy_cutover_evidence_sha256")
+              if not isinstance(evidence_sha, str) or re.fullmatch(r"[0-9a-f]{64}", evidence_sha) is None:
+                  fail("production cutover evidence SHA-256 is invalid")
+          PY
+
       - name: Checkout exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event.inputs.source_sha }}
+          ref: ${{ github.event.client_payload.source_sha }}
           fetch-depth: 0
 
       - name: Validate dispatch contract
         env:
-          SOURCE_SHA: ${{ github.event.inputs.source_sha }}
-          CORRELATION_ID: ${{ github.event.inputs.correlation_id }}
-          CHANNEL: ${{ github.event.inputs.channel }}
-          REQUESTED_VERSION: ${{ github.event.inputs.version }}
-          CANARY_RUN_ID: ${{ github.event.inputs.canary_run_id }}
-          CANARY_RUN_ATTEMPT: ${{ github.event.inputs.canary_run_attempt }}
-          PRIOR_CANARY_RUN_ID: ${{ github.event.inputs.prior_canary_run_id }}
-          PRIOR_CANARY_RUN_ATTEMPT: ${{ github.event.inputs.prior_canary_run_attempt }}
-          LEGACY_DISABLED_INPUT: ${{ github.event.inputs.legacy_publisher_disabled }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+          CORRELATION_ID: ${{ github.event.client_payload.correlation_id }}
+          CHANNEL: ${{ github.event.client_payload.channel }}
+          REQUESTED_VERSION: ${{ github.event.client_payload.version }}
+          CANARY_RUN_ID: ${{ github.event.client_payload.canary_run_id }}
+          CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.canary_run_attempt }}
+          PRIOR_CANARY_RUN_ID: ${{ github.event.client_payload.prior_canary_run_id }}
+          PRIOR_CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.prior_canary_run_attempt }}
+          LEGACY_DISABLED_INPUT: ${{ github.event.client_payload.legacy_publisher_disabled }}
           LEGACY_DISABLED_VARIABLE: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
-          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.inputs.legacy_cutover_evidence_sha256 }}
+          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.client_payload.legacy_cutover_evidence_sha256 }}
           LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
           DISPATCH_SHA: ${{ github.sha }}
@@ -135,21 +196,21 @@ jobs:
           expected_attempt = int(sys.argv[6])
           prior_expected_attempt = int(sys.argv[7])
 
-          def validate(candidate, attempt, label):
+          def validate(candidate, attempt, label, allowed_events):
               checks = {
                   "conclusion": candidate.get("conclusion") == "success",
-                  "event": candidate.get("event") == "workflow_dispatch",
+                  "event": candidate.get("event") in allowed_events,
                   "head_sha": candidate.get("head_sha") == expected_sha,
                   "head_branch": candidate.get("head_branch") == "main",
                   "path": candidate.get("path") == ".github/workflows/publish.yml",
                   "run_attempt": candidate.get("run_attempt") == attempt,
               }
-              failed = [name for name, passed in checks.items() if not passed]
+              failed = sorted(key for key, value in checks.items() if not value)
               if failed:
-                  raise SystemExit(f"{label} canary run contract failed: " + ", ".join(failed))
+                  raise SystemExit(f"{label} canary run validation failed: {failed}")
 
-          validate(run, expected_attempt, "current")
-          validate(prior, prior_expected_attempt, "prior")
+          validate(run, expected_attempt, "current", {"repository_dispatch"})
+          validate(prior, prior_expected_attempt, "prior", {"repository_dispatch"})
           if run.get("run_number") != prior.get("run_number", -2) + 1:
               raise SystemExit("canary runs are not consecutive workflow run numbers")
 
@@ -177,7 +238,7 @@ jobs:
       - name: Prepare one build per active PHP minor
         id: matrix
         env:
-          REQUESTED_VERSION: ${{ github.event.inputs.version }}
+          REQUESTED_VERSION: ${{ github.event.client_payload.version }}
         run: |
           matrix="$(python3 - <<'PY'
           import json
@@ -197,19 +258,22 @@ jobs:
       - name: Prepare immutable build metadata
         id: metadata
         run: |
-          echo "created=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-          echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-          echo "release_date=$(date -u +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+          {
+            echo "created=$(git show -s --format=%cI "$GITHUB_SHA")"
+            echo "source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")"
+            echo "release_date=$(date -u +'%Y%m%d')"
+          } >> "$GITHUB_OUTPUT"
 
   canary:
-    if: ${{ github.event.inputs.channel == 'canary' }}
+    name: canary (${{ matrix.php_minor }}, multi-platform)
+    if: ${{ github.event.client_payload.channel == 'canary' }}
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
       contents: read
-      packages: write
-      id-token: write
+      packages: write # push the non-moving GHCR canary subject
+      id-token: write # obtain the keyless Cosign signing identity
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -218,7 +282,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event.inputs.source_sha }}
+          ref: ${{ github.event.client_payload.source_sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -273,13 +337,13 @@ jobs:
             APCU_URL=${{ matrix.apcu_url }}
             APCU_SHA256=${{ matrix.apcu_sha256 }}
             OCI_SOURCE=${{ github.server_url }}/${{ github.repository }}
-            OCI_REVISION=${{ github.event.inputs.source_sha }}
+            OCI_REVISION=${{ github.event.client_payload.source_sha }}
             OCI_VERSION=${{ matrix.php_patch }}
             OCI_CREATED=${{ needs.prepare.outputs.created }}
             SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.event.inputs.source_sha }}
+            org.opencontainers.image.revision=${{ github.event.client_payload.source_sha }}
             org.opencontainers.image.version=${{ matrix.php_patch }}
             org.opencontainers.image.created=${{ needs.prepare.outputs.created }}
             org.opencontainers.image.licenses=GPL-2.0-only
@@ -290,6 +354,8 @@ jobs:
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
 
       - name: Capture and sign exact GHCR canary subject
         id: subjects
@@ -348,7 +414,7 @@ jobs:
       - name: Verify GHCR canary subject
         env:
           GHCR_REF: ${{ env.GHCR_REPOSITORY }}@${{ steps.subjects.outputs.ghcr_digest }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
           PHP_PATCH: ${{ matrix.php_patch }}
         run: |
           ./scripts/verify-canary-image.sh \
@@ -375,27 +441,28 @@ jobs:
           if-no-files-found: error
 
   production-preflight:
-    if: ${{ github.event.inputs.channel == 'production' }}
+    name: Validate complete production canary evidence
+    if: ${{ github.event.client_payload.channel == 'production' }}
     needs: prepare
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      actions: read # download exact canary artifacts from pinned run attempts
       contents: read
     steps:
       - name: Checkout trusted source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event.inputs.source_sha }}
+          ref: ${{ github.event.client_payload.source_sha }}
 
       - name: Require verified canary evidence for every production target
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_RUN_ID: ${{ github.event.inputs.canary_run_id }}
-          CANARY_RUN_ATTEMPT: ${{ github.event.inputs.canary_run_attempt }}
-          PRIOR_CANARY_RUN_ID: ${{ github.event.inputs.prior_canary_run_id }}
-          PRIOR_CANARY_RUN_ATTEMPT: ${{ github.event.inputs.prior_canary_run_attempt }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          CANARY_RUN_ID: ${{ github.event.client_payload.canary_run_id }}
+          CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.canary_run_attempt }}
+          PRIOR_CANARY_RUN_ID: ${{ github.event.client_payload.prior_canary_run_id }}
+          PRIOR_CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.prior_canary_run_attempt }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
         run: |
           set -euo pipefail
           rm -rf production-preflight
@@ -422,20 +489,21 @@ jobs:
           ./scripts/validate-canary-metadata.py "$prior_destination" "$EXPECTED_SOURCE_SHA" 8.5 "$prior_patch" "$PRIOR_CANARY_RUN_ID" "$PRIOR_CANARY_RUN_ATTEMPT"
 
   bootstrap-ghcr-rollback:
-    if: ${{ github.event.inputs.channel == 'production' }}
+    name: Freeze durable GHCR rollback baseline
+    if: ${{ github.event.client_payload.channel == 'production' }}
     needs: [prepare, production-preflight]
     runs-on: ubuntu-latest
     environment: fpm-production
     timeout-minutes: 90
     permissions:
       contents: read
-      packages: write
+      packages: write # create and verify the no-clobber rollback subject
     steps:
       - name: Checkout trusted source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event.inputs.source_sha }}
+          ref: ${{ github.event.client_payload.source_sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -455,8 +523,8 @@ jobs:
       - name: Establish idempotent GHCR rollback baselines
         env:
           MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
-          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.inputs.legacy_cutover_evidence_sha256 }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.client_payload.legacy_cutover_evidence_sha256 }}
           LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
           RUN_ID: ${{ github.run_id }}
@@ -667,16 +735,17 @@ jobs:
           if-no-files-found: error
 
   production:
-    if: ${{ github.event.inputs.channel == 'production' }}
+    name: production (${{ matrix.php_minor }}, publish)
+    if: ${{ github.event.client_payload.channel == 'production' }}
     needs: [prepare, production-preflight, bootstrap-ghcr-rollback]
     runs-on: ubuntu-latest
     environment: fpm-production
     timeout-minutes: 180
     permissions:
-      actions: read
+      actions: read # download exact canary and bootstrap artifacts
       contents: read
-      packages: write
-      id-token: write
+      packages: write # promote and compensate GHCR/Docker Hub exact subjects
+      id-token: write # sign promoted or restored exact subjects with Cosign
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -685,7 +754,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event.inputs.source_sha }}
+          ref: ${{ github.event.client_payload.source_sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -711,14 +780,16 @@ jobs:
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
 
       - name: Load and bind verified canary metadata
         id: canary
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_RUN_ID: ${{ github.event.inputs.canary_run_id }}
-          CANARY_RUN_ATTEMPT: ${{ github.event.inputs.canary_run_attempt }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          CANARY_RUN_ID: ${{ github.event.client_payload.canary_run_id }}
+          CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.canary_run_attempt }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
           EXPECTED_MINOR: ${{ matrix.php_minor }}
           EXPECTED_PATCH: ${{ matrix.php_patch }}
         run: |
@@ -755,11 +826,11 @@ jobs:
         id: promote
         env:
           GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          EXPECTED_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
           PHP_MINOR: ${{ matrix.php_minor }}
           PHP_PATCH: ${{ matrix.php_patch }}
           RELEASE_DATE: ${{ needs.prepare.outputs.release_date }}
-          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.inputs.legacy_cutover_evidence_sha256 }}
+          LEGACY_EVIDENCE_SHA256_INPUT: ${{ github.event.client_payload.legacy_cutover_evidence_sha256 }}
           LEGACY_EVIDENCE_SHA256_VARIABLE: ${{ vars.LEGACY_CUTOVER_EVIDENCE_SHA256 }}
           LEGACY_EVIDENCE_B64: ${{ vars.LEGACY_CUTOVER_EVIDENCE_B64 }}
         run: |
@@ -768,8 +839,15 @@ jobs:
           previous_ghcr="$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")"
           [[ "$previous_dockerhub" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$previous_ghcr" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "previous_dockerhub=$previous_dockerhub" >> "$GITHUB_OUTPUT"
-          echo "previous_ghcr=$previous_ghcr" >> "$GITHUB_OUTPUT"
+          ./scripts/verify-rollback-image.sh \
+            "${DOCKERHUB_REPOSITORY}@${previous_dockerhub}" \
+            "${GHCR_REPOSITORY}@${previous_ghcr}" \
+            "$PHP_MINOR" \
+            publisher-reports/preflight-baseline
+          {
+            echo "previous_dockerhub=$previous_dockerhub"
+            echo "previous_ghcr=$previous_ghcr"
+          } >> "$GITHUB_OUTPUT"
 
           ./scripts/promote-image.sh --check-only --policy moving-only \
             "$DOCKERHUB_REPOSITORY" "$GHCR_REPOSITORY" "$GHCR_DIGEST" \
@@ -781,7 +859,24 @@ jobs:
           test "$LEGACY_EVIDENCE_SHA256_INPUT" = "$LEGACY_EVIDENCE_SHA256_VARIABLE"
           ./scripts/validate-legacy-cutover-evidence.py "$EXPECTED_SOURCE_SHA" "$LEGACY_EVIDENCE_SHA256_INPUT"
           mutated=0
-          trap 'rc=$?; if [ "$mutated" -eq 1 ]; then set +e; COSIGN_SIGN_DESTINATION=1 ./scripts/rollback-moving-aliases.sh "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" "$GHCR_REPOSITORY" "$previous_ghcr" "$PHP_MINOR" publisher-reports/rollback-trap; fi; exit "$rc"' EXIT
+          rollback_on_exit() {
+            rc=$?
+            trap - EXIT INT TERM
+            if [ "$mutated" -eq 1 ]; then
+              set +e
+              COSIGN_SIGN_DESTINATION=1 ./scripts/rollback-moving-aliases.sh \
+                "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" \
+                "$GHCR_REPOSITORY" "$previous_ghcr" "$PHP_MINOR" \
+                publisher-reports/rollback-trap
+              if [ -n "${anonymous_docker_config:-}" ]; then
+                rm -rf -- "$anonymous_docker_config"
+              fi
+            fi
+            exit "$rc"
+          }
+          trap rollback_on_exit EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
           mutated=1
           echo "mutated=true" >> "$GITHUB_OUTPUT"
           ./scripts/promote-image.sh --policy evidence \
@@ -793,25 +888,21 @@ jobs:
           dockerhub_digest="$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")"
           [[ "$dockerhub_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           cosign sign --yes "${DOCKERHUB_REPOSITORY}@${dockerhub_digest}"
-          echo "dockerhub_digest=$dockerhub_digest" >> "$GITHUB_OUTPUT"
-          trap - EXIT
-
-      - name: Verify production aliases resolve to verified subjects
-        env:
-          DOCKERHUB_DIGEST: ${{ steps.promote.outputs.dockerhub_digest }}
-          GHCR_DIGEST: ${{ steps.canary.outputs.ghcr_digest }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
-          PHP_MINOR: ${{ matrix.php_minor }}
-          PHP_PATCH: ${{ matrix.php_patch }}
-        run: |
-          ./scripts/verify-published-image.sh \
-            "${DOCKERHUB_REPOSITORY}@${DOCKERHUB_DIGEST}" \
-            "${GHCR_REPOSITORY}@${GHCR_DIGEST}" \
-            "$EXPECTED_SOURCE_SHA" \
-            "$PHP_PATCH" \
-            "publisher-reports/post-promotion"
-          test "$(./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")" = "$DOCKERHUB_DIGEST"
-          test "$(./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")" = "$GHCR_DIGEST"
+          anonymous_docker_config="$(mktemp -d)"
+          chmod 700 "$anonymous_docker_config"
+          DOCKER_CONFIG="$anonymous_docker_config" \
+            ./scripts/verify-published-image.sh \
+              "${DOCKERHUB_REPOSITORY}@${dockerhub_digest}" \
+              "${GHCR_REPOSITORY}@${GHCR_DIGEST}" \
+              "$EXPECTED_SOURCE_SHA" \
+              "$PHP_PATCH" \
+              "publisher-reports/post-promotion"
+          test "$(DOCKER_CONFIG="$anonymous_docker_config" \
+            ./scripts/resolve-image-digest.sh "${DOCKERHUB_REPOSITORY}:${PHP_MINOR}")" = "$dockerhub_digest"
+          test "$(DOCKER_CONFIG="$anonymous_docker_config" \
+            ./scripts/resolve-image-digest.sh "${GHCR_REPOSITORY}:${PHP_MINOR}")" = "$GHCR_DIGEST"
+          rm -rf -- "$anonymous_docker_config"
+          trap - EXIT INT TERM
 
       - name: Roll back both moving aliases after promotion failure
         if: ${{ failure() && steps.promote.outputs.mutated == 'true' }}
@@ -838,13 +929,14 @@ jobs:
           if-no-files-found: error
 
   report-failure:
-    if: ${{ always() && github.ref == 'refs/heads/main' && github.event.inputs.source_sha == github.sha && needs.prepare.result == 'success' && (needs.canary.result == 'failure' || needs.production-preflight.result == 'failure' || needs.bootstrap-ghcr-rollback.result == 'failure' || needs.production.result == 'failure') }}
+    name: Report deterministic publisher failures
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event.client_payload.source_sha == github.sha && needs.prepare.result == 'success' && (needs.canary.result == 'failure' || needs.production-preflight.result == 'failure' || needs.bootstrap-ghcr-rollback.result == 'failure' || needs.production.result == 'failure') }}
     needs: [prepare, canary, production-preflight, bootstrap-ghcr-rollback, production]
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      actions: read # classify failed matrix jobs from this exact workflow run
       contents: read
-      issues: write
+      issues: write # create or update the bounded publisher failure issue
     steps:
       - name: Checkout trusted dispatch revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -855,10 +947,10 @@ jobs:
       - name: Create or update publisher failure issues
         env:
           GH_TOKEN: ${{ github.token }}
-          CHANNEL: ${{ github.event.inputs.channel }}
-          REQUESTED_VERSION: ${{ github.event.inputs.version }}
-          CANARY_RUN_ID: ${{ github.event.inputs.canary_run_id }}
-          CANARY_RUN_ATTEMPT: ${{ github.event.inputs.canary_run_attempt }}
+          CHANNEL: ${{ github.event.client_payload.channel }}
+          REQUESTED_VERSION: ${{ github.event.client_payload.version }}
+          CANARY_RUN_ID: ${{ github.event.client_payload.canary_run_id }}
+          CANARY_RUN_ATTEMPT: ${{ github.event.client_payload.canary_run_attempt }}
         run: |
           set -euo pipefail
           if [ -n "$REQUESTED_VERSION" ]; then

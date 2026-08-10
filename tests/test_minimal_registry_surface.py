@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 import yaml
 
@@ -15,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def assert_registry_boundary(jobs: dict) -> None:
     canary = yaml.safe_dump(jobs["canary"], sort_keys=False)
-    production = yaml.safe_dump(jobs["production"], sort_keys=False)
+    production = "\n".join(
+        str(step.get("run", "")) for step in jobs["production"]["steps"]
+    )
     assert "DOCKERHUB_REPOSITORY" not in canary
     assert "docker.io" not in canary
     assert "dockerhub_digest" not in canary
@@ -30,7 +31,9 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         jobs = workflow["jobs"]
         assert_registry_boundary(jobs)
         canary = yaml.safe_dump(jobs["canary"], sort_keys=False)
-        production = yaml.safe_dump(jobs["production"], sort_keys=False)
+        production = "\n".join(
+            str(step.get("run", "")) for step in jobs["production"]["steps"]
+        )
         self.assertNotIn("DOCKERHUB_REPOSITORY", canary)
         self.assertNotIn("docker.io", canary)
         self.assertNotIn("dockerhub_digest", canary)
@@ -87,6 +90,7 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
                     [str(script), tmp, source_sha, "8.5", "8.5.8", "123", "1"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    check=False,
                 ).returncode
 
             self.assertEqual(run(valid), 0)
@@ -96,6 +100,50 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
             contaminated = dict(valid)
             contaminated["dockerhub_digest"] = "sha256:" + "1" * 64
             self.assertNotEqual(run(contaminated), 0)
+
+    def test_auto_canary_metadata_v3_binds_mode_and_exact_backfill_source(self):
+        script = ROOT / "scripts/validate-canary-metadata.py"
+        source_sha = "0123456789abcdef0123456789abcdef01234567"
+        payload = {
+            "schema_version": 3,
+            "channel": "canary",
+            "publisher_mode": "automatic",
+            "source_sha": source_sha,
+            "php_minor": "8.5",
+            "php_patch": "8.5.8",
+            "run_id": 123,
+            "run_attempt": 1,
+            "canonical_registry": "ghcr.io",
+            "canonical_repository": "ghcr.io/woosungchoi/fpm-alpine",
+            "canonical_ref": "ghcr.io/woosungchoi/fpm-alpine:canary-8.5-123-1",
+            "ghcr_digest": "sha256:" + "2" * 64,
+            "dockerhub_source_digest": None,
+            "platforms": ["linux/amd64", "linux/arm64"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "canary-metadata.json"
+
+            def run(candidate, mode):
+                path.write_text(json.dumps(candidate))
+                return subprocess.run(
+                    [
+                        str(script), tmp, source_sha, "8.5", "8.5.8", "123", "1", mode
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                ).returncode
+
+            self.assertEqual(run(payload, "automatic"), 0)
+            contaminated = dict(payload)
+            contaminated["dockerhub_source_digest"] = "sha256:" + "1" * 64
+            self.assertNotEqual(run(contaminated, "automatic"), 0)
+            backfill = dict(payload)
+            backfill["publisher_mode"] = "backfill-ghcr"
+            backfill["dockerhub_source_digest"] = "sha256:" + "1" * 64
+            self.assertEqual(run(backfill, "backfill-ghcr"), 0)
+            backfill["dockerhub_source_digest"] = None
+            self.assertNotEqual(run(backfill, "backfill-ghcr"), 0)
 
     def test_public_verifier_matrix_contains_only_active_minors(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/verify-published-manifest.yml").read_text())
@@ -115,15 +163,17 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         path = ROOT / ".github/workflows/prune-dockerhub-tags.yml"
         workflow = yaml.safe_load(path.read_text())
         trigger = workflow.get("on", workflow.get(True))
-        self.assertEqual(set(trigger), {"workflow_dispatch"})
-        self.assertEqual(set(workflow["jobs"]), {"plan", "archive", "apply"})
         self.assertEqual(
-            trigger["workflow_dispatch"]["inputs"]["mode"]["options"],
-            ["plan", "archive", "apply"],
+            trigger,
+            {"repository_dispatch": {"types": ["fpm-dockerhub-prune"]}},
         )
+        self.assertEqual(set(workflow["jobs"]), {"authorize", "plan", "archive", "apply"})
+        self.assertIn("fpm-production-promotion", workflow["concurrency"]["group"])
         self.assertNotIn("environment", workflow["jobs"]["plan"])
+        self.assertEqual(workflow["jobs"]["plan"]["needs"], "authorize")
         for name in ("archive", "apply"):
             job = workflow["jobs"][name]
+            self.assertEqual(job["needs"], "authorize")
             self.assertEqual(job["environment"], "fpm-production")
             self.assertIn("id-token", job["permissions"])
             self.assertEqual(job["permissions"]["packages"], "write")
@@ -133,6 +183,7 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         self.assertNotIn("DOCKERHUB_TOKEN", archive)
         self.assertNotIn("prune-dockerhub-tags.py apply", archive)
         text = path.read_text()
+        self.assertNotIn("workflow_dispatch", text)
         for required in (
             "expected_inventory_sha256",
             "expected_deletion_plan_sha256",

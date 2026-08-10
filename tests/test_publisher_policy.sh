@@ -11,7 +11,8 @@ assert_contains() { grep -Fq -- "$2" "$1" || fail "expected $1 to contain: $2"; 
 assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "expected $1 not to contain: $2"; }
 
 assert_file .github/workflows/publish.yml
-for script in scripts/verify-published-image.sh scripts/verify-published-dockerhub-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
+assert_file .github/workflows/dependency-publish-recovery.yml
+for script in scripts/verify-published-image.sh scripts/verify-published-dockerhub-image.sh scripts/verify-canary-image.sh scripts/verify-rollback-image.sh scripts/rollback-moving-aliases.sh scripts/scan-image.sh scripts/promote-image.sh scripts/promote-auto-canaries.sh scripts/assert-image-tag-absent.sh scripts/validate-auto-promotion-plan.py scripts/validate-auto-transaction-result.py scripts/validate-canary-metadata.py scripts/validate-legacy-cutover-evidence.py scripts/resolve-platform-image.py scripts/resolve-publisher-signing-ref.sh scripts/verify-dockerhub-tag-policy.py scripts/prune-dockerhub-tags.py scripts/archive-dockerhub-tags.py scripts/verify-image-parity.py; do
   assert_file "$script"
   assert_executable "$script"
 done
@@ -20,7 +21,10 @@ assert_executable scripts/verify-provenance.py
 
 python3 - <<'PY'
 from pathlib import Path
+import json
+import os
 import re
+import subprocess
 import yaml
 
 path = Path('.github/workflows/publish.yml')
@@ -28,20 +32,13 @@ text = path.read_text()
 validator_text = Path('scripts/validate-legacy-cutover-evidence.py').read_text()
 data = yaml.safe_load(text)
 trigger = data.get('on', data.get(True))
-assert set(trigger) == {'workflow_dispatch'}, trigger
-inputs = trigger['workflow_dispatch']['inputs']
-assert inputs['channel']['type'] == 'choice'
-assert inputs['channel']['options'] == ['canary', 'production']
-assert inputs['channel']['default'] == 'canary'
-assert inputs['source_sha']['required'] is True
-assert inputs['canary_run_id']['required'] is False
-assert inputs['canary_run_attempt']['required'] is False
-assert inputs['prior_canary_run_id']['required'] is False
-assert inputs['prior_canary_run_attempt']['required'] is False
-assert inputs['legacy_cutover_evidence_sha256']['required'] is False
+assert set(trigger) == {'repository_dispatch'}, trigger
+assert trigger['repository_dispatch']['types'] == ['fpm-manual-publish']
+assert 'workflow_dispatch' not in trigger
 assert data['permissions'] == {}
 assert data['concurrency']['cancel-in-progress'] is False
-assert data['concurrency']['group'] == "publish-${{ github.event.inputs.channel }}"
+assert 'fpm-production-promotion' in data['concurrency']['group']
+assert 'publish-canary' in data['concurrency']['group']
 assert ':latest' not in text.lower()
 assert not re.search(r'(?<![0-9.])8\.[01](?![0-9.])', text)
 
@@ -62,6 +59,41 @@ assert jobs['production-preflight']['permissions'] == {'actions': 'read', 'conte
 assert jobs['bootstrap-ghcr-rollback']['environment'] == 'fpm-production'
 assert jobs['bootstrap-ghcr-rollback']['permissions'] == {'contents': 'read', 'packages': 'write'}
 assert jobs['report-failure']['permissions'] == {'actions': 'read', 'contents': 'read', 'issues': 'write'}
+envelope = next(step['run'] for step in jobs['prepare']['steps'] if step.get('name') == 'Validate owner dispatch envelope before checkout')
+base_env = {
+    **os.environ,
+    'EVENT_ACTION': 'fpm-manual-publish',
+    'EVENT_ACTOR': 'woosungchoi',
+    'EVENT_ACTOR_ID': '5674610',
+    'EVENT_REPOSITORY': 'woosungchoi/fpm-alpine',
+    'EVENT_REF': 'refs/heads/main',
+    'EVENT_SHA': 'a' * 40,
+}
+canary_payload = {'channel': 'canary', 'source_sha': 'a' * 40, 'version': '8.5'}
+production_payload = {
+    'channel': 'production',
+    'source_sha': 'a' * 40,
+    'version': '8.5',
+    'canary_run_id': 123,
+    'canary_run_attempt': 1,
+    'prior_canary_run_id': '122',
+    'prior_canary_run_attempt': '1',
+    'legacy_publisher_disabled': True,
+    'legacy_cutover_evidence_sha256': 'b' * 64,
+}
+for payload in (canary_payload, production_payload):
+    env = {**base_env, 'EVENT_PAYLOAD_JSON': json.dumps(payload)}
+    assert subprocess.run(['bash', '-c', envelope], env=env, capture_output=True, text=True).returncode == 0
+invalid_cases = [
+    ({**canary_payload, 'unknown': 'value'}, {}),
+    ({**canary_payload, 'canary_run_id': 123}, {}),
+    ({key: value for key, value in production_payload.items() if key != 'canary_run_id'}, {}),
+    ({**production_payload, 'legacy_publisher_disabled': 1}, {}),
+    (canary_payload, {'EVENT_ACTOR_ID': '1'}),
+]
+for payload, overrides in invalid_cases:
+    env = {**base_env, **overrides, 'EVENT_PAYLOAD_JSON': json.dumps(payload)}
+    assert subprocess.run(['bash', '-c', envelope], env=env, capture_output=True, text=True).returncode != 0
 
 canary = yaml.safe_dump(jobs['canary'], sort_keys=False)
 production = yaml.safe_dump(jobs['production'], sort_keys=False)
@@ -72,14 +104,16 @@ for required in ('docker/login-action@', 'docker/build-push-action@', 'provenanc
 assert 'refusing to overwrite existing GHCR canary tag' in text
 assert 'DOCKERHUB_REPOSITORY' not in canary
 assert 'dockerhub_digest' not in canary
-assert 'github.event.inputs.channel == \'canary\'' in canary
+assert 'github.event.client_payload.channel == \'canary\'' in canary
 assert 'docker/build-push-action@' not in production
-assert 'github.event.inputs.channel == \'production\'' in production
+assert 'github.event.client_payload.channel == \'production\'' in production
 for required in ('scripts/verify-published-image.sh', 'scripts/promote-image.sh', 'scripts/rollback-moving-aliases.sh',
-                 'canary_run_id', 'canary_run_attempt', 'steps.promote.outputs.dockerhub_digest',
+                 'canary_run_id', 'canary_run_attempt',
                  'steps.canary.outputs.ghcr_digest', '--policy moving-only', '--policy evidence'):
     assert required in production, required
 assert 'test "$SOURCE_SHA" = "$DISPATCH_SHA"' in text
+assert 'validate(run, expected_attempt, "current", {"repository_dispatch"})' in text
+assert 'validate(prior, prior_expected_attempt, "prior", {"repository_dispatch"})' in text
 assert text.count('SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}') == 1
 assert text.count('SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}') == 1
 assert 'git show -s --format=%ct "$GITHUB_SHA"' in text
@@ -102,6 +136,12 @@ bootstrap_run = next(step['run'] for step in jobs['bootstrap-ghcr-rollback']['st
 assert bootstrap_run.index('./scripts/validate-legacy-cutover-evidence.py') < bootstrap_run.index('docker buildx imagetools create')
 promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified GHCR canary without rebuilding')
 assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
+assert promotion_run.index('./scripts/promote-image.sh --policy moving-only') < promotion_run.index('./scripts/verify-published-image.sh')
+assert promotion_run.index('./scripts/verify-published-image.sh') < promotion_run.rindex('trap - EXIT INT TERM')
+assert 'DOCKER_CONFIG="$anonymous_docker_config"' in promotion_run
+assert "trap 'exit 130' INT" in promotion_run
+assert "trap 'exit 143' TERM" in promotion_run
+assert 'echo "dockerhub_digest=' not in promotion_run
 production_step_names = [step.get('name') for step in jobs['production']['steps']]
 assert 'Re-verify exact canary subjects before promotion' not in production_step_names
 assert production_step_names.index('Promote verified GHCR canary without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
@@ -184,8 +224,8 @@ code = textwrap.dedent(tail.split("\n          PY", 1)[0])
 compile(code, "production-canary-contract.py", "exec")
 
 sha = "0123456789abcdef0123456789abcdef01234567"
-current = {"id": 102, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 1, "run_number": 11}
-prior = {"id": 101, "conclusion": "success", "event": "workflow_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 2, "run_number": 10}
+current = {"id": 102, "conclusion": "success", "event": "repository_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 1, "run_number": 11}
+prior = {"id": 101, "conclusion": "success", "event": "repository_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 2, "run_number": 10}
 current_artifacts = {"artifacts": [{"name": f"publisher-canary-{minor}-102-1", "expired": False} for minor in ("8.2", "8.3", "8.4", "8.5")]}
 prior_artifacts = {"artifacts": [{"name": "publisher-canary-8.5-101-2", "expired": False}]}
 
@@ -376,8 +416,25 @@ payload = {
     "schemaVersion": 1,
     "source_sha": sha,
     "captured_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-    "dockerhub": {"build_rule_active": False, "in_flight_builds": 0},
-    "github": {"legacy_webhook_present": False},
+    "dockerhub": {
+        "build_rule_active": False,
+        "in_flight_builds": 0,
+        "public_is_automated": False,
+        "repository_last_updated": "2026-08-10T00:00:00Z",
+        "queue_basis": "automatic builds disabled and no source-capable GitHub legacy publisher hook",
+    },
+    "github": {
+        "repository": "woosungchoi/fpm-alpine",
+        "legacy_webhook_present": False,
+        "active_hooks": [{
+            "id": 402842509,
+            "name": "web",
+            "active": True,
+            "events": ["pull_request", "push"],
+            "url_host": "api.snyk.io",
+            "url_kind": "github-webhook-uuid",
+        }],
+    },
 }
 if run(payload) != 0:
     raise SystemExit("valid fresh legacy cutover evidence was rejected")
@@ -421,8 +478,25 @@ evidence = {
     "schemaVersion": 1,
     "source_sha": source_sha,
     "captured_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-    "dockerhub": {"build_rule_active": False, "in_flight_builds": 0},
-    "github": {"legacy_webhook_present": False},
+    "dockerhub": {
+        "build_rule_active": False,
+        "in_flight_builds": 0,
+        "public_is_automated": False,
+        "repository_last_updated": "2026-08-10T00:00:00Z",
+        "queue_basis": "automatic builds disabled and no source-capable GitHub legacy publisher hook",
+    },
+    "github": {
+        "repository": "woosungchoi/fpm-alpine",
+        "legacy_webhook_present": False,
+        "active_hooks": [{
+            "id": 402842509,
+            "name": "web",
+            "active": True,
+            "events": ["pull_request", "push"],
+            "url_host": "api.snyk.io",
+            "url_kind": "github-webhook-uuid",
+        }],
+    },
 }
 raw = json.dumps(evidence, separators=(",", ":"), sort_keys=True).encode()
 digest = hashlib.sha256(raw).hexdigest()
@@ -600,21 +674,66 @@ assert_contains scripts/promote-image.sh 'sha-${MINOR}-${short_sha}-${digest_hex
 assert_contains scripts/promote-image.sh 'docker buildx imagetools create'
 assert_not_contains scripts/promote-image.sh ':latest'
 assert_contains scripts/verify-published-image.sh 'EXPECTED_SIGNING_REF'
+assert_contains scripts/verify-published-image.sh 'EXPECTED_PUBLISHER_WORKFLOW'
+assert_contains scripts/verify-published-image.sh 'dependency-auto-publish\.yml'
+assert_contains scripts/verify-canary-image.sh 'EXPECTED_PUBLISHER_WORKFLOW'
 assert_contains scripts/verify-published-image.sh '@refs/heads/${EXPECTED_SIGNING_REF}$'
+assert_contains scripts/promote-auto-canaries.sh 'preflight-baseline'
+assert_contains scripts/promote-auto-canaries.sh 'rollback_all'
+assert_contains scripts/promote-auto-canaries.sh 'recover_transaction'
+assert_contains scripts/promote-auto-canaries.sh 'no moving aliases were modified'
+assert_contains scripts/promote-auto-canaries.sh 'rollback_dockerhub_backup'
+assert_contains scripts/promote-auto-canaries.sh 'rollback_ghcr_digest'
+assert_contains scripts/promote-auto-canaries.sh 'scripts/rollback-moving-aliases.sh'
+assert_contains scripts/rollback-moving-aliases.sh '[ "$actual" = "$PREVIOUS_DOCKERHUB_DIGEST" ]'
+assert_contains scripts/rollback-moving-aliases.sh 'DOCKERHUB_ROLLBACK_FALLBACK_SOURCE'
+assert_contains .github/workflows/dependency-auto-publish.yml 'environment: fpm-auto-production'
+assert_contains .github/workflows/dependency-auto-publish.yml 'group: fpm-production-promotion'
+assert_contains .github/workflows/dependency-auto-publish.yml 'types: [fpm-ghcr-backfill]'
+assert_contains .github/workflows/dependency-auto-publish.yml 'scripts/evaluate-auto-promotion.py'
+assert_contains .github/workflows/dependency-auto-publish.yml "if: steps.mode.outputs.mode == 'automatic'"
+assert_not_contains .github/workflows/dependency-auto-publish.yml 'workflow_dispatch:'
+assert_contains .github/workflows/dependency-publish-recovery.yml 'types: [fpm-publish-recover]'
+assert_contains .github/workflows/dependency-publish-recovery.yml 'group: fpm-production-promotion'
+for workflow in \
+  .github/workflows/dependency-auto-publish.yml \
+  .github/workflows/dependency-publish-recovery.yml \
+  .github/workflows/publish.yml \
+  .github/workflows/published-runtime-smoke.yml; do
+  assert_contains "$workflow" 'cosign-release: v3.1.2'
+done
+assert_contains .github/workflows/dependency-publish-recovery.yml 'plan_sha256'
+assert_contains .github/workflows/publish.yml "'fpm-production-promotion'"
+assert_contains .github/workflows/publish.yml 'publisher-reports/preflight-baseline'
+assert_not_contains .github/workflows/publish.yml 'production requires Docker Hub/GHCR baseline parity'
+assert_contains .github/workflows/dependency-auto-publish.yml 'publisher-auto-canary-*-${{ github.run_id }}-${{ github.run_attempt }}'
+assert_contains .github/workflows/dependency-auto-publish.yml 'promotion-plan.json'
+assert_contains .github/workflows/dependency-auto-publish.yml 'rollback-auto-dockerhub-'
+assert_contains .github/workflows/dependency-auto-publish.yml 'rollback-auto-ghcr-'
+assert_contains .github/workflows/dependency-auto-publish.yml 'scripts/promote-auto-canaries.sh'
+assert_not_contains .github/workflows/dependency-auto-publish.yml 'name: Build and push Docker Hub image'
 assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/resolve-publisher-signing-ref.sh'
 assert_contains .github/workflows/published-runtime-smoke.yml 'steps.multi.outputs.signing_ref'
 assert_not_contains .github/workflows/published-runtime-smoke.yml 'steps.source.outputs.signing_ref'
 assert_contains .github/workflows/published-runtime-smoke.yml 'steps.source.outputs.dockerhub_subject'
 assert_contains .github/workflows/published-runtime-smoke.yml 'steps.source.outputs.dockerhub_digest'
 assert_contains .github/workflows/published-runtime-smoke.yml 'steps.multi.outputs.ghcr_subject'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/validate-auto-transaction-result.py'
+assert_contains .github/workflows/published-runtime-smoke.yml 'publisher-auto-production-${{ github.event.workflow_run.id }}'
 assert_not_contains .github/workflows/published-runtime-smoke.yml 'digest=$(./scripts/resolve-image-digest.sh "$DOCKERHUB_REF")'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_dependency_auto_publish.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_auto_promotion_transaction.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_auto_transaction_evidence.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_image_tag_absence.py'
+assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_rollback_sources.py'
 assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_published_runtime_smoke.py'
 assert_contains .github/workflows/published-runtime-smoke.yml 'fetch-tags: true'
 assert_contains scripts/verify-rollback-image.sh 'rollback registry platform config/layer parity verified'
 assert_not_contains scripts/verify-rollback-image.sh 'build/versions.json'
 assert_contains scripts/rollback-moving-aliases.sh 'both registries were attempted'
-assert_contains scripts/rollback-moving-aliases.sh 'both registry moving aliases restored from durable GHCR and verified'
-assert_contains scripts/rollback-moving-aliases.sh 'source_subject="${GHCR_REPOSITORY}@${PREVIOUS_GHCR_DIGEST}"'
+assert_contains scripts/rollback-moving-aliases.sh 'registry-specific baselines and verified'
+assert_contains scripts/rollback-moving-aliases.sh 'DOCKERHUB_ROLLBACK_SOURCE'
+assert_contains scripts/rollback-moving-aliases.sh 'GHCR_ROLLBACK_SOURCE'
 assert_contains scripts/rollback-moving-aliases.sh 'COSIGN_SIGN_DESTINATION'
 assert_contains scripts/report-manifest.sh 'GitHub Actions publisher subject; verification is digest-qualified.'
 
@@ -809,10 +928,10 @@ cat > "$mock_bin/docker" <<'SH'
 set -u
 printf '%s\n' "$*" >> "${MOCK_DOCKER_LOG:?}"
 if [ "${1:-}" = buildx ] && [ "${2:-}" = imagetools ] && [ "${3:-}" = create ]; then
-  if [ "${MOCK_ROLLBACK_DH_FAIL:-0}" = 1 ] && [[ "$*" == *dockerhub.example/fpm:8.5* ]]; then
+  if [ "${MOCK_ROLLBACK_DH_FAIL:-0}" = 1 ] && [[ "$*" == *docker.io/woosungchoi/fpm-alpine:8.5* ]]; then
     exit 1
   fi
-  if [ "${MOCK_ROLLBACK_GHCR_FAIL:-0}" = 1 ] && [[ "$*" == *ghcr.example/fpm:8.5* ]]; then
+  if [ "${MOCK_ROLLBACK_GHCR_FAIL:-0}" = 1 ] && [[ "$*" == *ghcr.io/woosungchoi/fpm-alpine:8.5* ]]; then
     exit 1
   fi
   exit 0
@@ -852,52 +971,52 @@ chmod +x "$mock_bin/docker"
 : > "$MOCK_DOCKER_LOG"
 export ROLLBACK_DIGEST="$source_digest"
 if MOCK_ROLLBACK_DH_FAIL=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
-  dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
+  docker.io/woosungchoi/fpm-alpine "$source_digest" ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 "$fixture_dir/rollback" \
   >"$fixture_dir/rollback-failure.out" 2>&1; then
   fail "rollback unexpectedly succeeded when Docker Hub restore failed"
 fi
-assert_contains "$MOCK_DOCKER_LOG" 'dockerhub.example/fpm:8.5'
-assert_contains "$MOCK_DOCKER_LOG" 'ghcr.example/fpm:8.5'
+assert_contains "$MOCK_DOCKER_LOG" 'docker.io/woosungchoi/fpm-alpine:8.5'
+assert_contains "$MOCK_DOCKER_LOG" 'ghcr.io/woosungchoi/fpm-alpine:8.5'
 assert_contains "$fixture_dir/rollback-failure.out" 'both registries were attempted'
 : > "$MOCK_DOCKER_LOG"
 if MOCK_ROLLBACK_GHCR_FAIL=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
-  dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
+  docker.io/woosungchoi/fpm-alpine "$source_digest" ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 "$fixture_dir/rollback" \
   >"$fixture_dir/rollback-ghcr-failure.out" 2>&1; then
   fail "rollback unexpectedly succeeded when GHCR restore failed"
 fi
-assert_contains "$MOCK_DOCKER_LOG" 'dockerhub.example/fpm:8.5'
-assert_contains "$MOCK_DOCKER_LOG" 'ghcr.example/fpm:8.5'
+assert_contains "$MOCK_DOCKER_LOG" 'docker.io/woosungchoi/fpm-alpine:8.5'
+assert_contains "$MOCK_DOCKER_LOG" 'ghcr.io/woosungchoi/fpm-alpine:8.5'
 : > "$MOCK_DOCKER_LOG"
 if MOCK_INSPECT_FAIL_WITH_DIGEST=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
-  dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
+  docker.io/woosungchoi/fpm-alpine "$source_digest" ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 "$fixture_dir/rollback" \
   >"$fixture_dir/rollback-readback-failure.out" 2>&1; then
   fail "rollback accepted digest output from a failed alias inspect"
 fi
-assert_not_contains "$fixture_dir/rollback-readback-failure.out" 'both registry moving aliases restored from durable GHCR and verified'
+assert_not_contains "$fixture_dir/rollback-readback-failure.out" 'both registry moving aliases restored from registry-specific baselines and verified'
 : > "$MOCK_DOCKER_LOG"
 if MOCK_MULTIPLE_DIGESTS=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
-  dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
+  docker.io/woosungchoi/fpm-alpine "$source_digest" ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 "$fixture_dir/rollback" \
   >"$fixture_dir/rollback-multiple-digests.out" 2>&1; then
   fail "rollback accepted ambiguous multiple-digest read-back"
 fi
-assert_not_contains "$fixture_dir/rollback-multiple-digests.out" 'both registry moving aliases restored from durable GHCR and verified'
+assert_not_contains "$fixture_dir/rollback-multiple-digests.out" 'both registry moving aliases restored from registry-specific baselines and verified'
 : > "$MOCK_DOCKER_LOG"
 if PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
-  dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback" \
+  docker.io/woosungchoi/fpm-alpine "$source_digest" ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 "$fixture_dir/rollback" \
   >"$fixture_dir/rollback-verifier-failure.out" 2>&1; then
   fail "rollback ignored an exact-digest verifier failure"
 fi
-assert_contains "$MOCK_DOCKER_LOG" "dockerhub.example/fpm@${source_digest}"
-assert_not_contains "$fixture_dir/rollback-verifier-failure.out" 'both registry moving aliases restored from durable GHCR and verified'
+assert_contains "$MOCK_DOCKER_LOG" "docker.io/woosungchoi/fpm-alpine@${source_digest}"
+assert_not_contains "$fixture_dir/rollback-verifier-failure.out" 'both registry moving aliases restored from registry-specific baselines and verified'
 : > "$MOCK_DOCKER_LOG"
 if ! MOCK_FULL_SUCCESS=1 MANIFEST_RETRY_ATTEMPTS=1 PATH="$mock_bin:$PATH" ./scripts/rollback-moving-aliases.sh \
-  dockerhub.example/fpm "$source_digest" ghcr.example/fpm "$source_digest" 8.5 "$fixture_dir/rollback-success" \
+  docker.io/woosungchoi/fpm-alpine "$source_digest" ghcr.io/woosungchoi/fpm-alpine "$source_digest" 8.5 "$fixture_dir/rollback-success" \
   >"$fixture_dir/rollback-success.out" 2>&1; then
   fail "rollback full success path failed"
 fi
-assert_contains "$fixture_dir/rollback-success.out" 'both registry moving aliases restored from durable GHCR and verified'
-assert_contains "$MOCK_DOCKER_LOG" "dockerhub.example/fpm@${source_digest}"
-assert_contains "$MOCK_DOCKER_LOG" "ghcr.example/fpm@${source_digest}"
+assert_contains "$fixture_dir/rollback-success.out" 'both registry moving aliases restored from registry-specific baselines and verified'
+assert_contains "$MOCK_DOCKER_LOG" "docker.io/woosungchoi/fpm-alpine@${source_digest}"
+assert_contains "$MOCK_DOCKER_LOG" "ghcr.io/woosungchoi/fpm-alpine@${source_digest}"
 
 if ./scripts/scan-image.sh registry.example/fpm "sha256:$(printf '%064d' 1)" "$fixture_dir/scans" '' >/dev/null 2>&1; then
   fail "Trivy wrapper accepted a missing platform"
@@ -905,8 +1024,9 @@ fi
 
 assert_contains scripts/create-manifest-failure-issue.sh 'Registry:'
 assert_contains scripts/create-manifest-failure-issue.sh 'Digest:'
-assert_contains docs/ci-operations.md 'manual-only'
-assert_contains docs/ci-operations.md 'exact GHCR subject'
+assert_contains docs/ci-operations.md 'typed `fpm-ghcr-backfill` `repository_dispatch`'
+assert_contains docs/ci-operations.md 'registry-specific exact subjects'
+assert_contains docs/ci-operations.md 'fpm-publish-recover'
 assert_contains .github/workflows/publish.yml 'LEGACY_DISABLED_VARIABLE'
 assert_contains .github/workflows/publish.yml 'legacy_publisher_disabled'
 assert_contains scripts/verify-rollback-image.sh 'fsockopen'

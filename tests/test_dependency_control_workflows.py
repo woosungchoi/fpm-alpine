@@ -33,9 +33,19 @@ class DependencyControlWorkflowTests(unittest.TestCase):
     def test_dependency_updater_opens_prs_from_a_schedule(self) -> None:
         text, data = self.load("dependency-update-pr.yml")
         trigger = self.trigger(data)
-        self.assertEqual(set(trigger), {"schedule", "workflow_dispatch"})
+        self.assertEqual(set(trigger), {"schedule", "workflow_dispatch", "workflow_run"})
+        self.assertEqual(
+            trigger["workflow_run"],
+            {
+                "workflows": ["dependency-auto-publish"],
+                "types": ["completed"],
+                "branches": ["main"],
+            },
+        )
         self.assertIn("DEPENDENCY_AUTOMATION_ENABLED", data["jobs"]["create-prs"]["if"])
         self.assertIn("create-dependency-update-pr.sh", text)
+        self.assertIn("Create only the next eligible pull request", text)
+        self.assertIn(".github/workflows/dependency-auto-publish.yml", text)
         self.assert_actions_are_pinned(text)
 
     def test_successful_smoke_run_enables_native_auto_merge_for_validated_dependency_prs(self) -> None:

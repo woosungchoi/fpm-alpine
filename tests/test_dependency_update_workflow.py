@@ -19,10 +19,32 @@ class UpdaterWorkflowTests(unittest.TestCase):
         text = WORKFLOW.read_text()
         data = yaml.safe_load(text)
         trigger = data.get("on", data.get(True))
-        self.assertEqual(set(trigger), {"schedule", "workflow_dispatch"})
+        self.assertEqual(set(trigger), {"schedule", "workflow_dispatch", "workflow_run"})
+        self.assertEqual(
+            trigger["workflow_run"],
+            {
+                "workflows": ["dependency-auto-publish"],
+                "types": ["completed"],
+                "branches": ["main"],
+            },
+        )
         self.assertEqual(data["permissions"], {})
         jobs = data["jobs"]
-        self.assertEqual(jobs["discover"]["permissions"], {"contents": "read"})
+        self.assertEqual(
+            jobs["discover"]["permissions"],
+            {"actions": "read", "contents": "read"},
+        )
+        for binding in (
+            ".github/workflows/dependency-auto-publish.yml",
+            "'event': 'push'",
+            "'status': 'completed'",
+            "'conclusion': 'success'",
+            "'head_branch': 'main'",
+            "'head_sha': expected_sha",
+            "head_repository",
+        ):
+            self.assertIn(binding, text)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", jobs["discover"]["if"])
         create = jobs["create-prs"]
         self.assertEqual(create["environment"], "dependency-updater")
         self.assertIn("DEPENDENCY_AUTOMATION_ENABLED", create["if"])
@@ -46,7 +68,7 @@ class UpdaterWorkflowTests(unittest.TestCase):
         create_prs = next(
             step
             for step in create["steps"]
-            if step["name"] == "Create one pull request per eligible candidate"
+            if step["name"] == "Create only the next eligible pull request"
         )
         candidate_file = create_prs["env"]["CANDIDATE_FILE"]
         self.assertEqual(
@@ -55,6 +77,8 @@ class UpdaterWorkflowTests(unittest.TestCase):
         )
         self.assertIn("Path(os.environ['CANDIDATE_FILE'])", create_prs["run"])
         self.assertIn('"$CANDIDATE_FILE" "$candidate_key"', create_prs["run"])
+        self.assertIn("eligible[0]", create_prs["run"])
+        self.assertNotIn("while IFS= read", create_prs["run"])
         self.assertNotIn("persist-credentials: true", text)
         self.assertNotIn("pull_request_target", text)
         self.assertNotIn("packages: write", text)
@@ -88,7 +112,7 @@ class UpdaterWorkflowTests(unittest.TestCase):
 
     def test_every_action_is_full_sha_pinned(self) -> None:
         text = WORKFLOW.read_text()
-        refs = re.findall(r"^\s*uses:\s*([^\s#]+)", text, re.M)
+        refs = re.findall(r"^\s*uses:\s*([^\s#]+)", text, re.MULTILINE)
         self.assertTrue(refs)
         for ref in refs:
             self.assertRegex(ref, r"^[^@]+@[0-9a-f]{40}$")

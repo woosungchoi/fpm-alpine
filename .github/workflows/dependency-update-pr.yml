@@ -10,6 +10,12 @@ on:
         required: true
         type: boolean
         default: true
+  # Trusted-main code revalidates the exact successful publisher run before using secrets.
+  # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: ["dependency-auto-publish"]
+    types: [completed]
+    branches: ["main"]
 
 permissions: {}
 
@@ -19,9 +25,16 @@ concurrency:
 
 jobs:
   discover:
+    name: Discover next dependency candidate
+    if: >-
+      ${{ github.event_name != 'workflow_run' ||
+          (github.event.workflow_run.event == 'push' &&
+           github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
+      actions: read # Rebind the exact upstream publisher run before continuing.
       contents: read
     outputs:
       eligible_count: ${{ steps.summary.outputs.eligible_count }}
@@ -31,6 +44,44 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate successful automatic publisher continuation
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN_ID" \
+            > /tmp/upstream-publisher-run.json
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          run = json.loads(Path('/tmp/upstream-publisher-run.json').read_text())
+          expected_id = int(os.environ['UPSTREAM_RUN_ID'])
+          expected_sha = os.environ['EXPECTED_SHA']
+          repository = os.environ['GITHUB_REPOSITORY']
+          required = {
+              'id': expected_id,
+              'path': '.github/workflows/dependency-auto-publish.yml',
+              'event': 'push',
+              'status': 'completed',
+              'conclusion': 'success',
+              'head_branch': 'main',
+              'head_sha': expected_sha,
+          }
+          mismatches = [key for key, value in required.items() if run.get(key) != value]
+          if mismatches:
+              raise SystemExit('publisher continuation contract mismatch: ' + ', '.join(mismatches))
+          if not re.fullmatch(r'[0-9a-f]{40}', expected_sha):
+              raise SystemExit('publisher continuation SHA is invalid')
+          if (run.get('head_repository') or {}).get('full_name') != repository:
+              raise SystemExit('publisher continuation repository mismatch')
+          PY
 
       - name: Require main source
         run: |
@@ -74,10 +125,13 @@ jobs:
           if-no-files-found: error
 
   create-prs:
+    name: Create next dependency pull request
     if: >-
       ${{ needs.discover.outputs.eligible_count != '0' &&
           vars.DEPENDENCY_AUTOMATION_ENABLED == 'true' &&
-          (github.event_name == 'schedule' || inputs.dry_run == false) }}
+          (github.event_name == 'schedule' ||
+           github.event_name == 'workflow_run' ||
+           (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)) }}
     needs: discover
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -109,24 +163,24 @@ jobs:
           name: dependency-candidates-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dependency-candidates
 
-      - name: Create one pull request per eligible candidate
+      - name: Create only the next eligible pull request
         env:
           CANDIDATE_FILE: ${{ runner.temp }}/dependency-candidates/candidates.json
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           gh auth setup-git
-          python3 - <<'PY' > /tmp/eligible-candidate-keys
+          python3 - <<'PY' > /tmp/next-eligible-candidate-key
           import json
           import os
           from pathlib import Path
           data = json.loads(Path(os.environ['CANDIDATE_FILE']).read_text())
-          for row in data.get('candidates', []):
-              if row.get('eligible') is True:
-                  print(row['key'])
+          eligible = [row for row in data.get('candidates', []) if row.get('eligible') is True]
+          if not eligible or not isinstance(eligible[0].get('key'), str):
+              raise SystemExit('next eligible candidate is missing or invalid')
+          print(eligible[0]['key'])
           PY
-          while IFS= read -r candidate_key; do
-            test -n "$candidate_key"
-            ./scripts/create-dependency-update-pr.sh \
-              "$CANDIDATE_FILE" "$candidate_key"
-          done < /tmp/eligible-candidate-keys
+          IFS= read -r candidate_key < /tmp/next-eligible-candidate-key
+          test -n "$candidate_key"
+          ./scripts/create-dependency-update-pr.sh \
+            "$CANDIDATE_FILE" "$candidate_key"

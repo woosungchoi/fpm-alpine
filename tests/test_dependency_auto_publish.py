@@ -217,29 +217,48 @@ class DependencyAutoPublishTests(unittest.TestCase):
         names = [step["name"] for step in controller["steps"]]
         validation = names.index("Validate exact artifact set and capture unauthenticated baselines")
         draft_validation = names.index("Validate strict draft plan before credentials")
-        first_lease = names.index("Require fresh immutable cutover lease before automatic credentials")
+        first_cutover = names.index(
+            "Verify permanent Docker Hub cutover before automatic credentials"
+        )
         dockerhub_login = names.index("Log in to Docker Hub mutation boundary")
         pin = names.index("Create no-clobber rollback pins and freeze final JSON plan")
         upload_plan = names.index("Upload frozen pre-mutation plan")
-        second_lease = names.index("Revalidate fresh immutable cutover lease at mutation boundary")
+        second_cutover = names.index(
+            "Revalidate permanent Docker Hub cutover at mutation boundary"
+        )
         promotion = names.index("Promote exact subjects as one fail-closed transaction")
         self.assertLess(validation, draft_validation)
-        self.assertLess(draft_validation, first_lease)
-        self.assertLess(first_lease, dockerhub_login)
+        self.assertLess(draft_validation, first_cutover)
+        self.assertLess(first_cutover, dockerhub_login)
         self.assertLess(dockerhub_login, pin)
         self.assertLess(pin, upload_plan)
-        self.assertLess(upload_plan, second_lease)
-        self.assertLess(second_lease, promotion)
-        live_cutover = names.index("Recheck legacy publisher cutover at mutation boundary")
-        self.assertLess(live_cutover, first_lease)
-        for lease_name in (
-            "Require fresh immutable cutover lease before automatic credentials",
-            "Revalidate fresh immutable cutover lease at mutation boundary",
+        self.assertLess(upload_plan, second_cutover)
+        self.assertLess(second_cutover, promotion)
+        for cutover_name in (
+            "Verify permanent Docker Hub cutover before automatic credentials",
+            "Revalidate permanent Docker Hub cutover at mutation boundary",
         ):
-            lease = next(step for step in controller["steps"] if step["name"] == lease_name)
-            self.assertEqual(lease["if"], "needs.prepare.outputs.mode == 'automatic'")
-            self.assertIn("require-fresh-cutover-lease.sh", lease["run"])
+            cutover = next(
+                step for step in controller["steps"] if step["name"] == cutover_name
+            )
+            self.assertEqual(cutover["if"], "needs.prepare.outputs.mode == 'automatic'")
+            self.assertIn("verify-permanent-dockerhub-cutover.py", cutover["run"])
+            self.assertEqual(
+                cutover["env"]["LEGACY_PUBLISHER_DISABLED"],
+                "${{ vars.LEGACY_PUBLISHER_DISABLED }}",
+            )
+            self.assertEqual(
+                cutover["env"]["DOCKERHUB_TAG_POLICY_ENFORCED"],
+                "${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED }}",
+            )
         dumped = yaml.safe_dump(controller, sort_keys=False)
+        self.assertNotIn("require-fresh-cutover-lease.sh", dumped)
+        second = next(
+            step for step in controller["steps"]
+            if step["name"] == "Revalidate permanent Docker Hub cutover at mutation boundary"
+        )
+        self.assertIn("--expected-state", second["run"])
+        self.assertIn("git ls-remote --exit-code origin refs/heads/main", second["run"])
         self.assertIn("canary artifact set mismatch", dumped)
         self.assertIn("promotion-plan.json", dumped)
         self.assertIn("target_dockerhub_digest", dumped)
@@ -493,6 +512,7 @@ class DependencyAutoPublishTests(unittest.TestCase):
             if step["name"] == "Run policy and mutation tests"
         )
         self.assertIn("python3 tests/test_dependency_auto_publish.py", step["run"])
+        self.assertIn("python3 tests/test_permanent_dockerhub_cutover.py", step["run"])
         self.assertIn("python3 tests/test_auto_promotion_transaction.py", step["run"])
         for test in (
             "test_backfill_source_manifest.py",

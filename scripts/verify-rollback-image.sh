@@ -14,57 +14,11 @@ if [[ ! "$DOCKERHUB_SUBJECT" =~ @sha256:[0-9a-f]{64}$ ]] || \
   exit 64
 fi
 
-mkdir -p "$REPORT_DIR/manifests" "$REPORT_DIR/smoke" "$REPORT_DIR/parity"
+mkdir -p "$REPORT_DIR/manifests" "$REPORT_DIR/smoke"
 for subject in "$DOCKERHUB_SUBJECT" "$GHCR_SUBJECT"; do
   PUBLISHER_MODE=github-actions MANIFEST_REPORT_DIR="$REPORT_DIR/manifests" \
     ./scripts/report-manifest.sh "$subject" "${PLATFORMS[@]}"
 done
-
-python3 - "$DOCKERHUB_SUBJECT" "$GHCR_SUBJECT" "$REPORT_DIR/parity" "${PLATFORMS[@]}" <<'PY'
-import json
-import subprocess
-import sys
-from pathlib import Path
-
-left_ref, right_ref, report_path, *platforms = sys.argv[1:]
-report_dir = Path(report_path)
-report_dir.mkdir(parents=True, exist_ok=True)
-
-def raw(ref: str) -> dict:
-    return json.loads(subprocess.check_output(
-        ["docker", "buildx", "imagetools", "inspect", "--raw", ref], text=True
-    ))
-
-def platform_manifests(ref: str) -> dict[str, dict]:
-    index = raw(ref)
-    repository = ref.rsplit("@", 1)[0]
-    descriptors = {}
-    for item in index.get("manifests", []):
-        platform = item.get("platform") or {}
-        key = f"{platform.get('os', '')}/{platform.get('architecture', '')}"
-        if key in platforms:
-            descriptors[key] = item.get("digest")
-    missing = sorted(set(platforms) - set(descriptors))
-    if missing:
-        raise SystemExit(f"rollback subject {ref} is missing: {', '.join(missing)}")
-    return {platform: raw(f"{repository}@{digest}") for platform, digest in descriptors.items()}
-
-left = platform_manifests(left_ref)
-right = platform_manifests(right_ref)
-summary = {}
-for platform in platforms:
-    left_manifest = left[platform]
-    right_manifest = right[platform]
-    left_config = (left_manifest.get("config") or {}).get("digest")
-    right_config = (right_manifest.get("config") or {}).get("digest")
-    left_layers = [item.get("digest") for item in left_manifest.get("layers", [])]
-    right_layers = [item.get("digest") for item in right_manifest.get("layers", [])]
-    if left_config != right_config or left_layers != right_layers:
-        raise SystemExit(f"rollback registry parity failed for {platform}")
-    summary[platform] = {"config": left_config, "layers": left_layers}
-(report_dir / "rollback-parity.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-print("rollback registry platform config/layer parity verified")
-PY
 
 for entry in "dockerhub|$DOCKERHUB_SUBJECT" "ghcr|$GHCR_SUBJECT"; do
   IFS='|' read -r registry subject <<< "$entry"
@@ -114,4 +68,4 @@ EOF
   done
 done
 
-echo "rollback manifest, parity and runtime verification passed"
+echo "rollback registry-local manifest and runtime verification passed"

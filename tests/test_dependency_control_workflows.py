@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -87,6 +90,47 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         self.assertNotIn("schedule:", text)
         self.assertNotIn("repository_dispatch:", text)
         self.assert_actions_are_pinned(text)
+
+    def test_dependency_smoke_matrix_contains_only_the_affected_minor(self) -> None:
+        _, data = self.load("smoke-test.yml")
+        prepare = data["jobs"]["prepare"]
+        checkout = next(step for step in prepare["steps"] if step.get("name") == "Checkout")
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        matrix_step = next(
+            step
+            for step in prepare["steps"]
+            if step.get("name") == "Validate pins and prepare matrix"
+        )
+        self.assertEqual(
+            matrix_step["env"]["BASE_SHA"],
+            "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}",
+        )
+        self.assertEqual(
+            matrix_step["env"]["HEAD_SHA"],
+            "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}",
+        )
+        self.assertIn("evaluate-auto-promotion.py", matrix_step["run"])
+        self.assertIn("--minor", matrix_step["run"])
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/validate-versions.py",
+                "--matrix",
+                "--minor",
+                "8.5",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        matrix = json.loads(completed.stdout)
+        self.assertEqual(len(matrix["include"]), 2)
+        self.assertEqual(
+            {(row["php_minor"], row["arch"]) for row in matrix["include"]},
+            {("8.5", "amd64"), ("8.5", "arm64")},
+        )
 
     def test_versions_merge_publishes_directly_to_both_registries(self) -> None:
         text, data = self.load("dependency-auto-publish.yml")

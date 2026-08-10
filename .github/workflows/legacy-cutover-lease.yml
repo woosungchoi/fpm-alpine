@@ -28,6 +28,32 @@ jobs:
       LEGACY_EVIDENCE_B64: ${{ github.event.client_payload.evidence_b64 }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Validate owner dispatch envelope before checkout
+        env:
+          EVENT_PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          payload = json.loads(os.environ["EVENT_PAYLOAD_JSON"])
+          expected = {"source_sha", "evidence_sha256", "evidence_b64"}
+          if not isinstance(payload, dict) or set(payload) != expected:
+              raise SystemExit("cutover lease payload key set mismatch")
+          if os.environ["EVENT_REPOSITORY"] != "woosungchoi/fpm-alpine":
+              raise SystemExit("cutover lease repository mismatch")
+          if payload.get("source_sha") != os.environ["EVENT_SHA"]:
+              raise SystemExit("cutover lease source is not exact default-branch HEAD")
+          if re.fullmatch(r"[0-9a-f]{64}", str(payload.get("evidence_sha256", ""))) is None:
+              raise SystemExit("cutover lease evidence hash is invalid")
+          if not isinstance(payload.get("evidence_b64"), str) or not payload["evidence_b64"]:
+              raise SystemExit("cutover lease evidence encoding is invalid")
+          PY
+
       - name: Checkout exact trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,8 +111,7 @@ jobs:
               or live.get("is_automated") is not False
               or dockerhub.get("public_is_automated") is not False
               or dockerhub.get("repository_last_updated") != live.get("last_updated")
-              or dockerhub.get("queue_basis")
-              != "automatic builds disabled and no source-capable GitHub legacy publisher hook"
+              or dockerhub.get("queue_evidence") != "dockerhub-ui-owner-observation"
           ):
               raise SystemExit("fresh lease Docker Hub metadata mismatch")
 
@@ -97,7 +122,8 @@ jobs:
           PY
           ./scripts/validate-legacy-cutover-evidence.py \
             "$EXPECTED_SOURCE_SHA" \
-            "$EXPECTED_EVIDENCE_SHA256"
+            "$EXPECTED_EVIDENCE_SHA256" \
+            cutover-lease
           test "$(sha256sum cutover-lease/cutover-evidence.json | cut -d' ' -f1)" = \
             "$EXPECTED_EVIDENCE_SHA256"
 

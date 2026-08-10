@@ -19,7 +19,7 @@ wait_for_run() {
   local attempt=0
   local run_id=""
   while [ "$attempt" -lt 120 ]; do
-    run_id="$(gh api "repos/$repo/actions/workflows/publish.yml/runs?event=workflow_dispatch&branch=main&per_page=100" \
+    run_id="$(gh api "repos/$repo/actions/workflows/publish.yml/runs?event=repository_dispatch&branch=main&per_page=100" \
       --jq "[.workflow_runs[] | select(.display_title == \"publish-canary-${correlation}\" and .head_sha == \"${source_sha}\")][0].id // empty")"
     if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
       printf '%s\n' "$run_id"
@@ -45,7 +45,7 @@ import json, sys
 source_sha, run_file = sys.argv[1:]
 row = json.load(open(run_file))
 required = {
-    "event": "workflow_dispatch",
+    "event": "repository_dispatch",
     "head_branch": "main",
     "head_sha": source_sha,
     "status": "completed",
@@ -77,13 +77,14 @@ mkdir -p "$(dirname "$output")" auto-canary-evidence
 runs=()
 for index in 1 2; do
   correlation="${correlation_prefix}-${index}"
-  existing="$(gh api "repos/$repo/actions/workflows/publish.yml/runs?event=workflow_dispatch&branch=main&per_page=100" \
+  existing="$(gh api "repos/$repo/actions/workflows/publish.yml/runs?event=repository_dispatch&branch=main&per_page=100" \
     --jq "[.workflow_runs[] | select(.display_title == \"publish-canary-${correlation}\")][0].id // empty")"
   [ -z "$existing" ] || { echo "correlation already exists: $correlation" >&2; exit 66; }
-  gh workflow run publish.yml --repo "$repo" --ref main \
-    -f channel=canary \
-    -f source_sha="$source_sha" \
-    -f correlation_id="$correlation"
+  gh api --method POST "repos/$repo/dispatches" \
+    -f event_type=fpm-manual-publish \
+    -F 'client_payload[channel]=canary' \
+    -F "client_payload[source_sha]=$source_sha" \
+    -F "client_payload[correlation_id]=$correlation"
   run_id="$(wait_for_run "$correlation")"
   timeout 4h gh run watch "$run_id" --repo "$repo" --exit-status
   runs+=("$(validate_run "$run_id" "auto-canary-evidence/$index")")

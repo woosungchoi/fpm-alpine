@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Assertions below intentionally search for literal shell and Actions expressions.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,28 +22,21 @@ assert_file scripts/verify-provenance.py
 assert_executable scripts/verify-provenance.py
 
 python3 - <<'PY'
-from pathlib import Path
 import json
 import os
 import re
 import subprocess
+from pathlib import Path
+
 import yaml
 
-path = Path('.github/workflows/publish.yml')
-text = path.read_text()
-validator_text = Path('scripts/validate-legacy-cutover-evidence.py').read_text()
+workflow_path = Path('.github/workflows/publish.yml')
+text = workflow_path.read_text()
 data = yaml.safe_load(text)
 trigger = data.get('on', data.get(True))
-assert set(trigger) == {'repository_dispatch'}, trigger
-assert trigger['repository_dispatch']['types'] == ['fpm-manual-publish']
-assert 'workflow_dispatch' not in trigger
+assert trigger == {'repository_dispatch': {'types': ['fpm-manual-publish']}}, trigger
 assert data['permissions'] == {}
-assert data['concurrency']['cancel-in-progress'] is False
-assert 'fpm-production-promotion' in data['concurrency']['group']
-assert 'publish-canary' in data['concurrency']['group']
-assert ':latest' not in text.lower()
-assert not re.search(r'(?<![0-9.])8\.[01](?![0-9.])', text)
-
+assert data['concurrency'] == {'group': 'publish-canary', 'cancel-in-progress': False}
 uses = re.findall(r'^\s*uses:\s*([^\s#]+)(?:\s+#\s*(\S+))?\s*$', text, re.M)
 assert uses, 'publisher must use pinned actions'
 for ref, comment in uses:
@@ -49,16 +44,12 @@ for ref, comment in uses:
     assert comment, f'missing release comment for {ref}'
 
 jobs = data['jobs']
-for name in ('prepare', 'canary', 'production-preflight', 'bootstrap-ghcr-rollback', 'production', 'report-failure'):
-    assert name in jobs, name
-assert jobs['prepare']['permissions'] == {'actions': 'read', 'contents': 'read'}
+assert set(jobs) == {'prepare', 'canary', 'report-failure'}, set(jobs)
+assert jobs['prepare']['permissions'] == {'contents': 'read'}
 assert jobs['canary']['permissions'] == {'contents': 'read', 'packages': 'write', 'id-token': 'write'}
-assert jobs['production']['permissions'] == {'actions': 'read', 'contents': 'read', 'packages': 'write', 'id-token': 'write'}
-assert jobs['production']['environment'] == 'fpm-production'
-assert jobs['production-preflight']['permissions'] == {'actions': 'read', 'contents': 'read'}
-assert jobs['bootstrap-ghcr-rollback']['environment'] == 'fpm-production'
-assert jobs['bootstrap-ghcr-rollback']['permissions'] == {'contents': 'read', 'packages': 'write'}
 assert jobs['report-failure']['permissions'] == {'actions': 'read', 'contents': 'read', 'issues': 'write'}
+assert 'environment' not in jobs['canary']
+
 envelope = next(step['run'] for step in jobs['prepare']['steps'] if step.get('name') == 'Validate owner dispatch envelope before checkout')
 base_env = {
     **os.environ,
@@ -70,116 +61,57 @@ base_env = {
     'EVENT_SHA': 'a' * 40,
 }
 canary_payload = {'channel': 'canary', 'source_sha': 'a' * 40, 'version': '8.5'}
-production_payload = {
-    'channel': 'production',
-    'source_sha': 'a' * 40,
-    'version': '8.5',
-    'canary_run_id': 123,
-    'canary_run_attempt': 1,
-    'prior_canary_run_id': '122',
-    'prior_canary_run_attempt': '1',
-    'legacy_publisher_disabled': True,
-    'legacy_cutover_evidence_sha256': 'b' * 64,
-}
-for payload in (canary_payload, production_payload):
-    env = {**base_env, 'EVENT_PAYLOAD_JSON': json.dumps(payload)}
-    assert subprocess.run(['bash', '-c', envelope], env=env, capture_output=True, text=True).returncode == 0
-invalid_cases = [
+env = {**base_env, 'EVENT_PAYLOAD_JSON': json.dumps(canary_payload)}
+assert subprocess.run(['bash', '-c', envelope], env=env, capture_output=True, text=True).returncode == 0
+for payload, overrides in (
     ({**canary_payload, 'unknown': 'value'}, {}),
-    ({**canary_payload, 'canary_run_id': 123}, {}),
-    ({key: value for key, value in production_payload.items() if key != 'canary_run_id'}, {}),
-    ({**production_payload, 'legacy_publisher_disabled': 1}, {}),
+    ({**canary_payload, 'channel': 'production'}, {}),
     (canary_payload, {'EVENT_ACTOR_ID': '1'}),
-]
-for payload, overrides in invalid_cases:
+):
     env = {**base_env, **overrides, 'EVENT_PAYLOAD_JSON': json.dumps(payload)}
     assert subprocess.run(['bash', '-c', envelope], env=env, capture_output=True, text=True).returncode != 0
 
 canary = yaml.safe_dump(jobs['canary'], sort_keys=False)
-production = yaml.safe_dump(jobs['production'], sort_keys=False)
-for required in ('docker/login-action@', 'docker/build-push-action@', 'provenance: mode=max', 'sbom: true',
-                 'scripts/verify-canary-image.sh', 'scripts/scan-image.sh', 'cosign sign --yes',
-                 'github.run_attempt'):
+for required in (
+    'docker/login-action@', 'docker/build-push-action@', 'provenance: mode=max', 'sbom: true',
+    'scripts/verify-canary-image.sh', 'scripts/scan-image.sh',
+    'cosign sign --yes -a fpm.operation=manual', 'EXPECTED_OPERATION: manual', 'github.run_attempt',
+):
     assert required in canary, required
+for forbidden in ('DOCKERHUB_REPOSITORY', 'dockerhub_digest', "channel == 'production'", 'scripts/promote-image.sh'):
+    assert forbidden not in canary, forbidden
+assert "github.event.client_payload.channel == 'canary'" in canary
 assert 'refusing to overwrite existing GHCR canary tag' in text
-assert 'DOCKERHUB_REPOSITORY' not in canary
-assert 'dockerhub_digest' not in canary
-assert 'github.event.client_payload.channel == \'canary\'' in canary
-assert 'docker/build-push-action@' not in production
-assert 'github.event.client_payload.channel == \'production\'' in production
-for required in ('scripts/verify-published-image.sh', 'scripts/promote-image.sh', 'scripts/rollback-moving-aliases.sh',
-                 'canary_run_id', 'canary_run_attempt',
-                 'steps.canary.outputs.ghcr_digest', '--policy moving-only', '--policy evidence'):
-    assert required in production, required
 assert 'test "$SOURCE_SHA" = "$DISPATCH_SHA"' in text
-assert 'validate(run, expected_attempt, "current", {"repository_dispatch"})' in text
-assert 'validate(prior, prior_expected_attempt, "prior", {"repository_dispatch"})' in text
 assert text.count('SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}') == 1
 assert text.count('SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}') == 1
 assert 'git show -s --format=%ct "$GITHUB_SHA"' in text
 assert "test \"$DISPATCH_REF\" = 'refs/heads/main'" in text
-assert 'actions/runs/${CANARY_RUN_ID}' in text
-assert 'actions/runs/${PRIOR_CANARY_RUN_ID}' in text
-assert 'run.get("run_number") != prior.get("run_number", -2) + 1' in text
-assert 'current canary is not a complete active matrix' in text
-assert 'prior successful canary has no unexpired PHP 8.5 evidence artifact' in text
-assert '["versions"].items()' in text
-assert 'LEGACY_CUTOVER_EVIDENCE_SHA256' in text
-assert 'legacy cutover evidence is not within the 15-minute lease' in validator_text
-assert 'Docker Hub legacy publisher is not quiescent' in validator_text
-assert 'publisher-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}' in text
-assert text.count('./scripts/validate-legacy-cutover-evidence.py') == 3
-assert 'bootstrap-evidence.json' in text
-for field in ('source_sha', 'dockerhub_resolution_status', 'dockerhub_inspect_exit_code', 'dockerhub_digest_parse_exit_code', 'dockerhub_digest', 'baseline_state', 'baseline_inspect_exit_code', 'cutover_validation_status', 'cutover_validation_exit_code', 'create_status', 'create_exit_code', 'readback_status', 'readback_exit_code', 'readback_digest_parse_exit_code', 'readback_digest', 'verifier_status', 'verifier_exit_code', 'final_status', 'created_at', 'updated_at'):
-    assert field in text, field
-bootstrap_run = next(step['run'] for step in jobs['bootstrap-ghcr-rollback']['steps'] if step.get('name') == 'Establish idempotent GHCR rollback baselines')
-assert bootstrap_run.index('./scripts/validate-legacy-cutover-evidence.py') < bootstrap_run.index('docker buildx imagetools create')
-promotion_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Promote verified GHCR canary without rebuilding')
-assert promotion_run.index('./scripts/validate-legacy-cutover-evidence.py') < promotion_run.index('./scripts/promote-image.sh --policy evidence')
-assert promotion_run.index('./scripts/promote-image.sh --policy moving-only') < promotion_run.index('./scripts/verify-published-image.sh')
-assert promotion_run.index('./scripts/verify-published-image.sh') < promotion_run.rindex('trap - EXIT INT TERM')
-assert 'DOCKER_CONFIG="$anonymous_docker_config"' in promotion_run
-assert "trap 'exit 130' INT" in promotion_run
-assert "trap 'exit 143' TERM" in promotion_run
-assert 'echo "dockerhub_digest=' not in promotion_run
-production_step_names = [step.get('name') for step in jobs['production']['steps']]
-assert 'Re-verify exact canary subjects before promotion' not in production_step_names
-assert production_step_names.index('Promote verified GHCR canary without rebuilding') == production_step_names.index('Load and bind verified canary metadata') + 1
-assert './scripts/scan-image.sh' not in promotion_run
-metadata_load_run = next(step['run'] for step in jobs['production']['steps'] if step.get('name') == 'Load and bind verified canary metadata')
-assert metadata_load_run.index('./scripts/validate-canary-metadata.py') < metadata_load_run.index('output.write(f"ghcr_digest=')
-assert 'dockerhub_digest' not in metadata_load_run
-assert "imagetools inspect \"$1\" | awk '/^Digest:/" not in text
-assert '[[ "$REQUESTED_VERSION" =~ ^8\\.[2-5]$ ]]' in text
-assert 'gh run download "$CANARY_RUN_ID" --repo "$GITHUB_REPOSITORY"' in text
-failure = yaml.safe_dump(jobs['report-failure'], sort_keys=False)
-assert 'scripts/create-manifest-failure-issue.sh' in failure
-assert "github.ref == 'refs/heads/main'" in failure
-assert "needs.prepare.result == 'success'" in failure
-assert 'active-matrix' not in failure
-assert 'failure-minors.txt' in failure
-assert 'failure-jobs.json' in failure
-assert 'job.get("conclusion") != "failure"' in text
-assert 're.fullmatch(r"(?:canary|production) \\((8\\.[2-5]),.*"' in text
-assert 'payload["versions"].items()' in text
-assert '"security-only"' in text
-assert 'production-preflight' in jobs['production']['needs']
-assert 'bootstrap-ghcr-rollback' in jobs['production']['needs']
+assert 'production-preflight:' not in text
+assert 'bootstrap-ghcr-rollback:' not in text
+assert '\n  production:' not in text
 assert 'Require anonymous GHCR manifest and runtime access' in canary
 anonymous_run = next(step['run'] for step in jobs['canary']['steps'] if step.get('name') == 'Require anonymous GHCR manifest and runtime access')
 assert 'DOCKER_CONFIG="$anonymous_config" ./scripts/resolve-platform-image.py "$GHCR_SUBJECT" "$platform"' in anonymous_run
 assert '--entrypoint php "$platform_subject"' in anonymous_run
 assert '--entrypoint php "$GHCR_SUBJECT"' not in anonymous_run
+
+failure = yaml.safe_dump(jobs['report-failure'], sort_keys=False)
+assert 'scripts/create-manifest-failure-issue.sh' in failure
+assert "github.ref == 'refs/heads/main'" in failure
+assert "needs.prepare.result == 'success'" in failure
+assert 'failure-minors.txt' in failure
+assert 'failure-jobs.json' in failure
+assert 'job.get("conclusion") != "failure"' in text
+assert 'payload["versions"].items()' in text
+assert '"security-only"' in text
 for verifier in ('scripts/verify-published-image.sh', 'scripts/verify-rollback-image.sh'):
     verifier_text = Path(verifier).read_text()
     assert 'resolve-platform-image.py' in verifier_text
     assert '"$platform_subject"' in verifier_text
-preflight_run = next(step['run'] for step in jobs['production-preflight']['steps'] if step.get('name') == 'Require verified canary evidence for every production target')
-assert 'build/versions.json' in preflight_run
-assert 'active-production-targets.tsv' in preflight_run
-assert preflight_run.count('./scripts/validate-canary-metadata.py') == 2
-assert 'PRIOR_CANARY_RUN_ID' in preflight_run
-assert 'prior-8.5' in preflight_run
+validator_text = Path('scripts/validate-legacy-cutover-evidence.py').read_text()
+assert 'legacy cutover evidence is not within the 15-minute lease' in validator_text
+assert 'Docker Hub legacy publisher is not quiescent' in validator_text
 PY
 
 python3 - <<'PY'
@@ -207,153 +139,6 @@ with tempfile.TemporaryDirectory() as tmp:
     ]}))
     result = subprocess.run([sys.executable, '-c', code], check=True, text=True, stdout=subprocess.PIPE)
     assert result.stdout.splitlines() == ['8.5'], result.stdout
-PY
-
-python3 - <<'PY'
-import json
-import subprocess
-import sys
-import tempfile
-import textwrap
-from pathlib import Path
-
-workflow = Path(".github/workflows/publish.yml").read_text()
-marker = 'python3 - /tmp/canary-run.json /tmp/prior-canary-run.json /tmp/canary-artifacts.json /tmp/prior-canary-artifacts.json'
-tail = workflow.split(marker, 1)[1].split("<<'PY'\n", 1)[1]
-code = textwrap.dedent(tail.split("\n          PY", 1)[0])
-compile(code, "production-canary-contract.py", "exec")
-
-sha = "0123456789abcdef0123456789abcdef01234567"
-current = {"id": 102, "conclusion": "success", "event": "repository_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 1, "run_number": 11}
-prior = {"id": 101, "conclusion": "success", "event": "repository_dispatch", "head_sha": sha, "head_branch": "main", "path": ".github/workflows/publish.yml", "run_attempt": 2, "run_number": 10}
-current_artifacts = {"artifacts": [{"name": f"publisher-canary-{minor}-102-1", "expired": False} for minor in ("8.2", "8.3", "8.4", "8.5")]}
-prior_artifacts = {"artifacts": [{"name": "publisher-canary-8.5-101-2", "expired": False}]}
-
-with tempfile.TemporaryDirectory() as tmp:
-    root = Path(tmp)
-    script = root / "contract.py"
-    script.write_text(code)
-    payloads = [current, prior, current_artifacts, prior_artifacts]
-    paths = []
-    for index, payload in enumerate(payloads):
-        path = root / f"payload-{index}.json"
-        path.write_text(json.dumps(payload))
-        paths.append(str(path))
-    command = [sys.executable, str(script), *paths, sha, "1", "2"]
-    subprocess.run(command, check=True)
-    current["run_number"] = 12
-    Path(paths[0]).write_text(json.dumps(current))
-    if subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-        raise SystemExit("production canary contract accepted non-consecutive runs")
-    current["run_number"] = 11
-    Path(paths[0]).write_text(json.dumps(current))
-    current_artifacts["artifacts"].pop()
-    Path(paths[2]).write_text(json.dumps(current_artifacts))
-    if subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-        raise SystemExit("production canary contract accepted an incomplete active matrix")
-    current_artifacts["artifacts"].append({"name": "publisher-canary-8.5-102-1", "expired": False})
-    Path(paths[2]).write_text(json.dumps(current_artifacts))
-    prior_artifacts["artifacts"] = [{"name": "publisher-canary-8.2-101-2", "expired": False}]
-    Path(paths[3]).write_text(json.dumps(prior_artifacts))
-    if subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-        raise SystemExit("production canary contract accepted an 8.2-only prior run")
-PY
-
-python3 - <<'PY'
-import json
-import os
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
-
-import yaml
-
-workflow = yaml.safe_load(Path(".github/workflows/publish.yml").read_text())
-steps = workflow["jobs"]["production-preflight"]["steps"]
-run_block = next(step["run"] for step in steps if step.get("name") == "Require verified canary evidence for every production target")
-source_sha = "0123456789abcdef0123456789abcdef01234567"
-current_run, current_attempt = "200", "1"
-prior_run, prior_attempt = "100", "2"
-
-with tempfile.TemporaryDirectory() as tmp:
-    root = Path(tmp)
-    shutil.copytree("scripts", root / "scripts")
-    (root / "build").mkdir()
-    shutil.copy("build/versions.json", root / "build/versions.json")
-    binary = root / "bin"
-    binary.mkdir()
-    gh = binary / "gh"
-    gh.write_text(r'''#!/usr/bin/env python3
-import json
-import os
-import re
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-if args[:2] != ["run", "download"]:
-    raise SystemExit(97)
-run_id = args[2]
-name = args[args.index("--name") + 1]
-destination = Path(args[args.index("--dir") + 1])
-match = re.fullmatch(r"publisher-canary-(8\.[2-5])-([1-9][0-9]*)-([1-9][0-9]*)", name)
-if not match or match.group(2) != run_id:
-    raise SystemExit(98)
-minor, artifact_run, attempt = match.groups()
-versions = json.load(open(os.environ["MOCK_VERSIONS"]))["versions"]
-payload = {
-    "schema_version": 2,
-    "channel": "canary",
-    "source_sha": "bad" if name == os.environ.get("MOCK_CORRUPT_ARTIFACT") else os.environ["MOCK_SOURCE_SHA"],
-    "php_minor": minor,
-    "php_patch": versions[minor]["patch"],
-    "run_id": int(artifact_run),
-    "run_attempt": int(attempt),
-    "canonical_registry": "ghcr.io",
-    "canonical_repository": "ghcr.io/woosungchoi/fpm-alpine",
-    "canonical_ref": f"ghcr.io/woosungchoi/fpm-alpine:canary-{minor}-{artifact_run}-{attempt}",
-    "ghcr_digest": "sha256:" + "2" * 64,
-    "platforms": ["linux/amd64", "linux/arm64"],
-}
-destination.mkdir(parents=True, exist_ok=True)
-(destination / "canary-metadata.json").write_text(json.dumps(payload))
-with open(os.environ["MOCK_DOWNLOAD_LOG"], "a") as log:
-    log.write(name + "\n")
-''')
-    gh.chmod(0o755)
-    script = root / "preflight.sh"
-    script.write_text("#!/usr/bin/env bash\n" + run_block)
-    script.chmod(0o755)
-    log = root / "downloads.log"
-    env = os.environ.copy()
-    env.update({
-        "PATH": f"{binary}:{env['PATH']}",
-        "GITHUB_REPOSITORY": "example/image",
-        "CANARY_RUN_ID": current_run,
-        "CANARY_RUN_ATTEMPT": current_attempt,
-        "PRIOR_CANARY_RUN_ID": prior_run,
-        "PRIOR_CANARY_RUN_ATTEMPT": prior_attempt,
-        "EXPECTED_SOURCE_SHA": source_sha,
-        "MOCK_SOURCE_SHA": source_sha,
-        "MOCK_VERSIONS": str(root / "build/versions.json"),
-        "MOCK_DOWNLOAD_LOG": str(log),
-    })
-    result = subprocess.run([str(script)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode != 0:
-        raise SystemExit("aggregate canary content preflight rejected valid evidence")
-    expected_names = {f"publisher-canary-{minor}-{current_run}-{current_attempt}" for minor in ("8.2", "8.3", "8.4", "8.5")}
-    expected_names.add(f"publisher-canary-8.5-{prior_run}-{prior_attempt}")
-    observed_names = set(log.read_text().splitlines())
-    if observed_names != expected_names:
-        raise SystemExit(f"aggregate preflight downloads mismatch: {sorted(observed_names)}")
-
-    shutil.rmtree(root / "production-preflight")
-    log.unlink()
-    env["MOCK_CORRUPT_ARTIFACT"] = f"publisher-canary-8.3-{current_run}-{current_attempt}"
-    result = subprocess.run([str(script)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode == 0:
-        raise SystemExit("aggregate preflight accepted corrupt current 8.3 metadata content")
 PY
 
 python3 - <<'PY'
@@ -412,16 +197,18 @@ def run(payload):
     env["LEGACY_EVIDENCE_B64"] = base64.b64encode(raw).decode()
     return subprocess.run([sys.executable, str(script), sha, digest], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
 
+captured = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 payload = {
-    "schemaVersion": 1,
+    "schema_version": 2,
     "source_sha": sha,
-    "captured_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+    "captured_at": captured,
     "dockerhub": {
         "build_rule_active": False,
         "in_flight_builds": 0,
         "public_is_automated": False,
         "repository_last_updated": "2026-08-10T00:00:00Z",
-        "queue_basis": "automatic builds disabled and no source-capable GitHub legacy publisher hook",
+        "queue_evidence": "dockerhub-ui-owner-observation",
+        "queue_observed_at": captured,
     },
     "github": {
         "repository": "woosungchoi/fpm-alpine",
@@ -448,194 +235,13 @@ payload["dockerhub"]["in_flight_builds"] = 0.0
 if run(payload) == 0:
     raise SystemExit("floating-point zero in-flight count was accepted")
 payload["dockerhub"]["in_flight_builds"] = 0
-payload["schemaVersion"] = True
+payload["schema_version"] = True
 if run(payload) == 0:
     raise SystemExit("boolean true schema version was accepted")
-payload["schemaVersion"] = 1
+payload["schema_version"] = 2
 payload["captured_at"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=16)).isoformat().replace("+00:00", "Z")
 if run(payload) == 0:
     raise SystemExit("stale legacy cutover evidence was accepted")
-PY
-
-python3 - <<'PY'
-import base64
-import datetime as dt
-import hashlib
-import json
-import os
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
-
-import yaml
-
-workflow = yaml.safe_load(Path(".github/workflows/publish.yml").read_text())
-steps = workflow["jobs"]["bootstrap-ghcr-rollback"]["steps"]
-run_block = next(step["run"] for step in steps if step.get("name") == "Establish idempotent GHCR rollback baselines")
-source_sha = "0123456789abcdef0123456789abcdef01234567"
-evidence = {
-    "schemaVersion": 1,
-    "source_sha": source_sha,
-    "captured_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-    "dockerhub": {
-        "build_rule_active": False,
-        "in_flight_builds": 0,
-        "public_is_automated": False,
-        "repository_last_updated": "2026-08-10T00:00:00Z",
-        "queue_basis": "automatic builds disabled and no source-capable GitHub legacy publisher hook",
-    },
-    "github": {
-        "repository": "woosungchoi/fpm-alpine",
-        "legacy_webhook_present": False,
-        "active_hooks": [{
-            "id": 402842509,
-            "name": "web",
-            "active": True,
-            "events": ["pull_request", "push"],
-            "url_host": "api.snyk.io",
-            "url_kind": "github-webhook-uuid",
-        }],
-    },
-}
-raw = json.dumps(evidence, separators=(",", ":"), sort_keys=True).encode()
-digest = hashlib.sha256(raw).hexdigest()
-
-with tempfile.TemporaryDirectory() as tmp:
-    root = Path(tmp)
-    shutil.copytree("scripts", root / "scripts")
-    binary = root / "bin"
-    binary.mkdir()
-    docker = binary / "docker"
-    docker.write_text(r'''#!/usr/bin/env bash
-set -uo pipefail
-if [ "$1 $2 $3" = "buildx imagetools inspect" ]; then
-  ref="${@: -1}"
-  if [[ "$ref" == docker.io/* ]]; then
-    [ "${MOCK_MODE:-success}" = dockerhub-fail ] && exit 7
-    printf 'Digest: sha256:%064d\n' 1
-    exit 0
-  fi
-  if [ -f "$MOCK_STATE" ]; then
-    printf 'Digest: sha256:%064d\n' 1
-    [ "${MOCK_MODE:-success}" = readback-fail ] && exit 1
-    [ "${MOCK_MODE:-success}" = readback-exit-2 ] && exit 2
-    [ "${MOCK_MODE:-success}" = readback-exit-9 ] && exit 9
-    exit 0
-  fi
-  printf 'ERROR: %s: not found\n' "$ref" >&2
-  exit 1
-fi
-if [ "$1 $2 $3" = "buildx imagetools create" ]; then
-  : > "$MOCK_STATE"
-  exit 0
-fi
-exit 97
-''')
-    docker.chmod(0o755)
-    script = root / "bootstrap.sh"
-    script.write_text("#!/usr/bin/env bash\n" + run_block)
-    script.chmod(0o755)
-    env = os.environ.copy()
-    env.update({
-        "PATH": f"{binary}:{env['PATH']}",
-        "MOCK_STATE": str(root / "created"),
-        "MOCK_MODE": "readback-fail",
-        "MATRIX_JSON": json.dumps({"include": [{"php_minor": "8.5"}]}),
-        "DOCKERHUB_REPOSITORY": "docker.io/example/image",
-        "GHCR_REPOSITORY": "ghcr.io/example/image",
-        "EXPECTED_SOURCE_SHA": source_sha,
-        "LEGACY_EVIDENCE_SHA256_INPUT": digest,
-        "LEGACY_EVIDENCE_SHA256_VARIABLE": digest,
-        "LEGACY_EVIDENCE_B64": base64.b64encode(raw).decode(),
-        "RUN_ID": "123",
-        "RUN_ATTEMPT": "2",
-    })
-    result = subprocess.run([str(script)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode == 0:
-        raise SystemExit("bootstrap mock unexpectedly accepted failed post-create read-back")
-    record = json.loads((root / "publisher-reports/bootstrap-8.5/bootstrap-evidence.json").read_text())
-    expected = {
-        "run_id": 123,
-        "run_attempt": 2,
-        "source_sha": source_sha,
-        "minor": "8.5",
-        "dockerhub_resolution_status": "success",
-        "dockerhub_inspect_exit_code": 0,
-        "dockerhub_digest_parse_exit_code": 0,
-        "baseline_state": "absent",
-        "baseline_inspect_exit_code": 1,
-        "create_status": "success",
-        "create_exit_code": 0,
-        "readback_status": "failed",
-        "readback_exit_code": 1,
-        "readback_digest_parse_exit_code": None,
-        "readback_digest": None,
-        "verifier_status": "not_run",
-        "final_status": "failed",
-    }
-    for key, value in expected.items():
-        if record.get(key) != value:
-            raise SystemExit(f"bootstrap evidence mismatch for {key}: {record.get(key)!r}")
-
-    (root / "created").unlink()
-    for raw_exit in (2, 9):
-        env["MOCK_MODE"] = f"readback-exit-{raw_exit}"
-        result = subprocess.run([str(script)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if result.returncode != raw_exit:
-            raise SystemExit(f"bootstrap did not preserve raw read-back exit {raw_exit}: {result.returncode}")
-        record = json.loads((root / "publisher-reports/bootstrap-8.5/bootstrap-evidence.json").read_text())
-        if record.get("readback_exit_code") != raw_exit or record.get("readback_digest_parse_exit_code") is not None or record.get("final_status") != "failed":
-            raise SystemExit(f"bootstrap evidence did not preserve raw read-back exit {raw_exit}")
-        (root / "created").unlink()
-
-    env["MOCK_MODE"] = "dockerhub-fail"
-    result = subprocess.run([str(script)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode != 7:
-        raise SystemExit(f"bootstrap did not preserve early Docker Hub exit 7: {result.returncode}")
-    record = json.loads((root / "publisher-reports/bootstrap-8.5/bootstrap-evidence.json").read_text())
-    expected = {
-        "dockerhub_resolution_status": "failed",
-        "dockerhub_inspect_exit_code": 7,
-        "dockerhub_digest_parse_exit_code": None,
-        "dockerhub_digest": None,
-        "baseline_state": "not_started",
-        "create_status": "not_attempted",
-        "readback_status": "not_attempted",
-        "verifier_status": "not_run",
-        "final_status": "failed",
-    }
-    for key, value in expected.items():
-        if record.get(key) != value:
-            raise SystemExit(f"early bootstrap evidence mismatch for {key}: {record.get(key)!r}")
-
-    verifier = root / "scripts/verify-rollback-image.sh"
-    verifier.write_text("#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p \"$4\"\nprintf '{\"status\":\"passed\"}\\n' > \"$4/verifier.json\"\n")
-    verifier.chmod(0o755)
-    env["MOCK_MODE"] = "success"
-    result = subprocess.run([str(script)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode != 0:
-        raise SystemExit("bootstrap full-success mock failed")
-    record = json.loads((root / "publisher-reports/bootstrap-8.5/bootstrap-evidence.json").read_text())
-    expected = {
-        "baseline_state": "absent",
-        "baseline_inspect_exit_code": 1,
-        "dockerhub_resolution_status": "success",
-        "dockerhub_inspect_exit_code": 0,
-        "dockerhub_digest_parse_exit_code": 0,
-        "create_status": "success",
-        "create_exit_code": 0,
-        "readback_status": "success",
-        "readback_exit_code": 0,
-        "readback_digest_parse_exit_code": 0,
-        "readback_digest": "sha256:" + "0" * 63 + "1",
-        "verifier_status": "success",
-        "verifier_exit_code": 0,
-        "final_status": "success",
-    }
-    for key, value in expected.items():
-        if record.get(key) != value:
-            raise SystemExit(f"bootstrap success evidence mismatch for {key}: {record.get(key)!r}")
 PY
 
 mapfile -t failure_minors < <(python3 - <<'PY'
@@ -703,9 +309,9 @@ for workflow in \
   assert_contains "$workflow" 'cosign-release: v3.1.2'
 done
 assert_contains .github/workflows/dependency-publish-recovery.yml 'plan_sha256'
-assert_contains .github/workflows/publish.yml "'fpm-production-promotion'"
-assert_contains .github/workflows/publish.yml 'publisher-reports/preflight-baseline'
-assert_not_contains .github/workflows/publish.yml 'production requires Docker Hub/GHCR baseline parity'
+assert_not_contains .github/workflows/publish.yml 'fpm-production-promotion'
+assert_not_contains .github/workflows/publish.yml 'publisher-reports/preflight-baseline'
+assert_not_contains .github/workflows/publish.yml 'production-preflight:'
 assert_contains .github/workflows/dependency-auto-publish.yml 'publisher-auto-canary-*-${{ github.run_id }}-${{ github.run_attempt }}'
 assert_contains .github/workflows/dependency-auto-publish.yml 'promotion-plan.json'
 assert_contains .github/workflows/dependency-auto-publish.yml 'rollback-auto-dockerhub-'
@@ -1028,8 +634,8 @@ assert_contains scripts/create-manifest-failure-issue.sh 'Digest:'
 assert_contains docs/ci-operations.md 'typed `fpm-ghcr-backfill` `repository_dispatch`'
 assert_contains docs/ci-operations.md 'registry-specific exact subjects'
 assert_contains docs/ci-operations.md 'fpm-publish-recover'
-assert_contains .github/workflows/publish.yml 'LEGACY_DISABLED_VARIABLE'
-assert_contains .github/workflows/publish.yml 'legacy_publisher_disabled'
+assert_not_contains .github/workflows/publish.yml 'LEGACY_DISABLED_VARIABLE'
+assert_not_contains .github/workflows/publish.yml 'legacy_publisher_disabled'
 assert_contains scripts/verify-rollback-image.sh 'fsockopen'
 assert_contains README.md 'GitHub Actions publisher'
 

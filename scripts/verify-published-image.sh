@@ -8,6 +8,7 @@ EXPECTED_VERSION="${4:-}"
 REPORT_DIR="${5:-publisher-reports}"
 EXPECTED_SIGNING_REF="${6:-main}"
 EXPECTED_PUBLISHER_WORKFLOW="${EXPECTED_PUBLISHER_WORKFLOW:-publish.yml}"
+EXPECTED_OPERATION="${EXPECTED_OPERATION:-}"
 VERIFY_DOCKERHUB_SIGNATURE="${VERIFY_DOCKERHUB_SIGNATURE:-1}"
 EXPECTED_SOURCE="${EXPECTED_SOURCE:-https://github.com/woosungchoi/fpm-alpine}"
 EXPECTED_LICENSES="${EXPECTED_LICENSES:-GPL-2.0-only}"
@@ -25,9 +26,13 @@ case "$EXPECTED_SIGNING_REF" in
   *) echo "expected signing ref must be main or 8.5" >&2; exit 64 ;;
 esac
 case "$EXPECTED_PUBLISHER_WORKFLOW" in
-  publish.yml) publisher_workflow_pattern='publish\.yml' ;;
+  publish.yml)
+    [ "$EXPECTED_OPERATION" = manual ] || { echo "publish.yml verification requires fpm.operation=manual" >&2; exit 64; }
+    publisher_workflow_pattern='publish\.yml'
+    ;;
   dependency-auto-publish.yml)
     [ "$EXPECTED_SIGNING_REF" = main ] || { echo "dependency-auto-publish.yml signatures must use refs/heads/main" >&2; exit 64; }
+    case "$EXPECTED_OPERATION" in automatic|backfill-ghcr) ;; *) echo "invalid dependency publication operation" >&2; exit 64 ;; esac
     publisher_workflow_pattern='dependency-auto-publish\.yml'
     ;;
   any-authorized)
@@ -49,7 +54,8 @@ if [ "$VERIFY_DOCKERHUB_SIGNATURE" = 0 ] && \
   echo "Docker Hub signature skip is restricted to dependency backfill on main" >&2
   exit 64
 fi
-COSIGN_CERTIFICATE_IDENTITY_REGEXP="^https://github\\.com/woosungchoi/fpm-alpine/\\.github/workflows/${publisher_workflow_pattern}@refs/heads/${EXPECTED_SIGNING_REF}$"
+case "$EXPECTED_OPERATION" in automatic|backfill-ghcr|manual) ;; *) echo "invalid expected publication operation" >&2; exit 64 ;; esac
+COSIGN_CERTIFICATE_IDENTITY_REGEXP="^https://github\.com/woosungchoi/fpm-alpine/\.github/workflows/${publisher_workflow_pattern}@refs/heads/${EXPECTED_SIGNING_REF}$"
 for command in docker cosign python3; do
   command -v "$command" >/dev/null 2>&1 || { echo "$command is required" >&2; exit 69; }
 done
@@ -183,6 +189,7 @@ for entry in "dockerhub|$DOCKERHUB_REF|$dockerhub_digest" "ghcr|$GHCR_REF|$ghcr_
   cosign verify \
     --certificate-identity-regexp "$COSIGN_CERTIFICATE_IDENTITY_REGEXP" \
     --certificate-oidc-issuer "$COSIGN_CERTIFICATE_OIDC_ISSUER" \
+    -a "fpm.operation=$EXPECTED_OPERATION" \
     "$subject" >/dev/null
   echo "Cosign signature verified: $subject"
 done

@@ -6,7 +6,7 @@ PLAN_FILE="${2:-}"
 REPORT_DIR="${3:-auto-publisher-reports}"
 DOCKERHUB_REPOSITORY="docker.io/woosungchoi/fpm-alpine"
 GHCR_REPOSITORY="ghcr.io/woosungchoi/fpm-alpine"
-EXPECTED_PUBLISHER_WORKFLOW="dependency-auto-publish.yml"
+EXPECTED_PUBLISHER_WORKFLOW="${EXPECTED_PUBLISHER_WORKFLOW:-dependency-auto-publish.yml}"
 
 case "$REQUESTED_MODE" in
   automatic|backfill-ghcr|recover) ;;
@@ -16,6 +16,9 @@ esac
 for command in docker cosign python3 sha256sum; do
   command -v "$command" >/dev/null 2>&1 || { echo "$command is required" >&2; exit 69; }
 done
+if [ "$REQUESTED_MODE" = automatic ]; then
+  command -v crane >/dev/null 2>&1 || { echo "crane is required" >&2; exit 69; }
+fi
 
 mkdir -p "$REPORT_DIR" "$REPORT_DIR/post-promotion" "$REPORT_DIR/rollback"
 plan_copy="$REPORT_DIR/promotion-plan.json"
@@ -39,14 +42,32 @@ if [ "$REQUESTED_MODE" != recover ] && [ "$REQUESTED_MODE" != "$operation" ]; th
 fi
 ./scripts/validate-auto-promotion-plan.py "$PLAN_FILE" --operation "$operation" \
   --emit-tsv > "$REPORT_DIR/validated-plan.tsv"
+./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
 
 resolve_digest() {
   ./scripts/resolve-image-digest.sh "$1"
 }
 
+journal_state() {
+  local minor="$1" registry="$2" payload
+  payload="$(./scripts/transaction-journal.py state "$PLAN_FILE" "$minor" "$registry")"
+  python3 - "$payload" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+attempted = payload.get("attempted")
+target = payload.get("target_digest")
+if type(attempted) is not bool or (target is not None and not isinstance(target, str)):
+    raise SystemExit("invalid transaction journal state")
+print(f"{1 if attempted else 0}\t{target or '-'}")
+PY
+}
+
 restore_ghcr_only() {
   local minor="$1" previous_ghcr="$2" rollback_ghcr_digest="$3" actual
   local source="${GHCR_REPOSITORY}@${rollback_ghcr_digest}"
+  ./scripts/transaction-journal.py recovery-attempt "$PLAN_FILE" "$minor" ghcr
+  ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
   if ! docker buildx imagetools create --tag "${GHCR_REPOSITORY}:${minor}" "$source"; then
     echo "GHCR backfill rollback mutation failed: $minor" >&2
     return 1
@@ -56,6 +77,8 @@ restore_ghcr_only() {
     echo "GHCR backfill rollback read-back mismatch: $minor" >&2
     return 1
   fi
+  ./scripts/transaction-journal.py recovery-complete \
+    "$PLAN_FILE" "$minor" ghcr "$actual"
   echo "GHCR backfill alias restored exactly: $minor@$previous_ghcr"
 }
 
@@ -63,17 +86,49 @@ restore_dual() {
   local minor="$1" previous_dockerhub="$2" previous_ghcr="$3"
   local rollback_dockerhub_backup="$4" rollback_ghcr_digest="$5"
   local restore_dockerhub="${6:-1}" restore_ghcr="${7:-1}"
-  EXPECTED_PUBLISHER_WORKFLOW="$EXPECTED_PUBLISHER_WORKFLOW" \
-  COSIGN_SIGN_DESTINATION=1 \
-  RESTORE_DOCKERHUB="$restore_dockerhub" \
-  RESTORE_GHCR="$restore_ghcr" \
-  DOCKERHUB_ROLLBACK_SOURCE="${DOCKERHUB_REPOSITORY}@${previous_dockerhub}" \
-  DOCKERHUB_ROLLBACK_FALLBACK_SOURCE="${GHCR_REPOSITORY}@${rollback_dockerhub_backup}" \
-  GHCR_ROLLBACK_SOURCE="${GHCR_REPOSITORY}@${rollback_ghcr_digest}" \
-    ./scripts/rollback-moving-aliases.sh \
-      "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" \
-      "$GHCR_REPOSITORY" "$previous_ghcr" \
-      "$minor" "$REPORT_DIR/rollback/$minor"
+  local status=0 actual
+  if [ "$restore_dockerhub" = 1 ]; then
+    ./scripts/transaction-journal.py recovery-attempt "$PLAN_FILE" "$minor" dockerhub
+  fi
+  if [ "$restore_ghcr" = 1 ]; then
+    ./scripts/transaction-journal.py recovery-attempt "$PLAN_FILE" "$minor" ghcr
+  fi
+  ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
+  if EXPECTED_PUBLISHER_WORKFLOW="$EXPECTED_PUBLISHER_WORKFLOW" \
+    COSIGN_SIGN_DESTINATION=1 \
+    TRANSACTION_PLAN_FILE="$PLAN_FILE" \
+    RESTORE_DOCKERHUB="$restore_dockerhub" \
+    RESTORE_GHCR="$restore_ghcr" \
+    DOCKERHUB_ROLLBACK_SOURCE="${DOCKERHUB_REPOSITORY}@${previous_dockerhub}" \
+    DOCKERHUB_ROLLBACK_FALLBACK_SOURCE="${GHCR_REPOSITORY}@${rollback_dockerhub_backup}" \
+    GHCR_ROLLBACK_SOURCE="${GHCR_REPOSITORY}@${rollback_ghcr_digest}" \
+      ./scripts/rollback-moving-aliases.sh \
+        "$DOCKERHUB_REPOSITORY" "$previous_dockerhub" \
+        "$GHCR_REPOSITORY" "$previous_ghcr" \
+        "$minor" "$REPORT_DIR/rollback/$minor"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [ "$restore_dockerhub" = 1 ]; then
+    if actual="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")" && \
+       [ "$actual" = "$previous_dockerhub" ]; then
+      ./scripts/transaction-journal.py recovery-complete \
+        "$PLAN_FILE" "$minor" dockerhub "$actual"
+    else
+      status=1
+    fi
+  fi
+  if [ "$restore_ghcr" = 1 ]; then
+    if actual="$(resolve_digest "${GHCR_REPOSITORY}:${minor}")" && \
+       [ "$actual" = "$previous_ghcr" ]; then
+      ./scripts/transaction-journal.py recovery-complete \
+        "$PLAN_FILE" "$minor" ghcr "$actual"
+    else
+      status=1
+    fi
+  fi
+  return "$status"
 }
 
 preflight_plan() {
@@ -98,6 +153,10 @@ preflight_plan() {
       return 1
     }
     if [ "$operation" = automatic ]; then
+      [ "$(resolve_digest "${DOCKERHUB_REPOSITORY}@${target_dockerhub}")" = "$target_dockerhub" ] || {
+        echo "Docker Hub digest-preserved staged subject changed before promotion: $minor" >&2
+        return 1
+      }
       [ "$(resolve_digest "$rollback_dockerhub_ref")" = "$rollback_dockerhub_backup" ] || {
         echo "Docker Hub rollback backup pin changed before promotion: $minor" >&2
         return 1
@@ -141,18 +200,19 @@ preflight_plan() {
 }
 
 write_recovery_result() {
-  local status="$1"
-  python3 - "$REPORT_DIR/recovery-result.json" "$operation" "$plan_sha256" "$status" <<'PY'
+  local status="$1" reason="${2:-none}"
+  python3 - "$REPORT_DIR/recovery-result.json" "$operation" "$plan_sha256" "$status" "$reason" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
-path, operation, plan_sha256, status = sys.argv[1:]
+path, operation, plan_sha256, status, reason = sys.argv[1:]
 if status not in {"restored", "unknown", "failed"}:
     raise SystemExit("invalid recovery status")
 payload = json.dumps({
-    "schema_version": 2,
+    "schema_version": 3,
     "status": status,
+    "reason": reason,
     "operation": operation,
     "plan_sha256": plan_sha256,
 }, indent=2, sort_keys=True) + "\n"
@@ -171,17 +231,33 @@ finally:
 PY
 }
 
+recovery_terminal_written=0
+emit_recovery_result() {
+  local status="$1" reason="$2" journal_reason="$3"
+  if ! write_recovery_result "$status" "$reason"; then
+    echo "local recovery evidence write failed: $reason" >&2
+  fi
+  if [ "$status" != restored ]; then
+    ./scripts/transaction-journal.py note-failure "$PLAN_FILE" "$journal_reason"
+  fi
+  recovery_terminal_written=1
+}
+
 recover_transaction() {
   local actions="$REPORT_DIR/recovery-actions.tsv"
   local unknown=0
   local minor patch source_sha canary_ref target_ghcr target_dockerhub dockerhub_source
   local previous_dockerhub previous_ghcr rollback_dockerhub_ref rollback_dockerhub_backup
   local rollback_ghcr_ref rollback_ghcr_digest current_dockerhub current_ghcr dockerhub_state ghcr_state
-  local restore_dockerhub restore_ghcr
-  : > "$actions"
+  local restore_dockerhub restore_ghcr state_line attempted journal_target
+  if ! : > "$actions"; then
+    emit_recovery_result failed classification-evidence-init classification-init
+    return 1
+  fi
   while IFS=$'\t' read -r minor patch source_sha canary_ref target_ghcr target_dockerhub \
       dockerhub_source previous_dockerhub previous_ghcr rollback_dockerhub_ref \
       rollback_dockerhub_backup rollback_ghcr_ref rollback_ghcr_digest; do
+    ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
     if ! current_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"; then
       echo "unknown Docker Hub alias state during recovery: $minor (read failed)" >&2
       unknown=1
@@ -192,57 +268,97 @@ recover_transaction() {
       unknown=1
       continue
     fi
-    if [ "$current_ghcr" = "$previous_ghcr" ]; then
-      ghcr_state=prior
-    elif [ "$current_ghcr" = "$target_ghcr" ]; then
-      ghcr_state=target
-    else
-      echo "unknown GHCR alias state during recovery: $minor@$current_ghcr" >&2
-      unknown=1
-      continue
-    fi
-    if [ "$current_dockerhub" = "$previous_dockerhub" ]; then
-      dockerhub_state=prior
-    elif [ "$operation" = automatic ]; then
-      if ./scripts/verify-published-dockerhub-image.sh \
-           "${DOCKERHUB_REPOSITORY}@${current_dockerhub}" "$source_sha" "$patch" \
-           "$REPORT_DIR/recovery-classify/$minor/dockerhub" && \
-         ./scripts/verify-rollback-image.sh \
-           "${DOCKERHUB_REPOSITORY}@${current_dockerhub}" \
-           "${GHCR_REPOSITORY}@${target_ghcr}" "$minor" \
-           "$REPORT_DIR/recovery-classify/$minor/parity"; then
-        dockerhub_state=target
-      else
-        echo "unknown Docker Hub alias state during recovery: $minor@$current_dockerhub" >&2
+
+    if [ "$operation" = automatic ]; then
+      if ! state_line="$(journal_state "$minor" dockerhub)"; then
+        echo "Docker Hub ownership journal read failed: $minor" >&2
         unknown=1
         continue
       fi
+      IFS=$'\t' read -r attempted journal_target <<< "$state_line"
+      if [ "$attempted" = 0 ]; then
+        if [ "$current_dockerhub" = "$previous_dockerhub" ]; then
+          dockerhub_state=prior
+        else
+          echo "Docker Hub changed without a durable transaction attempt: $minor" >&2
+          unknown=1
+          continue
+        fi
+      elif [ "$journal_target" != "$target_dockerhub" ]; then
+        echo "Docker Hub journal target mismatch: $minor" >&2
+        unknown=1
+        continue
+      elif [ "$current_dockerhub" = "$previous_dockerhub" ]; then
+        dockerhub_state=prior
+      elif [ "$current_dockerhub" = "$journal_target" ]; then
+        dockerhub_state=target
+      else
+        echo "unknown Docker Hub exact state during recovery: $minor@$current_dockerhub" >&2
+        unknown=1
+        continue
+      fi
+    elif [ "$current_dockerhub" = "$previous_dockerhub" ]; then
+      dockerhub_state=prior
     else
       echo "Docker Hub changed during a GHCR-only backfill: $minor@$current_dockerhub" >&2
       unknown=1
       continue
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+
+    if ! state_line="$(journal_state "$minor" ghcr)"; then
+      echo "GHCR ownership journal read failed: $minor" >&2
+      unknown=1
+      continue
+    fi
+    IFS=$'\t' read -r attempted journal_target <<< "$state_line"
+    if [ "$attempted" = 0 ]; then
+      if [ "$current_ghcr" = "$previous_ghcr" ]; then
+        ghcr_state=prior
+      else
+        echo "GHCR changed without a durable transaction attempt: $minor" >&2
+        unknown=1
+        continue
+      fi
+    elif [ "$journal_target" != "$target_ghcr" ]; then
+      echo "GHCR journal target mismatch: $minor" >&2
+      unknown=1
+      continue
+    elif [ "$current_ghcr" = "$previous_ghcr" ]; then
+      ghcr_state=prior
+    elif [ "$current_ghcr" = "$journal_target" ]; then
+      ghcr_state=target
+    else
+      echo "unknown GHCR exact state during recovery: $minor@$current_ghcr" >&2
+      unknown=1
+      continue
+    fi
+
+    if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$minor" "$previous_dockerhub" "$previous_ghcr" \
       "$rollback_dockerhub_backup" "$rollback_ghcr_digest" \
-      "$dockerhub_state" "$ghcr_state" "$current_dockerhub" "$current_ghcr" >> "$actions"
+      "$dockerhub_state" "$ghcr_state" "$current_dockerhub" "$current_ghcr" >> "$actions"; then
+      emit_recovery_result failed classification-evidence-append classification-append
+      return 1
+    fi
   done < "$REPORT_DIR/validated-plan.tsv"
+
   if [ "$unknown" -ne 0 ]; then
-    write_recovery_result unknown || echo "unknown recovery evidence write failed" >&2
+    emit_recovery_result unknown unknown-alias-or-ownership-state classification-unknown
     echo "recovery classified an unknown state; no moving aliases were modified" >&2
     return 1
   fi
 
   while IFS=$'\t' read -r minor _ _ _ _ _ _ classified_dockerhub classified_ghcr; do
+    ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
     if ! current_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")" || \
        [ "$current_dockerhub" != "$classified_dockerhub" ]; then
-      write_recovery_result unknown || echo "unknown recovery evidence write failed" >&2
+      emit_recovery_result unknown dockerhub-post-classification-drift classification-unknown
       echo "Docker Hub alias changed after recovery classification: $minor" >&2
       return 1
     fi
     if ! current_ghcr="$(resolve_digest "${GHCR_REPOSITORY}:${minor}")" || \
        [ "$current_ghcr" != "$classified_ghcr" ]; then
-      write_recovery_result unknown || echo "unknown recovery evidence write failed" >&2
+      emit_recovery_result unknown ghcr-post-classification-drift classification-unknown
       echo "GHCR alias changed after recovery classification: $minor" >&2
       return 1
     fi
@@ -252,6 +368,7 @@ recover_transaction() {
   while IFS=$'\t' read -r minor previous_dockerhub previous_ghcr \
       rollback_dockerhub_backup rollback_ghcr_digest dockerhub_state ghcr_state \
       classified_dockerhub classified_ghcr; do
+    ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
     if ! current_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")" || \
        ! current_ghcr="$(resolve_digest "${GHCR_REPOSITORY}:${minor}")" || \
        [ "$current_dockerhub" != "$classified_dockerhub" ] || \
@@ -273,7 +390,13 @@ recover_transaction() {
     elif [ "$ghcr_state" = target ]; then
       restore_ghcr_only "$minor" "$previous_ghcr" "$rollback_ghcr_digest" || recovery_status=1
     fi
+    [ "$recovery_status" -eq 0 ] || break
   done < "$actions"
+
+  if [ "$recovery_status" -ne 0 ]; then
+    emit_recovery_result failed restore-failed restore-failed
+    return 1
+  fi
 
   while IFS=$'\t' read -r minor previous_dockerhub previous_ghcr \
       _rollback_dockerhub_backup _rollback_ghcr_digest _dockerhub_state _ghcr_state \
@@ -296,16 +419,38 @@ recover_transaction() {
   done < "$actions"
 
   if [ "$recovery_status" -ne 0 ]; then
-    write_recovery_result failed || echo "failed recovery evidence write failed" >&2
+    emit_recovery_result failed final-readback-failed final-readback
     return 1
   fi
 
-  write_recovery_result restored
-  echo "recovery restored every known attempted alias to its exact registry baseline"
+  emit_recovery_result restored exact-baseline-readback restore-failed
+  echo "recovery restored every durably attempted alias to its exact registry baseline"
 }
 
 if [ "$REQUESTED_MODE" = recover ]; then
+  # Invoked indirectly by the EXIT trap below.
+  # shellcheck disable=SC2329
+  on_recovery_exit() {
+    local status=$? reason=unexpected-exit journal_reason=unexpected-exit
+    trap - EXIT
+    trap '' INT TERM
+    if [ "$status" -eq 130 ]; then
+      reason=signal-int
+      journal_reason=signal-int
+    elif [ "$status" -eq 143 ]; then
+      reason=signal-term
+      journal_reason=signal-term
+    fi
+    if [ "$recovery_terminal_written" -eq 0 ]; then
+      emit_recovery_result failed "$reason" "$journal_reason" || true
+    fi
+    exit "$status"
+  }
+  trap on_recovery_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   recover_transaction
+  trap - EXIT INT TERM
   exit 0
 fi
 
@@ -324,15 +469,16 @@ rollback_all() {
   local previous_dockerhub previous_ghcr _rollback_dockerhub_ref rollback_dockerhub_backup
   local _rollback_ghcr_ref rollback_ghcr_digest
   local current_dockerhub current_ghcr dockerhub_state ghcr_state
-  local restore_dockerhub restore_ghcr
+  local restore_dockerhub restore_ghcr state_line attempted_registry journal_target
   if ! : > "$classification"; then
     echo "rollback classification evidence could not be initialized" >&2
     return 1
   fi
 
-  while IFS=$'\t' read -r minor patch source_sha _canary_ref target_ghcr _target_dockerhub \
+  while IFS=$'\t' read -r minor patch source_sha _canary_ref target_ghcr target_dockerhub \
       _dockerhub_source previous_dockerhub previous_ghcr _rollback_dockerhub_ref \
       rollback_dockerhub_backup _rollback_ghcr_ref rollback_ghcr_digest; do
+    ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
     if ! current_dockerhub="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"; then
       echo "unknown Docker Hub alias state before rollback: $minor (read failed)" >&2
       unknown=1
@@ -344,29 +490,52 @@ rollback_all() {
       continue
     fi
 
-    if [ "$current_ghcr" = "$previous_ghcr" ]; then
-      ghcr_state=prior
-    elif [ "$current_ghcr" = "$target_ghcr" ]; then
-      ghcr_state=target
+    if [ "$operation" = automatic ]; then
+      if ! state_line="$(journal_state "$minor" dockerhub)"; then
+        unknown=1
+        continue
+      fi
+      IFS=$'\t' read -r attempted_registry journal_target <<< "$state_line"
+      if [ "$attempted_registry" = 0 ]; then
+        if [ "$current_dockerhub" = "$previous_dockerhub" ]; then
+          dockerhub_state=prior
+        else
+          unknown=1
+          continue
+        fi
+      elif [ "$journal_target" = "$target_dockerhub" ] && \
+           [ "$current_dockerhub" = "$target_dockerhub" ]; then
+        dockerhub_state=target
+      elif [ "$current_dockerhub" = "$previous_dockerhub" ]; then
+        dockerhub_state=prior
+      else
+        unknown=1
+        continue
+      fi
+    elif [ "$current_dockerhub" = "$previous_dockerhub" ]; then
+      dockerhub_state=prior
     else
-      echo "unknown GHCR alias state before rollback: $minor@$current_ghcr" >&2
       unknown=1
       continue
     fi
 
-    if [ "$current_dockerhub" = "$previous_dockerhub" ]; then
-      dockerhub_state=prior
-    elif [ "$operation" = automatic ] && \
-         ./scripts/verify-published-dockerhub-image.sh \
-           "${DOCKERHUB_REPOSITORY}@${current_dockerhub}" "$source_sha" "$patch" \
-           "$REPORT_DIR/rollback-classify/$minor/dockerhub" && \
-         ./scripts/verify-rollback-image.sh \
-           "${DOCKERHUB_REPOSITORY}@${current_dockerhub}" \
-           "${GHCR_REPOSITORY}@${target_ghcr}" "$minor" \
-           "$REPORT_DIR/rollback-classify/$minor/parity"; then
-      dockerhub_state=target
+    if ! state_line="$(journal_state "$minor" ghcr)"; then
+      unknown=1
+      continue
+    fi
+    IFS=$'\t' read -r attempted_registry journal_target <<< "$state_line"
+    if [ "$attempted_registry" = 0 ]; then
+      if [ "$current_ghcr" = "$previous_ghcr" ]; then
+        ghcr_state=prior
+      else
+        unknown=1
+        continue
+      fi
+    elif [ "$journal_target" = "$target_ghcr" ] && [ "$current_ghcr" = "$target_ghcr" ]; then
+      ghcr_state=target
+    elif [ "$current_ghcr" = "$previous_ghcr" ]; then
+      ghcr_state=prior
     else
-      echo "unknown Docker Hub alias state before rollback: $minor@$current_dockerhub" >&2
       unknown=1
       continue
     fi
@@ -478,24 +647,50 @@ while IFS=$'\t' read -r minor patch source_sha canary_ref target_ghcr target_doc
     "$minor" "$patch" "$source_sha" "$canary_ref" "$target_ghcr" "$target_dockerhub" \
     "$dockerhub_source" "$previous_dockerhub" "$previous_ghcr" "$rollback_dockerhub_ref" \
     "$rollback_dockerhub_backup" "$rollback_ghcr_ref" "$rollback_ghcr_digest" >> "$attempted"
-  mutation_started=1
 
+  ghcr_minor_ref="${GHCR_REPOSITORY}:${minor}"
+  ghcr_patch_ref="${GHCR_REPOSITORY}:${patch}-${source_sha:0:12}"
+  ghcr_date_ref="${GHCR_REPOSITORY}:${release_date}-${minor}"
+  ./scripts/transaction-journal.py attempt "$PLAN_FILE" "$minor" ghcr \
+    --subject "$ghcr_minor_ref" \
+    --subject "$ghcr_patch_ref" \
+    --subject "$ghcr_date_ref"
+  mutation_started=1
+  ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
   ./scripts/promote-image.sh --policy evidence \
     "$GHCR_REPOSITORY" "$GHCR_REPOSITORY" "$target_ghcr" \
     "$minor" "$patch" "$source_sha" "$release_date"
-  if [ "$operation" = automatic ]; then
-    ./scripts/promote-image.sh --policy moving-only \
-      "$DOCKERHUB_REPOSITORY" "$GHCR_REPOSITORY" "$target_ghcr" \
-      "$minor" "$patch" "$source_sha" "$release_date"
-  fi
-
-  dockerhub_actual="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"
-  ghcr_actual="$(resolve_digest "${GHCR_REPOSITORY}:${minor}")"
+  ghcr_actual="$(resolve_digest "$ghcr_minor_ref")"
   [ "$ghcr_actual" = "$target_ghcr" ] || {
     echo "GHCR moving alias mismatch after promotion: $minor" >&2
     exit 1
   }
-  if [ "$operation" = backfill-ghcr ]; then
+  ghcr_patch_actual="$(resolve_digest "$ghcr_patch_ref")"
+  ghcr_date_actual="$(resolve_digest "$ghcr_date_ref")"
+  [ "$ghcr_patch_actual" = "$target_ghcr" ] && \
+    [ "$ghcr_date_actual" = "$target_ghcr" ] || {
+    echo "GHCR immutable evidence tag batch mismatch after promotion: $minor" >&2
+    exit 1
+  }
+  ./scripts/transaction-journal.py complete \
+    "$PLAN_FILE" "$minor" ghcr "$ghcr_actual" \
+    --observed-subject "$ghcr_minor_ref=$ghcr_actual" \
+    --observed-subject "$ghcr_patch_ref=$ghcr_patch_actual" \
+    --observed-subject "$ghcr_date_ref=$ghcr_date_actual"
+
+  if [ "$operation" = automatic ]; then
+    ./scripts/transaction-journal.py attempt "$PLAN_FILE" "$minor" dockerhub
+    ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"
+    ./scripts/promote-dockerhub-exact.sh "$PLAN_FILE" "$minor"
+    dockerhub_actual="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"
+    [ "$dockerhub_actual" = "$target_dockerhub" ] || {
+      echo "Docker Hub moving alias mismatch after promotion: $minor" >&2
+      exit 1
+    }
+    ./scripts/transaction-journal.py complete \
+      "$PLAN_FILE" "$minor" dockerhub "$dockerhub_actual"
+  else
+    dockerhub_actual="$(resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")"
     [ "$dockerhub_actual" = "$previous_dockerhub" ] || {
       echo "Docker Hub changed during GHCR-only backfill: $minor" >&2
       exit 1
@@ -504,18 +699,25 @@ while IFS=$'\t' read -r minor patch source_sha canary_ref target_ghcr target_doc
 
   verify_dockerhub_signature=0
   if [ "$operation" = automatic ]; then
+    ./scripts/transaction-journal.py referrer-attempt \
+      "$PLAN_FILE" "$minor"
     cosign sign --yes -a "fpm.operation=$operation" \
       "${DOCKERHUB_REPOSITORY}@${dockerhub_actual}"
     verify_dockerhub_signature=1
   fi
   DOCKER_CONFIG="$anonymous_docker_config" \
   EXPECTED_PUBLISHER_WORKFLOW="$EXPECTED_PUBLISHER_WORKFLOW" \
+  EXPECTED_OPERATION="$operation" \
   VERIFY_DOCKERHUB_SIGNATURE="$verify_dockerhub_signature" \
     ./scripts/verify-published-image.sh \
       "${DOCKERHUB_REPOSITORY}@${dockerhub_actual}" \
       "${GHCR_REPOSITORY}@${ghcr_actual}" \
       "$source_sha" "$patch" \
       "$REPORT_DIR/post-promotion/$minor" main
+  if [ "$operation" = automatic ]; then
+    ./scripts/transaction-journal.py referrer-complete \
+      "$PLAN_FILE" "$minor" "$dockerhub_actual"
+  fi
   [ "$(DOCKER_CONFIG="$anonymous_docker_config" \
       resolve_digest "${DOCKERHUB_REPOSITORY}:${minor}")" = "$dockerhub_actual" ]
   [ "$(DOCKER_CONFIG="$anonymous_docker_config" \

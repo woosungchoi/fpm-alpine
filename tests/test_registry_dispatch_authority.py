@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 OWNER_ENV = {
+    "EVENT_NAME": "repository_dispatch",
     "EVENT_ACTOR": "woosungchoi",
     "EVENT_ACTOR_ID": "5674610",
     "EVENT_REPOSITORY": "woosungchoi/fpm-alpine",
@@ -84,18 +85,16 @@ class RegistryDispatchAuthorityTests(unittest.TestCase):
             "legacy_publisher_disabled": True,
             "legacy_cutover_evidence_sha256": "b" * 64,
         }
-        for payload in (canary, production):
-            with self.subTest(payload=payload["channel"]):
-                completed = run_envelope(
-                    envelope,
-                    payload,
-                    EVENT_ACTION="fpm-manual-publish",
-                )
-                self.assertEqual(completed.returncode, 0, completed.stderr)
+        completed = run_envelope(
+            envelope,
+            canary,
+            EVENT_ACTION="fpm-manual-publish",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         invalid = (
             ({**canary, "unknown": "value"}, {}),
             ({**canary, "canary_run_id": 123}, {}),
-            ({**production, "legacy_publisher_disabled": 1}, {}),
+            (production, {}),
             (production, {"EVENT_ACTOR_ID": "1"}),
         )
         for payload, override in invalid:
@@ -135,42 +134,65 @@ class RegistryDispatchAuthorityTests(unittest.TestCase):
             )
             self.assertNotEqual(invalid.returncode, 0)
 
-    def test_prune_modes_are_exact_owner_payloads_and_share_mutation_lock(self) -> None:
+    def test_dependency_backfill_and_recovery_are_owner_bound_before_checkout(self) -> None:
+        cases = (
+            (
+                "dependency-auto-publish.yml",
+                "fpm-ghcr-backfill",
+                {"operation": "backfill-ghcr", "source_sha": "a" * 40},
+            ),
+            (
+                "dependency-publish-recovery.yml",
+                "fpm-publish-recover",
+                {
+                    "operation": "recovery",
+                    "original_run_id": 123,
+                    "original_run_attempt": 1,
+                    "plan_sha256": "b" * 64,
+                },
+            ),
+        )
+        for workflow_name, action, payload in cases:
+            with self.subTest(workflow=workflow_name):
+                workflow = load_workflow(workflow_name)
+                prepare = workflow["jobs"]["prepare"]
+                first = prepare["steps"][0]
+                self.assertEqual(first["name"], "Validate owner dispatch envelope before checkout")
+                completed = run_envelope(first["run"], payload, EVENT_ACTION=action)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                for bad_payload, overrides in (
+                    ({**payload, "unknown": True}, {}),
+                    (payload, {"EVENT_ACTOR_ID": "1"}),
+                    (payload, {"EVENT_REPOSITORY": "other/repository"}),
+                    (payload, {"EVENT_REF": "refs/heads/topic"}),
+                ):
+                    rejected = run_envelope(
+                        first["run"],
+                        bad_payload,
+                        EVENT_ACTION=action,
+                        **overrides,
+                    )
+                    self.assertNotEqual(rejected.returncode, 0)
+
+    def test_prune_is_owner_bound_read_only_plan_only(self) -> None:
         workflow = load_workflow("prune-dockerhub-tags.yml")
         self.assertEqual(
             trigger(workflow),
             {"repository_dispatch": {"types": ["fpm-dockerhub-prune"]}},
         )
-        self.assertIn("fpm-production-promotion", workflow["concurrency"]["group"])
+        self.assertEqual(set(workflow["jobs"]), {"authorize", "plan"})
         authorize = workflow["jobs"]["authorize"]
         envelope = authorize["steps"][0]["run"]
-        base = {
-            "plan_run_id": 123,
-            "expected_inventory_sha256": "b" * 64,
-            "expected_deletion_plan_sha256": "c" * 64,
-        }
-        valid_payloads = (
+        completed = run_envelope(
+            envelope,
             {"mode": "plan"},
-            {"mode": "archive", **base},
-            {
-                "mode": "apply",
-                **base,
-                "confirmation": "DELETE NON-ACTIVE DOCKER HUB TAGS",
-            },
+            EVENT_ACTION="fpm-dockerhub-prune",
         )
-        for payload in valid_payloads:
-            with self.subTest(mode=payload["mode"]):
-                completed = run_envelope(
-                    envelope,
-                    payload,
-                    EVENT_ACTION="fpm-dockerhub-prune",
-                )
-                self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         invalid_payloads = (
             {"mode": "plan", "plan_run_id": 123},
-            {"mode": "archive", **base, "confirmation": "extra"},
-            {"mode": "apply", **base, "confirmation": "wrong"},
-            {"mode": "apply", **base, "plan_run_id": True, "confirmation": "DELETE NON-ACTIVE DOCKER HUB TAGS"},
+            {"mode": "archive"},
+            {"mode": "apply"},
         )
         for payload in invalid_payloads:
             with self.subTest(payload=payload):
@@ -181,15 +203,22 @@ class RegistryDispatchAuthorityTests(unittest.TestCase):
                 )
                 self.assertNotEqual(completed.returncode, 0)
 
-        for job_name, mode in (("plan", "plan"), ("archive", "archive"), ("apply", "apply")):
-            job = workflow["jobs"][job_name]
-            self.assertEqual(job["needs"], "authorize")
-            self.assertIn(f"needs.authorize.outputs.mode == '{mode}'", job["if"])
-            checkout = next(step for step in job["steps"] if step["name"] == "Checkout trusted main")
-            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        job = workflow["jobs"]["plan"]
+        self.assertEqual(job["needs"], "authorize")
+        self.assertIn("needs.authorize.outputs.mode == 'plan'", job["if"])
+        checkout = next(step for step in job["steps"] if step["name"] == "Checkout trusted main")
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
         text = (WORKFLOWS / "prune-dockerhub-tags.yml").read_text()
         self.assertNotIn("workflow_dispatch", text)
-        self.assertEqual(text.count('run.get("event") == "repository_dispatch"'), 2)
+        for forbidden in (
+            "DOCKERHUB_TOKEN",
+            "packages: write",
+            "id-token: write",
+            "prune-dockerhub-tags.py apply",
+            "archive-dockerhub-tags.py",
+            "environment:",
+        ):
+            self.assertNotIn(forbidden, text)
 
 
 if __name__ == "__main__":

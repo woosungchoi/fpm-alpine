@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -52,12 +56,18 @@ class RefreshCutoverLeaseTests(unittest.TestCase):
         with mock.patch.object(self.module, "_gh_json", side_effect=self.gh_payload), mock.patch.object(
             self.module, "_url_json", side_effect=self.dockerhub_payload
         ):
-            raw = self.module.capture(SOURCE)
+            raw = self.module.capture(
+                SOURCE,
+                in_flight_builds=0,
+                queue_evidence="dockerhub-ui-owner-observation",
+            )
         text = raw.decode()
-        self.assertIn('"schemaVersion":1', text)
+        self.assertIn('"schema_version":2', text)
         self.assertIn(f'"source_sha":"{SOURCE}"', text)
         self.assertIn('"public_is_automated":false', text)
         self.assertIn('"in_flight_builds":0', text)
+        self.assertIn('"queue_evidence":"dockerhub-ui-owner-observation"', text)
+        self.assertIn('"queue_observed_at":', text)
         self.assertIn('"id":402842509', text)
         self.assertNotIn("00000000-0000-4000-8000-000000000000", text)
 
@@ -78,7 +88,52 @@ class RefreshCutoverLeaseTests(unittest.TestCase):
                 ),
                 self.assertRaises(SystemExit),
             ):
+                self.module.capture(
+                    SOURCE,
+                    in_flight_builds=0,
+                    queue_evidence="dockerhub-ui-owner-observation",
+                )
+
+    def test_capture_never_synthesizes_zero_in_flight(self) -> None:
+        with mock.patch.object(self.module, "_gh_json", side_effect=self.gh_payload), mock.patch.object(
+            self.module, "_url_json", side_effect=self.dockerhub_payload
+        ):
+            with self.assertRaises(TypeError):
                 self.module.capture(SOURCE)
+            with self.assertRaises(SystemExit):
+                self.module.capture(
+                    SOURCE,
+                    in_flight_builds=1,
+                    queue_evidence="dockerhub-ui-owner-observation",
+                )
+
+    def test_exact_capture_bytes_are_accepted_by_shared_consumer(self) -> None:
+        with mock.patch.object(self.module, "_gh_json", side_effect=self.gh_payload), mock.patch.object(
+            self.module, "_url_json", side_effect=self.dockerhub_payload
+        ):
+            raw = self.module.capture(
+                SOURCE,
+                in_flight_builds=0,
+                queue_evidence="dockerhub-ui-owner-observation",
+            )
+        digest = hashlib.sha256(raw).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary)
+            (evidence_dir / "cutover-evidence.json").write_bytes(raw)
+            completed = subprocess.run(
+                [
+                    str(ROOT / "scripts" / "validate-legacy-cutover-evidence.py"),
+                    SOURCE,
+                    digest,
+                    str(evidence_dir),
+                ],
+                cwd=ROOT,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_active_publisher_requires_exact_source_path_event_and_status(self) -> None:
         valid = {
@@ -89,6 +144,15 @@ class RefreshCutoverLeaseTests(unittest.TestCase):
         }
         with mock.patch.object(
             self.module, "_gh_json", return_value={"workflow_runs": [valid]}
+        ):
+            self.assertTrue(self.module._active_publisher_for(SOURCE))
+        recovery = {
+            **valid,
+            "event": "schedule",
+            "path": ".github/workflows/dependency-publish-recovery.yml",
+        }
+        with mock.patch.object(
+            self.module, "_gh_json", return_value={"workflow_runs": [recovery]}
         ):
             self.assertTrue(self.module._active_publisher_for(SOURCE))
         for key, value in (

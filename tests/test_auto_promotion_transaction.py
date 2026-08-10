@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TRANSACTION = ROOT / "scripts" / "promote-auto-canaries.sh"
 PLAN_VALIDATOR = ROOT / "scripts" / "validate-auto-promotion-plan.py"
+JOURNAL = ROOT / "scripts" / "transaction-journal.py"
+PROMOTE_DOCKERHUB = ROOT / "scripts" / "promote-dockerhub-exact.sh"
 MINORS = ("8.2", "8.3", "8.4", "8.5")
 
 
@@ -82,7 +85,7 @@ class AutoPromotionTransactionTests(unittest.TestCase):
         scripts.mkdir()
         fake_bin.mkdir()
         build.mkdir()
-        for source in (TRANSACTION, PLAN_VALIDATOR):
+        for source in (TRANSACTION, PLAN_VALIDATOR, JOURNAL, PROMOTE_DOCKERHUB):
             shutil.copy2(source, scripts / source.name)
             (scripts / source.name).chmod(0o755)
 
@@ -103,12 +106,15 @@ class AutoPromotionTransactionTests(unittest.TestCase):
             previous_dockerhub = digest(100 + index)
             previous_ghcr = digest(300 + index)
             target_ghcr = digest(200 + index)
-            target_dockerhub = digest(500 + index)
+            target_dockerhub = target_ghcr
             rollback_dockerhub_backup = previous_dockerhub
             canary_ref = f"{GHCR}:canary-{minor}-{RUN_ID}-{RUN_ATTEMPT}"
             rollback_ghcr_ref = f"{GHCR}:rollback-auto-ghcr-{minor}-{RUN_ID}-{RUN_ATTEMPT}"
             state[f"{DOCKERHUB}:{minor}"] = previous_dockerhub
             state[f"{GHCR}:{minor}"] = previous_ghcr
+            state[f"{DOCKERHUB}@{previous_dockerhub}"] = previous_dockerhub
+            state[f"{GHCR}@{previous_ghcr}"] = previous_ghcr
+            state[f"{GHCR}@{target_ghcr}"] = target_ghcr
             state[canary_ref] = target_ghcr
             state[rollback_ghcr_ref] = previous_ghcr
             if mode == "automatic":
@@ -116,8 +122,9 @@ class AutoPromotionTransactionTests(unittest.TestCase):
                     f"{GHCR}:rollback-auto-dockerhub-{minor}-{RUN_ID}-{RUN_ATTEMPT}"
                 )
                 state[rollback_dockerhub_ref] = rollback_dockerhub_backup
+                state[f"{DOCKERHUB}@{target_dockerhub}"] = target_dockerhub
                 dockerhub_source = None
-                frozen_dockerhub_target = None
+                frozen_dockerhub_target = target_dockerhub
                 frozen_backup = rollback_dockerhub_backup
                 target_map[target_ghcr] = target_dockerhub
             else:
@@ -178,14 +185,11 @@ unavailable = set(filter(None, (
 ).split(',')))
 if ref in unavailable:
     raise SystemExit(1)
-if re.fullmatch(r'.+@sha256:[0-9a-f]{64}', ref):
-    print(ref.rsplit('@', 1)[1])
-else:
-    state = json.loads(Path(os.environ['MOCK_STATE']).read_text())
-    value = state.get(ref)
-    if value is None:
-        raise SystemExit(1)
-    print(value)
+state = json.loads(Path(os.environ['MOCK_STATE']).read_text())
+value = state.get(ref)
+if value is None:
+    raise SystemExit(1)
+print(value)
 """,
         )
         self.write_executable(
@@ -199,7 +203,7 @@ if check:
     args = args[1:]
 if len(args) != 9 or args[0] != '--policy':
     raise SystemExit(64)
-policy, target_repo, source_repo, source_digest, minor = args[1:6]
+policy, target_repo, source_repo, source_digest, minor, patch, source_sha, release_date = args[1:]
 with open(os.environ['MOCK_LOG'], 'a') as log:
     log.write(f"{'check' if check else 'mutate'}|{policy}|{minor}|{source_digest}\\n")
 if check:
@@ -211,6 +215,8 @@ if policy == 'moving-only':
     state[f"{target_repo}:{minor}"] = mapping[source_digest]
 else:
     state[f"{target_repo}:{minor}"] = source_digest
+    state[f"{target_repo}:{patch}-{source_sha[:12]}"] = source_digest
+    state[f"{target_repo}:{release_date}-{minor}"] = source_digest
 state_path.write_text(json.dumps(state, sort_keys=True))
 if os.environ.get('MOCK_FAIL_PROMOTE') == f"{policy}:{minor}":
     raise SystemExit(7)
@@ -245,6 +251,10 @@ state_path.write_text(json.dumps(state, sort_keys=True))
 Path(report_dir).mkdir(parents=True, exist_ok=True)
 with open(os.environ['MOCK_LOG'], 'a') as log:
     log.write(f"rollback-dual|{minor}|{previous_dockerhub}|{previous_ghcr}\\n")
+if os.environ.get('MOCK_BLOCK_ROLLBACK_MINOR') == minor:
+    Path(os.environ['MOCK_BLOCK_MARKER']).write_text(minor)
+    import time
+    time.sleep(60)
 if os.environ.get('MOCK_FAIL_ROLLBACK') == minor:
     raise SystemExit(8)
 raise SystemExit(status)
@@ -323,6 +333,34 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
 """,
         )
         self.write_executable(
+            fake_bin / "crane",
+            """#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+if len(args) == 2 and args[0] == 'digest':
+    state = json.loads(Path(os.environ['MOCK_STATE']).read_text())
+    value = state.get(args[1])
+    if value is None:
+        raise SystemExit(1)
+    print(value)
+    raise SystemExit(0)
+if len(args) == 3 and args[0] == 'tag':
+    source, minor = args[1:]
+    repository, target = source.rsplit('@', 1)
+    state_path = Path(os.environ['MOCK_STATE'])
+    state = json.loads(state_path.read_text())
+    state[f"{repository}:{minor}"] = target
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    with open(os.environ['MOCK_LOG'], 'a') as log:
+        log.write(f"mutate|moving-only|{minor}|{target}\\n")
+    if os.environ.get('MOCK_FAIL_PROMOTE') == f"moving-only:{minor}":
+        raise SystemExit(7)
+    raise SystemExit(0)
+raise SystemExit(64)
+""",
+        )
+        self.write_executable(
             fake_bin / "docker",
             """#!/usr/bin/env python3
 import json, os, sys
@@ -349,6 +387,7 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
                 "MOCK_STATE": str(state_path),
                 "MOCK_LOG": str(log_path),
                 "MOCK_TARGET_MAP": str(target_map_path),
+                "TRANSACTION_JOURNAL_DIR": str(root / "transaction-journal"),
             }
         )
         return Fixture(env, plan_path, state_path, log_path, baseline, targets)
@@ -357,6 +396,58 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
     def run_transaction(
         root: Path, mode: str, fixture: Fixture
     ) -> subprocess.CompletedProcess[str]:
+        begin = subprocess.run(
+            ["scripts/transaction-journal.py", "begin", str(fixture.plan)],
+            cwd=root,
+            env=fixture.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if begin.returncode != 0:
+            return begin
+        pending = subprocess.run(
+            ["scripts/transaction-journal.py", "pending"],
+            cwd=root, env=fixture.env, text=True, capture_output=True, check=True,
+        )
+        lock_state = json.loads(pending.stdout)["lock_state"]
+        if lock_state == "PREPARED":
+            payload = json.loads(fixture.plan.read_text())
+            for unit in payload["release_units"]:
+                minor = unit["php_minor"]
+                writes = [("pin-ghcr", unit["rollback_ghcr_digest"])]
+                if payload["operation"] == "automatic":
+                    writes.extend((
+                        ("pin-dockerhub-backup", unit["rollback_dockerhub_backup_digest"]),
+                        ("stage-dockerhub", unit["target_dockerhub_digest"]),
+                    ))
+                for kind, observed in writes:
+                    for command in ("prepare-attempt", "prepare-complete"):
+                        arguments = [
+                            "scripts/transaction-journal.py", command,
+                            str(fixture.plan), minor, kind,
+                        ]
+                        if command == "prepare-complete":
+                            arguments.append(observed)
+                        prepared = subprocess.run(
+                            arguments, cwd=root, env=fixture.env, text=True,
+                            capture_output=True, check=False,
+                        )
+                        if prepared.returncode != 0:
+                            return prepared
+            activated = subprocess.run(
+                ["scripts/transaction-journal.py", "activate", str(fixture.plan)],
+                cwd=root, env=fixture.env, text=True, capture_output=True, check=False,
+            )
+            if activated.returncode != 0:
+                return activated
+        if mode == "recover":
+            recovering = subprocess.run(
+                ["scripts/transaction-journal.py", "recover-begin", str(fixture.plan)],
+                cwd=root, env=fixture.env, text=True, capture_output=True, check=False,
+            )
+            if recovering.returncode != 0:
+                return recovering
         return subprocess.run(
             [
                 "bash",
@@ -376,7 +467,49 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
     def state(fixture: Fixture) -> dict[str, str]:
         return json.loads(fixture.state_path.read_text())
 
-    def test_automatic_accepts_semantic_parity_with_distinct_registry_digests(self) -> None:
+    @staticmethod
+    def record_attempt(root: Path, fixture: Fixture, minor: str, registry: str) -> None:
+        begin = subprocess.run(
+            ["scripts/transaction-journal.py", "begin", str(fixture.plan)],
+            cwd=root,
+            env=fixture.env,
+            check=True,
+        )
+        del begin
+        pending = subprocess.run(
+            ["scripts/transaction-journal.py", "pending"], cwd=root,
+            env=fixture.env, text=True, capture_output=True, check=True,
+        )
+        if json.loads(pending.stdout)["lock_state"] == "PREPARED":
+            payload = json.loads(fixture.plan.read_text())
+            for unit in payload["release_units"]:
+                unit_minor = unit["php_minor"]
+                writes = [("pin-ghcr", unit["rollback_ghcr_digest"])]
+                if payload["operation"] == "automatic":
+                    writes.extend((
+                        ("pin-dockerhub-backup", unit["rollback_dockerhub_backup_digest"]),
+                        ("stage-dockerhub", unit["target_dockerhub_digest"]),
+                    ))
+                for kind, observed in writes:
+                    subprocess.run(
+                        ["scripts/transaction-journal.py", "prepare-attempt", str(fixture.plan), unit_minor, kind],
+                        cwd=root, env=fixture.env, check=True,
+                    )
+                    subprocess.run(
+                        ["scripts/transaction-journal.py", "prepare-complete", str(fixture.plan), unit_minor, kind, observed],
+                        cwd=root, env=fixture.env, check=True,
+                    )
+            subprocess.run(
+                ["scripts/transaction-journal.py", "activate", str(fixture.plan)],
+                cwd=root, env=fixture.env, check=True,
+            )
+        subprocess.run(
+            ["scripts/transaction-journal.py", "attempt", str(fixture.plan), minor, registry],
+            cwd=root, env=fixture.env, check=True,
+        )
+
+
+    def test_automatic_uses_digest_preserved_registry_local_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self.fixture(root, "automatic")
@@ -385,14 +518,14 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
             state = self.state(fixture)
             for minor in MINORS:
                 dockerhub_target, ghcr_target = fixture.targets[minor]
-                self.assertNotEqual(dockerhub_target, ghcr_target)
+                self.assertEqual(dockerhub_target, ghcr_target)
                 self.assertEqual(state[f"{DOCKERHUB}:{minor}"], dockerhub_target)
                 self.assertEqual(state[f"{GHCR}:{minor}"], ghcr_target)
             payload = json.loads((root / "reports/transaction-result.json").read_text())
             self.assertEqual(payload["status"], "verified")
             self.assertTrue(
                 all(
-                    row["dockerhub_digest"] != row["ghcr_digest"]
+                    row["dockerhub_digest"] == row["ghcr_digest"]
                     for row in payload["release_units"]
                 )
             )
@@ -525,6 +658,9 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self.fixture(root, "automatic")
+            self.record_attempt(root, fixture, "8.2", "dockerhub")
+            self.record_attempt(root, fixture, "8.2", "ghcr")
+            self.record_attempt(root, fixture, "8.3", "ghcr")
             state = self.state(fixture)
             state[f"{DOCKERHUB}:8.2"], state[f"{GHCR}:8.2"] = fixture.targets["8.2"]
             state[f"{GHCR}:8.3"] = fixture.targets["8.3"][1]
@@ -541,6 +677,8 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self.fixture(root, "automatic")
+            self.record_attempt(root, fixture, "8.2", "dockerhub")
+            self.record_attempt(root, fixture, "8.2", "ghcr")
             previous_dockerhub = fixture.baseline["8.2"][0]
             unavailable = f"{DOCKERHUB}@{previous_dockerhub}"
             fixture.env["MOCK_UNAVAILABLE_REF"] = unavailable
@@ -558,6 +696,8 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self.fixture(root, "automatic")
+            self.record_attempt(root, fixture, "8.2", "dockerhub")
+            self.record_attempt(root, fixture, "8.2", "ghcr")
             state = self.state(fixture)
             state[f"{DOCKERHUB}:8.2"], state[f"{GHCR}:8.2"] = fixture.targets["8.2"]
             fixture.state_path.write_text(json.dumps(state, sort_keys=True))
@@ -568,14 +708,85 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
             recovered = self.state(fixture)
             self.assertEqual(recovered[f"{DOCKERHUB}:8.2"], previous_dockerhub)
             self.assertEqual(recovered[f"{GHCR}:8.2"], fixture.targets["8.2"][1])
-            self.assertIn("final recovery baseline read-back mismatch", result.stderr)
             payload = json.loads((root / "reports/recovery-result.json").read_text())
             self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["reason"], "restore-failed")
+
+    def test_recovery_does_not_own_an_unattempted_target_looking_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self.fixture(root, "automatic")
+            state = self.state(fixture)
+            state[f"{GHCR}:8.5"] = fixture.targets["8.5"][1]
+            fixture.state_path.write_text(json.dumps(state, sort_keys=True))
+            before = fixture.state_path.read_text()
+            result = self.run_transaction(root, "recover", fixture)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("without a durable transaction attempt", result.stderr)
+            self.assertEqual(fixture.state_path.read_text(), before)
+            self.assertNotIn("rollback-dual|8.5", fixture.log.read_text())
+
+    def test_recovery_term_is_durable_and_same_transaction_resumes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self.fixture(root, "automatic")
+            for minor in ("8.2", "8.3"):
+                self.record_attempt(root, fixture, minor, "dockerhub")
+                self.record_attempt(root, fixture, minor, "ghcr")
+            state = self.state(fixture)
+            for minor in ("8.2", "8.3"):
+                state[f"{DOCKERHUB}:{minor}"], state[f"{GHCR}:{minor}"] = fixture.targets[minor]
+            fixture.state_path.write_text(json.dumps(state, sort_keys=True))
+            marker = root / "rollback-blocked"
+            fixture.env["MOCK_BLOCK_ROLLBACK_MINOR"] = "8.2"
+            fixture.env["MOCK_BLOCK_MARKER"] = str(marker)
+            process = subprocess.Popen(
+                [
+                    "bash",
+                    "scripts/promote-auto-canaries.sh",
+                    "recover",
+                    str(fixture.plan),
+                    str(root / "reports"),
+                ],
+                cwd=root,
+                env=fixture.env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            for _ in range(100):
+                if marker.exists():
+                    break
+                import time
+
+                time.sleep(0.05)
+            self.assertTrue(marker.exists(), "recovery did not reach the injected cancellation point")
+            os.killpg(process.pid, signal.SIGTERM)
+            process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0)
+            terminal = json.loads((root / "reports/recovery-result.json").read_text())
+            self.assertEqual(terminal["status"], "failed")
+            self.assertEqual(terminal["reason"], "signal-term")
+            self.assertEqual(self.state(fixture)[f"{DOCKERHUB}:8.2"], fixture.baseline["8.2"][0])
+            self.assertEqual(self.state(fixture)[f"{GHCR}:8.3"], fixture.targets["8.3"][1])
+
+            fixture.env.pop("MOCK_BLOCK_ROLLBACK_MINOR")
+            fixture.env.pop("MOCK_BLOCK_MARKER")
+            resumed = self.run_transaction(root, "recover", fixture)
+            self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+            recovered = self.state(fixture)
+            for minor in MINORS:
+                self.assertEqual(recovered[f"{DOCKERHUB}:{minor}"], fixture.baseline[minor][0])
+                self.assertEqual(recovered[f"{GHCR}:{minor}"], fixture.baseline[minor][1])
 
     def test_recovery_unknown_state_is_no_clobber_for_all_units(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self.fixture(root, "automatic")
+            self.record_attempt(root, fixture, "8.2", "dockerhub")
+            self.record_attempt(root, fixture, "8.2", "ghcr")
+            self.record_attempt(root, fixture, "8.3", "ghcr")
             state = self.state(fixture)
             state[f"{DOCKERHUB}:8.2"], state[f"{GHCR}:8.2"] = fixture.targets["8.2"]
             state[f"{GHCR}:8.3"] = digest(999)
@@ -604,6 +815,8 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self.fixture(root, "automatic")
+            self.record_attempt(root, fixture, "8.2", "dockerhub")
+            self.record_attempt(root, fixture, "8.2", "ghcr")
             versions_path = root / "build/versions.json"
             frozen_versions = root / "original-versions.json"
             frozen_versions.write_text(versions_path.read_text())
@@ -616,7 +829,6 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
             fixture.state_path.write_text(json.dumps(state, sort_keys=True))
             result = self.run_transaction(root, "recover", fixture)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("classify-dockerhub|", fixture.log.read_text())
             self.assertTrue((root / "reports/recovery-result.json").is_file())
 
     def test_draft_plan_validation_rejects_unfrozen_or_malformed_rollback_fields(self) -> None:
@@ -625,6 +837,7 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
             fixture = self.fixture(root, "automatic")
             payload = json.loads(fixture.plan.read_text())
             for unit in payload["release_units"]:
+                unit["target_dockerhub_digest"] = None
                 unit["rollback_dockerhub_ref"] = None
                 unit["rollback_dockerhub_backup_digest"] = None
                 unit["rollback_ghcr_ref"] = None
@@ -644,18 +857,16 @@ with open(os.environ['MOCK_LOG'], 'a') as log:
             )
             self.assertNotEqual(invalid.returncode, 0)
 
-    def test_plan_rejects_cross_registry_digest_aliasing(self) -> None:
+    def test_plan_rejects_non_preserved_automatic_dockerhub_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self.fixture(root, "automatic")
             payload = json.loads(fixture.plan.read_text())
-            payload["release_units"][0]["target_dockerhub_digest"] = payload[
-                "release_units"
-            ][0]["target_ghcr_digest"]
+            payload["release_units"][0]["target_dockerhub_digest"] = digest(999)
             fixture.plan.write_text(json.dumps(payload))
             result = self.run_transaction(root, "automatic", fixture)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("resolved only after copy", result.stderr)
+            self.assertIn("digest-preserved staged subject", result.stderr)
             self.assertNotIn("mutate|", fixture.log.read_text())
 
     def test_plan_rejects_non_digest_preserving_dockerhub_backup(self) -> None:

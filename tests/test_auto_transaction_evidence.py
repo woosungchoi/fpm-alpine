@@ -22,13 +22,18 @@ class AutoTransactionEvidenceTests(unittest.TestCase):
         for index, (minor, row) in enumerate(versions.items(), start=1):
             if row["support"] not in {"active", "security-only"}:
                 continue
+            ghcr_digest = f"sha256:{200 + index:064x}"
             units.append(
                 {
                     "php_minor": minor,
                     "php_patch": row["patch"],
                     "source_sha": SOURCE_SHA,
-                    "dockerhub_digest": f"sha256:{100 + index:064x}",
-                    "ghcr_digest": f"sha256:{200 + index:064x}",
+                    "dockerhub_digest": (
+                        ghcr_digest
+                        if operation == "automatic"
+                        else f"sha256:{100 + index:064x}"
+                    ),
+                    "ghcr_digest": ghcr_digest,
                 }
             )
         return {
@@ -53,7 +58,7 @@ class AutoTransactionEvidenceTests(unittest.TestCase):
             minor = unit["php_minor"]
             if payload["operation"] == "automatic":
                 previous_dockerhub = f"sha256:{400 + index:064x}"
-                target_dockerhub = None
+                target_dockerhub = unit["dockerhub_digest"]
                 dockerhub_source = None
                 rollback_dockerhub_ref = (
                     "ghcr.io/woosungchoi/fpm-alpine:"
@@ -150,7 +155,7 @@ class AutoTransactionEvidenceTests(unittest.TestCase):
             self.assertEqual(observed_plan_hash, expected_plan_hash)
             self.assertEqual(observed_plan_hash, payload["plan_sha256"])
 
-    def test_valid_automatic_result_accepts_deferred_dockerhub_plan_target(self) -> None:
+    def test_valid_automatic_result_requires_frozen_digest_preserved_dockerhub_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             evidence = Path(tmp)
             payload = self.payload("automatic")
@@ -159,7 +164,7 @@ class AutoTransactionEvidenceTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             fields = result.stdout.strip().split("\t")
             self.assertEqual(fields[3], "automatic")
-            self.assertNotEqual(fields[1], fields[2])
+            self.assertEqual(fields[1], fields[2])
 
     def test_committed_receipt_requires_exact_set_and_requested_plan_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

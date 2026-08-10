@@ -1,9 +1,11 @@
 name: dependency-publish-recovery
-run-name: dependency-publish-recovery-${{ github.event.client_payload.original_run_id }}-${{ github.event.client_payload.original_run_attempt }}
+run-name: dependency-publish-recovery-${{ github.event_name }}-${{ github.run_id }}-${{ github.run_attempt }}
 
 on:
   repository_dispatch:
     types: [fpm-publish-recover]
+  schedule:
+    - cron: '*/15 * * * *'
 
 concurrency:
   group: fpm-production-promotion
@@ -25,12 +27,71 @@ jobs:
       actions: read # Read original workflow status and reject stale recovery.
       contents: read
     outputs:
+      has_pending: ${{ steps.request.outputs.has_pending }}
       original_run_id: ${{ steps.request.outputs.original_run_id }}
       original_run_attempt: ${{ steps.request.outputs.original_run_attempt }}
       original_workflow_sha: ${{ steps.request.outputs.original_workflow_sha }}
       plan_sha256: ${{ steps.request.outputs.plan_sha256 }}
       committed_artifact_id: ${{ steps.request.outputs.committed_artifact_id }}
     steps:
+      - name: Validate owner dispatch envelope before checkout
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          def fail(message):
+              raise SystemExit(message)
+
+          if os.environ["EVENT_REPOSITORY"] != "woosungchoi/fpm-alpine":
+              fail("recovery repository mismatch")
+          if os.environ["EVENT_REF"] != "refs/heads/main" or re.fullmatch(
+              r"[0-9a-f]{40}", os.environ["EVENT_SHA"]
+          ) is None:
+              fail("recovery event is not exact default-branch HEAD")
+          event_name = os.environ["EVENT_NAME"]
+          if event_name == "schedule":
+              if os.environ["EVENT_ACTION"] not in {"", "null"}:
+                  fail("scheduled recovery action must be empty")
+              payload = json.loads(os.environ["EVENT_PAYLOAD_JSON"])
+              if payload not in (None, {}):
+                  fail("scheduled recovery payload must be empty")
+              raise SystemExit(0)
+          if event_name != "repository_dispatch":
+              fail("recovery requires owner dispatch or trusted schedule")
+          if os.environ["EVENT_ACTION"] != "fpm-publish-recover":
+              fail("unexpected recovery dispatch action")
+          if os.environ["EVENT_ACTOR"] != "woosungchoi" or os.environ["EVENT_ACTOR_ID"] != "5674610":
+              fail("recovery dispatcher is not the pinned owner")
+          payload = json.loads(os.environ["EVENT_PAYLOAD_JSON"])
+          expected_keys = {"operation", "original_run_id", "original_run_attempt", "plan_sha256"}
+          if not isinstance(payload, dict) or set(payload) != expected_keys:
+              fail("recovery payload key set mismatch")
+          if payload.get("operation") != "recovery":
+              fail("recovery operation mismatch")
+          for name in ("original_run_id", "original_run_attempt"):
+              value = payload.get(name)
+              if isinstance(value, bool) or not (
+                  isinstance(value, int) and value > 0
+                  or isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value)
+              ):
+                  fail(f"recovery {name} is invalid")
+          plan_sha256 = payload.get("plan_sha256")
+          if not isinstance(plan_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", plan_sha256) is None:
+              fail("recovery plan_sha256 is invalid")
+          PY
+
       - name: Checkout trusted default-branch recovery code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,6 +102,7 @@ jobs:
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           EVENT_REF: ${{ github.ref }}
           ORIGINAL_RUN_ID: ${{ github.event.client_payload.original_run_id }}
@@ -48,11 +110,62 @@ jobs:
           PLAN_SHA256: ${{ github.event.client_payload.plan_sha256 }}
         run: |
           set -euo pipefail
-          test "$EVENT_ACTION" = fpm-publish-recover
           test "$EVENT_REF" = refs/heads/main
-          [[ "$ORIGINAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$ORIGINAL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-          [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          set +e
+          pending_json="$(./scripts/transaction-journal.py pending)"
+          pending_status=$?
+          set -e
+          if [ "$pending_status" -eq 3 ] && [ "$EVENT_NAME" = schedule ]; then
+            echo "has_pending=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$pending_status" -eq 0
+          pending_tuple="$(python3 - "$pending_json" <<'PY'
+          import json
+          import re
+          import sys
+          payload = json.loads(sys.argv[1])
+          expected = {
+              "schema_version": 1,
+              "kind": "pending",
+              "repository": "woosungchoi/fpm-alpine",
+              "workflow_path": ".github/workflows/dependency-auto-publish.yml",
+          }
+          for key, value in expected.items():
+              if payload.get(key) != value:
+                  raise SystemExit(f"pending transaction mismatch for {key}")
+          run_id = payload.get("run_id")
+          run_attempt = payload.get("run_attempt")
+          plan_sha256 = payload.get("plan_sha256")
+          workflow_sha = payload.get("workflow_sha")
+          if (
+              type(run_id) is not int or run_id <= 0
+              or type(run_attempt) is not int or run_attempt <= 0
+              or type(plan_sha256) is not str
+              or re.fullmatch(r"[0-9a-f]{64}", plan_sha256) is None
+              or type(workflow_sha) is not str
+              or re.fullmatch(r"[0-9a-f]{40}", workflow_sha) is None
+          ):
+              raise SystemExit("pending transaction identifiers are invalid")
+          print(f"{run_id}\t{run_attempt}\t{plan_sha256}\t{workflow_sha}")
+          PY
+          )"
+          IFS=$'\t' read -r pending_run_id pending_run_attempt pending_plan_sha pending_workflow_sha \
+            <<< "$pending_tuple"
+          if [ "$EVENT_NAME" = schedule ]; then
+            ORIGINAL_RUN_ID="$pending_run_id"
+            ORIGINAL_RUN_ATTEMPT="$pending_run_attempt"
+            PLAN_SHA256="$pending_plan_sha"
+          else
+            test "$EVENT_ACTION" = fpm-publish-recover
+            [[ "$ORIGINAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$ORIGINAL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+            [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$ORIGINAL_RUN_ID" = "$pending_run_id"
+            test "$ORIGINAL_RUN_ATTEMPT" = "$pending_run_attempt"
+            test "$PLAN_SHA256" = "$pending_plan_sha"
+          fi
+          echo "has_pending=true" >> "$GITHUB_OUTPUT"
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ORIGINAL_RUN_ID}" \
             > /tmp/original-run.json
           original_workflow_sha="$(python3 - "$ORIGINAL_RUN_ATTEMPT" <<'PY'
@@ -81,6 +194,7 @@ jobs:
           print(sha)
           PY
           )"
+          test "$original_workflow_sha" = "$pending_workflow_sha"
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs?status=completed&per_page=100" \
             --jq '.workflow_runs[] | [.id, .run_attempt, .path, .conclusion] | @tsv' \
@@ -93,7 +207,7 @@ jobs:
           original_run_attempt = int(sys.argv[2])
           publisher_paths = {
               ".github/workflows/dependency-auto-publish.yml",
-              ".github/workflows/publish.yml",
+              ".github/workflows/dependency-publish-recovery.yml",
           }
           for line in Path("/tmp/completed-publisher-runs.tsv").read_text().splitlines():
               run_id_text, run_attempt_text, path, conclusion = line.split("\t")
@@ -157,13 +271,15 @@ jobs:
   recover:
     name: Recover frozen publication transaction
     needs: prepare
-    if: needs.prepare.result == 'success'
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.prepare.outputs.has_pending == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: fpm-auto-production
     permissions:
       actions: read # Download the exact frozen plan artifact from the failed run.
-      contents: read
+      contents: write # Read/update durable transaction journal refs after recovery evidence.
       id-token: write # Re-sign an exact Docker Hub subject only for automatic recovery.
       packages: write # Restore GHCR aliases and read/write frozen rollback subjects.
     steps:
@@ -186,6 +302,7 @@ jobs:
       - name: Verify artifact bytes and strict plan binding before credentials
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           ORIGINAL_RUN_ID: ${{ needs.prepare.outputs.original_run_id }}
           ORIGINAL_RUN_ATTEMPT: ${{ needs.prepare.outputs.original_run_attempt }}
           ORIGINAL_WORKFLOW_SHA: ${{ needs.prepare.outputs.original_workflow_sha }}
@@ -219,6 +336,8 @@ jobs:
             --run-id "$ORIGINAL_RUN_ID" \
             --run-attempt "$ORIGINAL_RUN_ATTEMPT" \
             --versions-file recovery-plan/original-versions.json
+          ./scripts/transaction-journal.py assert-owner \
+            recovery-plan/pinned-promotion-plan.json
           operation="$(python3 - <<'PY'
           import json
           operation = json.load(open("recovery-plan/pinned-promotion-plan.json"))["operation"]
@@ -318,6 +437,31 @@ jobs:
         with:
           cosign-release: v3.1.2
 
+      - name: Claim the exact pending transaction for recovery
+        if: steps.committed.outputs.recovery_required == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/transaction-journal.py recover-begin \
+            recovery-plan/pinned-promotion-plan.json
+          ./scripts/transaction-journal.py assert-owner \
+            recovery-plan/pinned-promotion-plan.json
+
+      - name: Verify permanent Docker Hub cutover before automatic recovery credentials
+        if: >-
+          steps.committed.outputs.recovery_required == 'true' &&
+          steps.plan.outputs.operation == 'automatic'
+        env:
+          LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
+          DOCKERHUB_TAG_POLICY_ENFORCED: ${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED }}
+        run: |
+          set -euo pipefail
+          test "$LEGACY_PUBLISHER_DISABLED" = true
+          test "$DOCKERHUB_TAG_POLICY_ENFORCED" = true
+          mkdir -p recovery-reports
+          ./scripts/verify-permanent-dockerhub-cutover.py \
+            --output recovery-reports/dockerhub-cutover-before-credentials.json
+
       - name: Log in to Docker Hub recovery boundary
         if: >-
           steps.committed.outputs.recovery_required == 'true' &&
@@ -339,8 +483,16 @@ jobs:
       - name: Classify every alias before restoring exact baselines
         if: steps.committed.outputs.recovery_required == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           AUTO_PROMOTION_VERSIONS_FILE: recovery-plan/original-versions.json
+          EXPECTED_PUBLISHER_WORKFLOW: dependency-publish-recovery.yml
+          PLAN_OPERATION: ${{ steps.plan.outputs.operation }}
         run: |
+          if [ "$PLAN_OPERATION" = automatic ]; then
+            ./scripts/verify-permanent-dockerhub-cutover.py \
+              --expected-state recovery-reports/dockerhub-cutover-before-credentials.json \
+              --output recovery-reports/dockerhub-cutover-at-mutation.json
+          fi
           ./scripts/promote-auto-canaries.sh recover \
             recovery-plan/pinned-promotion-plan.json recovery-reports
 
@@ -351,3 +503,17 @@ jobs:
           name: publisher-auto-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: recovery-reports/
           if-no-files-found: error
+
+      - name: Close durable writer fence after recovery evidence
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_REQUIRED: ${{ steps.committed.outputs.recovery_required }}
+        run: |
+          status=already-verified
+          if [ "$RECOVERY_REQUIRED" = true ]; then
+            status=recovered
+          fi
+          ./scripts/transaction-journal.py finish \
+            recovery-plan/pinned-promotion-plan.json "$status" \
+            --result recovery-reports/recovery-result.json

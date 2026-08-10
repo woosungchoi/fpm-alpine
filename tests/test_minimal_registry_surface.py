@@ -14,37 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def assert_registry_boundary(jobs: dict) -> None:
     canary = yaml.safe_dump(jobs["canary"], sort_keys=False)
-    production = "\n".join(
-        str(step.get("run", "")) for step in jobs["production"]["steps"]
-    )
     assert "DOCKERHUB_REPOSITORY" not in canary
     assert "docker.io" not in canary
     assert "dockerhub_digest" not in canary
     assert "scripts/verify-canary-image.sh" in canary
-    assert "scripts/promote-image.sh --policy moving-only" in production
-    assert "scripts/promote-image.sh --policy evidence" in production
+    assert "production" not in jobs
 
 
 class MinimalRegistrySurfaceTests(unittest.TestCase):
-    def test_canary_is_ghcr_only_and_production_is_registry_specific(self):
+    def test_manual_publisher_is_ghcr_only_canary(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())
         jobs = workflow["jobs"]
         assert_registry_boundary(jobs)
         canary = yaml.safe_dump(jobs["canary"], sort_keys=False)
-        production = "\n".join(
-            str(step.get("run", "")) for step in jobs["production"]["steps"]
-        )
         self.assertNotIn("DOCKERHUB_REPOSITORY", canary)
         self.assertNotIn("docker.io", canary)
         self.assertNotIn("dockerhub_digest", canary)
         self.assertIn("scripts/verify-canary-image.sh", canary)
-        self.assertIn("scripts/promote-image.sh --policy moving-only", production)
-        self.assertIn("scripts/promote-image.sh --policy evidence", production)
-        self.assertIn("cosign sign --yes", production)
-        self.assertEqual(
-            jobs["production"]["permissions"],
-            {"actions": "read", "contents": "read", "packages": "write", "id-token": "write"},
-        )
+        self.assertNotIn("production", jobs)
 
     def test_registry_boundary_contract_rejects_mutations(self):
         jobs = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]
@@ -55,14 +42,6 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_registry_boundary(canary_mutation)
 
-        public_immutable_mutation = copy.deepcopy(jobs)
-        for step in public_immutable_mutation["production"]["steps"]:
-            if step.get("name") == "Promote verified GHCR canary without rebuilding":
-                step["run"] = step["run"].replace(
-                    "--policy moving-only", "--policy public-immutable"
-                )
-        with self.assertRaises(AssertionError):
-            assert_registry_boundary(public_immutable_mutation)
 
     def test_canary_metadata_v2_rejects_v1_and_dockerhub_fields(self):
         script = ROOT / "scripts/validate-canary-metadata.py"
@@ -159,7 +138,7 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
         )
         self.assertIn("verify-dockerhub-tag-policy", workflow["jobs"])
 
-    def test_cleanup_workflow_is_manual_protected_and_hash_bound(self):
+    def test_cleanup_workflow_is_read_only_plan_only(self):
         path = ROOT / ".github/workflows/prune-dockerhub-tags.yml"
         workflow = yaml.safe_load(path.read_text())
         trigger = workflow.get("on", workflow.get(True))
@@ -167,33 +146,20 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
             trigger,
             {"repository_dispatch": {"types": ["fpm-dockerhub-prune"]}},
         )
-        self.assertEqual(set(workflow["jobs"]), {"authorize", "plan", "archive", "apply"})
-        self.assertIn("fpm-production-promotion", workflow["concurrency"]["group"])
+        self.assertEqual(set(workflow["jobs"]), {"authorize", "plan"})
         self.assertNotIn("environment", workflow["jobs"]["plan"])
         self.assertEqual(workflow["jobs"]["plan"]["needs"], "authorize")
-        for name in ("archive", "apply"):
-            job = workflow["jobs"][name]
-            self.assertEqual(job["needs"], "authorize")
-            self.assertEqual(job["environment"], "fpm-production")
-            self.assertIn("id-token", job["permissions"])
-            self.assertEqual(job["permissions"]["packages"], "write")
-        archive = yaml.safe_dump(workflow["jobs"]["archive"], sort_keys=False)
-        self.assertIn("scripts/archive-dockerhub-tags.py", archive)
-        self.assertIn("dockerhub-prune-archive-", archive)
-        self.assertNotIn("DOCKERHUB_TOKEN", archive)
-        self.assertNotIn("prune-dockerhub-tags.py apply", archive)
         text = path.read_text()
         self.assertNotIn("workflow_dispatch", text)
-        for required in (
-            "expected_inventory_sha256",
-            "expected_deletion_plan_sha256",
-            "plan_run_id",
-            'run.get("head_sha") == os.environ["GITHUB_SHA"]',
-            "DELETE NON-ACTIVE DOCKER HUB TAGS",
+        self.assertIn("scripts/prune-dockerhub-tags.py plan", text)
+        for forbidden in (
+            "DOCKERHUB_TOKEN",
+            "packages: write",
+            "id-token: write",
             "scripts/archive-dockerhub-tags.py",
-            "scripts/prune-dockerhub-tags.py",
+            "scripts/prune-dockerhub-tags.py apply",
         ):
-            self.assertIn(required, text)
+            self.assertNotIn(forbidden, text)
 
 
 if __name__ == "__main__":

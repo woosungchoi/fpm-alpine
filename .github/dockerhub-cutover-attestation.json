@@ -1,0 +1,14 @@
+{
+  "activeGitHubHooks": [],
+  "attestedAt": null,
+  "dockerHubToken": null,
+  "owner": {
+    "id": 5674610,
+    "login": "woosungchoi"
+  },
+  "ownerStatement": null,
+  "queueObservation": null,
+  "repository": "woosungchoi/fpm-alpine",
+  "schemaVersion": 1,
+  "status": "pending"
+}

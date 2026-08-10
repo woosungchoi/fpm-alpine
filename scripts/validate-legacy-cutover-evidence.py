@@ -40,8 +40,8 @@ def main() -> int:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise SystemExit("invalid legacy cutover evidence JSON") from error
 
-    schema_version = payload.get("schemaVersion")
-    if type(schema_version) is not int or schema_version != 1 or payload.get("source_sha") != expected_source_sha:
+    schema_version = payload.get("schema_version")
+    if type(schema_version) is not int or schema_version != 2 or payload.get("source_sha") != expected_source_sha:
         raise SystemExit("legacy cutover evidence identity mismatch")
 
     captured_value = payload.get("captured_at")
@@ -60,6 +60,18 @@ def main() -> int:
     dockerhub = payload.get("dockerhub") or {}
     github = payload.get("github") or {}
     in_flight_builds = dockerhub.get("in_flight_builds")
+    queue_observed_value = dockerhub.get("queue_observed_at")
+    if type(queue_observed_value) is not str:
+        raise SystemExit("invalid Docker Hub queue observation timestamp")
+    try:
+        queue_observed = dt.datetime.fromisoformat(queue_observed_value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise SystemExit("invalid Docker Hub queue observation timestamp") from error
+    if queue_observed.tzinfo is None:
+        raise SystemExit("Docker Hub queue observation timestamp must be timezone-aware")
+    queue_age = (
+        dt.datetime.now(dt.timezone.utc) - queue_observed.astimezone(dt.timezone.utc)
+    ).total_seconds()
     if (
         dockerhub.get("build_rule_active") is not False
         or type(in_flight_builds) is not int
@@ -67,8 +79,9 @@ def main() -> int:
         or dockerhub.get("public_is_automated") is not False
         or not isinstance(dockerhub.get("repository_last_updated"), str)
         or not dockerhub.get("repository_last_updated")
-        or dockerhub.get("queue_basis")
-        != "automatic builds disabled and no source-capable GitHub legacy publisher hook"
+        or dockerhub.get("queue_evidence") != "dockerhub-ui-owner-observation"
+        or queue_age < -60
+        or queue_age > 900
     ):
         raise SystemExit("Docker Hub legacy publisher is not quiescent")
     expected_hooks = [{

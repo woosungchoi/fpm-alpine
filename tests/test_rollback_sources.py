@@ -95,6 +95,32 @@ state_path.write_text(json.dumps(state, sort_keys=True))
 """,
         )
         self.write_executable(fake_bin / "cosign", "#!/usr/bin/env bash\nexit 0\n")
+        self.write_executable(
+            scripts / "resolve-published-operation.sh",
+            """#!/usr/bin/env bash
+case "${MOCK_EXISTING_OPERATION:-unsigned}" in
+  automatic) printf 'automatic\\tdependency-auto-publish.yml\\tmain\\n'; exit 0 ;;
+  unsigned) exit 3 ;;
+  ambiguous) exit 4 ;;
+  *) exit 64 ;;
+esac
+""",
+        )
+        plan_path = root / "promotion-plan.json"
+        plan_path.write_text('{}\n')
+        journal_log = root / "journal.log"
+        self.write_executable(
+            scripts / "transaction-journal.py",
+            """#!/usr/bin/env python3
+import os, sys
+if sys.argv[1] not in {'recovery-referrer-attempt', 'recovery-referrer-complete'}:
+    raise SystemExit(64)
+if sys.argv[2] != os.environ['TRANSACTION_PLAN_FILE'] or sys.argv[3] != '8.2':
+    raise SystemExit(65)
+with open(os.environ['JOURNAL_LOG'], 'a') as log:
+    log.write('|'.join(sys.argv[1:]) + '\\n')
+""",
+        )
 
         env = os.environ.copy()
         env.update(
@@ -107,6 +133,8 @@ state_path.write_text(json.dumps(state, sort_keys=True))
                 "DOCKERHUB_ROLLBACK_FALLBACK_SOURCE": fallback,
                 "GHCR_ROLLBACK_SOURCE": ghcr_source,
                 "COSIGN_SIGN_DESTINATION": "0",
+                "TRANSACTION_PLAN_FILE": str(plan_path),
+                "JOURNAL_LOG": str(journal_log),
             }
         )
         values = {
@@ -234,6 +262,49 @@ state_path.write_text(json.dumps(state, sort_keys=True))
             result = self.run_helper(root, values, env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("rollback evidence write failed", result.stderr)
+
+    def test_existing_authorized_signature_is_not_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            values, env, _, _ = self.fixture(root)
+            cosign_log = root / "cosign.log"
+            self.write_executable(
+                root / "bin/cosign",
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$COSIGN_LOG\"\nexit 0\n",
+            )
+            env.update(
+                COSIGN_SIGN_DESTINATION="1",
+                MOCK_EXISTING_OPERATION="automatic",
+                COSIGN_LOG=str(cosign_log),
+            )
+            result = self.run_helper(root, values, env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(cosign_log.exists())
+
+    def test_unsigned_destination_is_signed_as_recovery_but_ambiguous_is_blocked(self) -> None:
+        for existing, expected_ok in (("unsigned", True), ("ambiguous", False)):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                values, env, _, _ = self.fixture(root)
+                cosign_log = root / "cosign.log"
+                self.write_executable(
+                    root / "bin/cosign",
+                    "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$COSIGN_LOG\"\nexit 0\n",
+                )
+                env.update(
+                    COSIGN_SIGN_DESTINATION="1",
+                    MOCK_EXISTING_OPERATION=existing,
+                    COSIGN_LOG=str(cosign_log),
+                )
+                result = self.run_helper(root, values, env)
+                self.assertEqual(result.returncode == 0, expected_ok, result.stdout + result.stderr)
+                if expected_ok:
+                    self.assertIn("fpm.operation=recovery", cosign_log.read_text())
+                    journal = (root / "journal.log").read_text()
+                    self.assertIn("recovery-referrer-attempt", journal)
+                    self.assertIn("recovery-referrer-complete", journal)
+                else:
+                    self.assertFalse(cosign_log.exists())
 
 
 if __name__ == "__main__":

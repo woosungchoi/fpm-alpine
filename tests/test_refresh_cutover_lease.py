@@ -54,6 +54,7 @@ class RefreshCutoverLeaseTests(unittest.TestCase):
         ):
             raw = self.module.capture(SOURCE)
         text = raw.decode()
+        self.assertIn('"schemaVersion":1', text)
         self.assertIn(f'"source_sha":"{SOURCE}"', text)
         self.assertIn('"public_is_automated":false', text)
         self.assertIn('"in_flight_builds":0', text)

@@ -37,10 +37,17 @@ class DependencyAutoPublishTests(unittest.TestCase):
         text, data = self.load(WORKFLOW)
         trigger = self.trigger(data)
         self.assertNotIn("workflow_dispatch", trigger)
-        self.assertEqual(trigger["repository_dispatch"]["types"], ["fpm-ghcr-backfill"])
+        self.assertEqual(
+            trigger["repository_dispatch"]["types"],
+            ["fpm-ghcr-backfill", "fpm-dependency-publish-replay"],
+        )
         self.assertEqual(trigger["push"]["branches"], ["main"])
         self.assertEqual(trigger["push"]["paths"], ["build/versions.json"])
         self.assertIn("repository_dispatch:fpm-ghcr-backfill", text)
+        self.assertIn("repository_dispatch:fpm-dependency-publish-replay", text)
+        self.assertIn("automatic-replay", text)
+        self.assertIn('git rev-parse "${source_sha}:build/versions.json"', text)
+        self.assertIn('git rev-parse "${WORKFLOW_SHA}:build/versions.json"', text)
         self.assertIn("git merge-base --is-ancestor", text)
         self.assertNotIn("github.event.inputs", text)
 
@@ -81,9 +88,19 @@ class DependencyAutoPublishTests(unittest.TestCase):
         self.assertIn("validate-backfill-source-manifest.py", source_manifest["run"])
         mode = next(step for step in prepare["steps"] if step.get("id") == "mode")
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        parent = subprocess.check_output(
+            ["git", "rev-parse", "HEAD^"], cwd=ROOT, text=True
+        ).strip()
         for event, action, operation, ref, expected_ok in (
             ("push", "", "", "refs/heads/main", True),
             ("repository_dispatch", "fpm-ghcr-backfill", "backfill-ghcr", "refs/heads/main", True),
+            (
+                "repository_dispatch",
+                "fpm-dependency-publish-replay",
+                "automatic-replay",
+                "refs/heads/main",
+                True,
+            ),
             ("workflow_dispatch", "", "backfill-ghcr", "refs/heads/main", False),
             ("repository_dispatch", "fpm-ghcr-backfill", "backfill-ghcr", "refs/heads/topic", False),
             ("repository_dispatch", "wrong", "backfill-ghcr", "refs/heads/main", False),
@@ -94,6 +111,7 @@ class DependencyAutoPublishTests(unittest.TestCase):
                 env.update(
                     EVENT_NAME=event,
                     EVENT_ACTION=action,
+                    EVENT_BEFORE=parent,
                     EVENT_REF=ref,
                     WORKFLOW_SHA=head,
                     REQUESTED_OPERATION=operation,
@@ -105,6 +123,47 @@ class DependencyAutoPublishTests(unittest.TestCase):
                     text=True, capture_output=True, check=False,
                 )
                 self.assertEqual(result.returncode == 0, expected_ok, result.stdout + result.stderr)
+
+        current_versions = subprocess.check_output(
+            ["git", "rev-parse", "HEAD:build/versions.json"], cwd=ROOT, text=True
+        ).strip()
+        history = subprocess.check_output(
+            ["git", "rev-list", "HEAD", "--", "build/versions.json"],
+            cwd=ROOT,
+            text=True,
+        ).splitlines()
+        stale_source = next(
+            candidate
+            for candidate in history
+            if subprocess.check_output(
+                ["git", "rev-parse", f"{candidate}:build/versions.json"],
+                cwd=ROOT,
+                text=True,
+            ).strip()
+            != current_versions
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            env = os.environ.copy()
+            env.update(
+                EVENT_NAME="repository_dispatch",
+                EVENT_ACTION="fpm-dependency-publish-replay",
+                EVENT_BEFORE="",
+                EVENT_REF="refs/heads/main",
+                WORKFLOW_SHA=head,
+                REQUESTED_OPERATION="automatic-replay",
+                REQUESTED_SOURCE_SHA=stale_source,
+                GITHUB_OUTPUT=str(output),
+            )
+            result = subprocess.run(
+                ["bash", "-c", mode["run"]],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_canary_is_ghcr_only_and_backfill_copies_one_exact_source(self) -> None:
         text, data = self.load(WORKFLOW)
@@ -139,6 +198,16 @@ class DependencyAutoPublishTests(unittest.TestCase):
 
         build = next(step for step in canary["steps"] if step.get("id") == "build")
         metadata = next(step for step in canary["steps"] if step.get("id") == "metadata")
+        source_checkout = next(
+            step
+            for step in canary["steps"]
+            if step["name"] == "Checkout exact image source revision"
+        )
+        self.assertEqual(source_checkout["if"], "needs.prepare.outputs.mode == 'automatic'")
+        self.assertEqual(source_checkout["with"]["ref"], "${{ needs.prepare.outputs.source_sha }}")
+        self.assertEqual(source_checkout["with"]["path"], "image-source")
+        self.assertEqual(build["with"]["context"], "image-source")
+        self.assertEqual(build["with"]["file"], "image-source/Dockerfile")
         self.assertEqual(metadata["if"], "needs.prepare.outputs.mode == 'automatic'")
         build_args = build["with"]["build-args"]
         for name in (
@@ -254,6 +323,8 @@ class DependencyAutoPublishTests(unittest.TestCase):
                 cutover["env"]["DOCKERHUB_TAG_POLICY_ENFORCED"],
                 "${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED }}",
             )
+            self.assertEqual(cutover["env"]["WORKFLOW_SHA"], "${{ github.sha }}")
+            self.assertIn('test "$current_main" = "$WORKFLOW_SHA"', cutover["run"])
         dumped = yaml.safe_dump(controller, sort_keys=False)
         self.assertNotIn("require-fresh-cutover-lease.sh", dumped)
         for required in (

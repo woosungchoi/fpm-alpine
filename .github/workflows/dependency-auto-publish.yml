@@ -1,5 +1,5 @@
 name: dependency-auto-publish
-run-name: dependency-publish-${{ github.event_name == 'repository_dispatch' && 'backfill-ghcr' || 'automatic' }}-${{ github.sha }}
+run-name: dependency-publish-${{ github.event.action == 'fpm-ghcr-backfill' && 'backfill-ghcr' || github.event.action == 'fpm-dependency-publish-replay' && 'automatic-replay' || 'automatic' }}-${{ github.sha }}
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     paths:
       - build/versions.json
   repository_dispatch:
-    types: [fpm-ghcr-backfill]
+    types: [fpm-ghcr-backfill, fpm-dependency-publish-replay]
 
 concurrency:
   group: fpm-production-promotion
@@ -28,6 +28,7 @@ jobs:
     outputs:
       mode: ${{ steps.mode.outputs.mode }}
       source_sha: ${{ steps.mode.outputs.source_sha }}
+      base_sha: ${{ steps.mode.outputs.base_sha }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Validate owner dispatch envelope before checkout
@@ -62,18 +63,23 @@ jobs:
               if payload not in (None, {}):
                   fail("push event unexpectedly contains a dispatch payload")
           elif event_name == "repository_dispatch":
-              if os.environ["EVENT_ACTION"] != "fpm-ghcr-backfill":
+              action = os.environ["EVENT_ACTION"]
+              expected_operation = {
+                  "fpm-ghcr-backfill": "backfill-ghcr",
+                  "fpm-dependency-publish-replay": "automatic-replay",
+              }.get(action)
+              if expected_operation is None:
                   fail("unexpected dependency publication dispatch action")
               if os.environ["EVENT_ACTOR"] != "woosungchoi" or os.environ["EVENT_ACTOR_ID"] != "5674610":
-                  fail("backfill dispatcher is not the pinned owner")
+                  fail("dependency publication dispatcher is not the pinned owner")
               if not isinstance(payload, dict) or set(payload) != {"operation", "source_sha"}:
-                  fail("backfill payload must contain exactly operation and source_sha")
-              if payload.get("operation") != "backfill-ghcr":
-                  fail("backfill operation mismatch")
+                  fail("dispatch payload must contain exactly operation and source_sha")
+              if payload.get("operation") != expected_operation:
+                  fail("dispatch operation mismatch")
               if not isinstance(payload.get("source_sha"), str) or re.fullmatch(
                   r"[0-9a-f]{40}", payload["source_sha"]
               ) is None:
-                  fail("backfill source_sha is invalid")
+                  fail("dispatch source_sha is invalid")
           else:
               fail("unsupported dependency publication event")
           PY
@@ -90,6 +96,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
+          EVENT_BEFORE: ${{ github.event.before }}
           EVENT_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.sha }}
           REQUESTED_OPERATION: ${{ github.event.client_payload.operation }}
@@ -101,12 +108,21 @@ jobs:
             push:)
               mode=automatic
               source_sha="$WORKFLOW_SHA"
+              base_sha="$EVENT_BEFORE"
               ;;
             repository_dispatch:fpm-ghcr-backfill)
               test "$REQUESTED_OPERATION" = backfill-ghcr
               [[ "$REQUESTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
               source_sha="$REQUESTED_SOURCE_SHA"
               mode=backfill-ghcr
+              base_sha=
+              ;;
+            repository_dispatch:fpm-dependency-publish-replay)
+              test "$REQUESTED_OPERATION" = automatic-replay
+              [[ "$REQUESTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+              source_sha="$REQUESTED_SOURCE_SHA"
+              mode=automatic
+              base_sha=
               ;;
             *)
               echo "unsupported dependency publisher event/action" >&2
@@ -115,22 +131,32 @@ jobs:
           esac
           git cat-file -e "${source_sha}^{commit}"
           git merge-base --is-ancestor "$source_sha" "$WORKFLOW_SHA"
+          if [ "$EVENT_NAME:$EVENT_ACTION" = repository_dispatch:fpm-dependency-publish-replay ]; then
+            base_sha="$(git rev-parse "${source_sha}^")"
+            source_versions_oid="$(git rev-parse "${source_sha}:build/versions.json")"
+            workflow_versions_oid="$(git rev-parse "${WORKFLOW_SHA}:build/versions.json")"
+            test "$source_versions_oid" = "$workflow_versions_oid"
+          fi
           {
             echo "mode=$mode"
             echo "source_sha=$source_sha"
+            echo "base_sha=$base_sha"
           } >> "$GITHUB_OUTPUT"
 
       - name: Require an eligible dependency-only main merge
         if: steps.mode.outputs.mode == 'automatic'
         env:
-          BASE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ steps.mode.outputs.base_sha }}
           SOURCE_SHA: ${{ steps.mode.outputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$BASE_SHA" != 0000000000000000000000000000000000000000
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$WORKFLOW_SHA"
           python3 scripts/evaluate-auto-promotion.py \
             --base-sha "$BASE_SHA" \
             --head-sha "$SOURCE_SHA" \
@@ -199,6 +225,14 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Checkout exact image source revision
+        if: needs.prepare.outputs.mode == 'automatic'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: image-source
+          persist-credentials: false
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
@@ -242,8 +276,8 @@ jobs:
         if: needs.prepare.outputs.mode == 'automatic'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: .
-          file: Dockerfile
+          context: image-source
+          file: image-source/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: mode=max
@@ -444,7 +478,7 @@ jobs:
           echo "$bindir" >> "$GITHUB_PATH"
 
       - name: Download current-run canary evidence only
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v8.0.0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: publisher-auto-canary-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: canary-evidence
@@ -622,7 +656,7 @@ jobs:
         env:
           LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
           DOCKERHUB_TAG_POLICY_ENFORCED: ${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED }}
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$LEGACY_PUBLISHER_DISABLED" = true
@@ -631,7 +665,7 @@ jobs:
             git ls-remote --exit-code origin refs/heads/main
           )
           test "$current_ref" = refs/heads/main
-          test "$current_main" = "$SOURCE_SHA"
+          test "$current_main" = "$WORKFLOW_SHA"
           ./scripts/verify-permanent-dockerhub-cutover.py \
             --output publisher-reports/dockerhub-cutover-before-credentials.json
 
@@ -737,7 +771,7 @@ jobs:
         env:
           LEGACY_PUBLISHER_DISABLED: ${{ vars.LEGACY_PUBLISHER_DISABLED }}
           DOCKERHUB_TAG_POLICY_ENFORCED: ${{ vars.DOCKERHUB_TAG_POLICY_ENFORCED }}
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$LEGACY_PUBLISHER_DISABLED" = true
@@ -746,7 +780,7 @@ jobs:
             git ls-remote --exit-code origin refs/heads/main
           )
           test "$current_ref" = refs/heads/main
-          test "$current_main" = "$SOURCE_SHA"
+          test "$current_main" = "$WORKFLOW_SHA"
           ./scripts/verify-permanent-dockerhub-cutover.py \
             --expected-state publisher-reports/dockerhub-cutover-before-credentials.json \
             --output publisher-reports/dockerhub-cutover-at-mutation.json

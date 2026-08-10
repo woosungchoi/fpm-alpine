@@ -93,7 +93,8 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         trigger = self.trigger(data)
         self.assertEqual(set(trigger), {"push", "repository_dispatch"})
         self.assertEqual(
-            trigger["repository_dispatch"]["types"], ["fpm-ghcr-backfill"]
+            trigger["repository_dispatch"]["types"],
+            ["fpm-ghcr-backfill", "fpm-dependency-publish-replay"],
         )
         self.assertEqual(trigger["push"]["branches"], ["main"])
         self.assertEqual(trigger["push"]["paths"], ["build/versions.json"])

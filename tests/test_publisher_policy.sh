@@ -295,7 +295,10 @@ assert_contains scripts/rollback-moving-aliases.sh '[ "$actual" = "$PREVIOUS_DOC
 assert_contains scripts/rollback-moving-aliases.sh 'DOCKERHUB_ROLLBACK_FALLBACK_SOURCE'
 assert_contains .github/workflows/dependency-auto-publish.yml 'environment: fpm-auto-production'
 assert_contains .github/workflows/dependency-auto-publish.yml 'group: fpm-production-promotion'
-assert_contains .github/workflows/dependency-auto-publish.yml 'types: [fpm-ghcr-backfill]'
+assert_contains .github/workflows/dependency-auto-publish.yml 'types: [fpm-ghcr-backfill, fpm-dependency-publish-replay]'
+assert_contains .github/workflows/dependency-auto-publish.yml 'test "$REQUESTED_OPERATION" = automatic-replay'
+assert_contains .github/workflows/dependency-auto-publish.yml 'source_versions_oid="$(git rev-parse "${source_sha}:build/versions.json")"'
+assert_contains .github/workflows/dependency-auto-publish.yml 'path: image-source'
 assert_contains .github/workflows/dependency-auto-publish.yml 'scripts/evaluate-auto-promotion.py'
 assert_contains .github/workflows/dependency-auto-publish.yml "if: steps.mode.outputs.mode == 'automatic'"
 assert_not_contains .github/workflows/dependency-auto-publish.yml 'workflow_dispatch:'

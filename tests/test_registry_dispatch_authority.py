@@ -142,6 +142,11 @@ class RegistryDispatchAuthorityTests(unittest.TestCase):
                 {"operation": "backfill-ghcr", "source_sha": "a" * 40},
             ),
             (
+                "dependency-auto-publish.yml",
+                "fpm-dependency-publish-replay",
+                {"operation": "automatic-replay", "source_sha": "a" * 40},
+            ),
+            (
                 "dependency-publish-recovery.yml",
                 "fpm-publish-recover",
                 {

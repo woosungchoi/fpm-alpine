@@ -24,7 +24,11 @@ for entry in "dockerhub|$DOCKERHUB_SUBJECT" "ghcr|$GHCR_SUBJECT"; do
   IFS='|' read -r registry subject <<< "$entry"
   for platform in "${PLATFORMS[@]}"; do
     platform_subject="$(./scripts/resolve-platform-image.py "$subject" "$platform")"
-    docker run --rm --platform "$platform" \
+    report_path="$REPORT_DIR/smoke/${registry}-${platform//\//-}.md"
+    # The inner script expands only inside the container.
+    # shellcheck disable=SC2016
+    ./scripts/run-qemu-runtime-with-retry.sh "$platform" "$report_path" -- \
+      docker run --rm --platform "$platform" \
       -e EXPECTED_PHP_MINOR="$PHP_MINOR" \
       --entrypoint sh "$platform_subject" -ec '
         test "$(php -r '\''echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;'\'')" = "$EXPECTED_PHP_MINOR"
@@ -55,7 +59,7 @@ for entry in "dockerhub|$DOCKERHUB_SUBJECT" "ghcr|$GHCR_SUBJECT"; do
         wait "$fpm_pid" 2>/dev/null || true
         ffmpeg -version >/dev/null
       '
-    cat > "$REPORT_DIR/smoke/${registry}-${platform//\//-}.md" <<EOF
+    cat > "$report_path" <<EOF
 # Rollback compatibility smoke
 
 - Index subject: \`$subject\`

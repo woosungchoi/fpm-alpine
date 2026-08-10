@@ -311,7 +311,10 @@ def main() -> int:
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--matrix", action="store_true")
     output.add_argument("--get-base", metavar="MINOR")
+    parser.add_argument("--minor", choices=EXPECTED_MINORS)
     args = parser.parse_args()
+    if args.minor and not args.matrix:
+        parser.error("--minor requires --matrix")
     try:
         data = load_json(Path(args.path))
         policy = load_json(Path(args.policy))
@@ -344,6 +347,7 @@ def main() -> int:
                 **iconv,
             }
             for minor, item in data["versions"].items()
+            if args.minor is None or minor == args.minor
             for platform, arch in (("linux/amd64", "amd64"), ("linux/arm64", "arm64"))
         ]
         print(json.dumps({"include": include}, separators=(",", ":")))

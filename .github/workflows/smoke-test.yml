@@ -25,13 +25,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Validate pins and prepare matrix
         id: matrix
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
+          set -euo pipefail
           ./scripts/validate-versions.py
-          matrix=$(python3 scripts/validate-versions.py --matrix)
+          matrix_args=(--matrix)
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" || "$GITHUB_EVENT_NAME" == "push" ]]; then
+            python3 scripts/evaluate-auto-promotion.py \
+              --base-sha "$BASE_SHA" \
+              --head-sha "$HEAD_SHA" \
+              --output /tmp/smoke-selection.json
+            affected_minor="$(
+              python3 - <<'PY'
+          import json
+
+          payload = json.load(open("/tmp/smoke-selection.json"))
+          affected = payload.get("affectedMinors")
+          if payload.get("eligible") is True and isinstance(affected, list) and len(affected) == 1:
+              print(affected[0])
+          PY
+            )"
+            if [[ -n "$affected_minor" ]]; then
+              matrix_args+=(--minor "$affected_minor")
+            fi
+          fi
+          matrix=$(python3 scripts/validate-versions.py "${matrix_args[@]}")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
       - name: Prepare explicit OCI creation time

@@ -48,13 +48,37 @@ class DependencyAutomationTests(unittest.TestCase):
         )
 
     def test_same_minor_base_patch_and_digest_is_eligible(self) -> None:
-        head = copy.deepcopy(VERSIONS)
+        for minor, row in VERSIONS["versions"].items():
+            with self.subTest(minor=minor):
+                head = copy.deepcopy(VERSIONS)
+                # Keep this an upgrade as the repository's pinned versions advance.
+                patch = int(row["patch"].rsplit(".", 1)[1])
+                head["versions"][minor]["patch"] = f"{minor}.{patch + 1}"
+                head["versions"][minor]["base_image"] = (
+                    f"php:{minor}-fpm-alpine@sha256:" + "a" * 64
+                )
+                result = self.classify(head)
+                self.assertTrue(result["eligible"], result["blockedReasons"])
+                self.assertEqual(result["class"], "base-same-minor")
+                self.assertEqual(result["affectedMinors"], [minor])
+                self.assertEqual(
+                    set(result["changedKeys"]),
+                    {f"versions.{minor}.patch", f"versions.{minor}.base_image"},
+                )
+
+    def test_same_minor_base_downgrade_is_manual_only(self) -> None:
+        base = copy.deepcopy(VERSIONS)
+        base["versions"]["8.5"]["patch"] = "8.5.10"
+        head = copy.deepcopy(base)
         head["versions"]["8.5"]["patch"] = "8.5.9"
         head["versions"]["8.5"]["base_image"] = "php:8.5-fpm-alpine@sha256:" + "a" * 64
-        result = self.classify(head)
-        self.assertTrue(result["eligible"])
-        self.assertEqual(result["class"], "base-same-minor")
-        self.assertEqual(result["affectedMinors"], ["8.5"])
+        result = self.classifier.classify(
+            base, head, copy.deepcopy(self.policy), ["build/versions.json"]
+        )
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["class"], "manual-only")
+        self.assertEqual(result["affectedMinors"], [])
+        self.assertIn("never downgrade", " ".join(result["blockedReasons"]))
 
     def test_same_patch_new_base_digest_is_eligible(self) -> None:
         head = copy.deepcopy(VERSIONS)

@@ -110,10 +110,12 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(candidate["affectedMinors"], ["8.5"])
 
     def test_new_same_minor_patch_is_eligible(self) -> None:
+        minor, patch = VERSIONS["versions"]["8.5"]["patch"].rsplit(".", 1)
+        next_patch = f"{minor}.{int(patch) + 1}"
         result = self.discover(
             patches={
                 **{m: r["patch"] for m, r in VERSIONS["versions"].items()},
-                "8.5": "8.5.9",
+                "8.5": next_patch,
             },
             digests={
                 **{
@@ -123,11 +125,13 @@ class CandidateTests(unittest.TestCase):
                 "8.5": "sha256:" + "c" * 64,
             },
         )
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(len(result["candidates"]), 1)
         self.assertTrue(result["candidates"][0]["eligible"])
         applied = self.module.apply_candidate(
             copy.deepcopy(VERSIONS), result["candidates"][0]
         )
-        self.assertEqual(applied["versions"]["8.5"]["patch"], "8.5.9")
+        self.assertEqual(applied["versions"]["8.5"]["patch"], next_patch)
         self.assertTrue(applied["versions"]["8.5"]["base_image"].endswith("c" * 64))
 
     def test_wrong_minor_base_patch_is_warning_not_candidate(self) -> None:

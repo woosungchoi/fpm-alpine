@@ -46,27 +46,34 @@ jobs:
           persist-credentials: false
 
       - name: Validate successful automatic publisher continuation
+        id: publisher
         if: github.event_name == 'workflow_run'
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           EXPECTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN_ID" \
-            > /tmp/upstream-publisher-run.json
+            > "$RUNNER_TEMP/upstream-publisher-run.json"
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN_ID/attempts/$UPSTREAM_RUN_ATTEMPT/jobs?per_page=100" \
+            > "$RUNNER_TEMP/upstream-publisher-jobs.json"
           python3 - <<'PY'
           import json
           import os
           import re
           from pathlib import Path
 
-          run = json.loads(Path('/tmp/upstream-publisher-run.json').read_text())
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          run = json.loads((temporary / 'upstream-publisher-run.json').read_text())
           expected_id = int(os.environ['UPSTREAM_RUN_ID'])
           expected_sha = os.environ['EXPECTED_SHA']
           repository = os.environ['GITHUB_REPOSITORY']
           required = {
               'id': expected_id,
+              'run_attempt': int(os.environ['UPSTREAM_RUN_ATTEMPT']),
               'path': '.github/workflows/dependency-auto-publish.yml',
               'event': 'push',
               'status': 'completed',
@@ -81,6 +88,19 @@ jobs:
               raise SystemExit('publisher continuation SHA is invalid')
           if (run.get('head_repository') or {}).get('full_name') != repository:
               raise SystemExit('publisher continuation repository mismatch')
+          pages = json.loads((temporary / 'upstream-publisher-jobs.json').read_text())
+          published = [
+              job for page in pages for job in page['jobs']
+              if re.fullmatch(r'Publish 8\.[2345] to Docker Hub and GHCR', job.get('name', ''))
+          ]
+          did_publish = bool(published) and all(
+              job.get('status') == 'completed' and job.get('conclusion') == 'success'
+              for job in published
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('did_publish=' + str(did_publish).lower() + '\n')
+          if not did_publish:
+              print('::notice::No successful image publication in this run; skipping updater continuation.')
           PY
 
       - name: Require main source
@@ -90,6 +110,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Discover dependency candidates
+        if: github.event_name != 'workflow_run' || steps.publisher.outputs.did_publish == 'true'
         run: |
           set -euo pipefail
           mkdir -p dependency-candidates
@@ -98,6 +119,7 @@ jobs:
 
       - name: Validate candidate summary
         id: summary
+        if: github.event_name != 'workflow_run' || steps.publisher.outputs.did_publish == 'true'
         run: |
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -117,7 +139,7 @@ jobs:
           PY
 
       - name: Upload candidate evidence
-        if: ${{ always() }}
+        if: ${{ always() && (github.event_name != 'workflow_run' || steps.publisher.outputs.did_publish == 'true') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dependency-candidates-${{ github.run_id }}-${{ github.run_attempt }}
@@ -127,7 +149,8 @@ jobs:
   create-prs:
     name: Create next dependency pull request
     if: >-
-      ${{ needs.discover.outputs.eligible_count != '0' &&
+      ${{ needs.discover.outputs.eligible_count != '' &&
+          needs.discover.outputs.eligible_count != '0' &&
           vars.DEPENDENCY_AUTOMATION_ENABLED == 'true' &&
           (github.event_name == 'schedule' ||
            github.event_name == 'workflow_run' ||

@@ -37,6 +37,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      should_publish: ${{ steps.matrix.outputs.should_publish }}
       created: ${{ steps.metadata.outputs.created }}
       source_date_epoch: ${{ steps.metadata.outputs.source_date_epoch }}
     steps:
@@ -64,24 +65,53 @@ jobs:
             python3 scripts/evaluate-auto-promotion.py \
               --base-sha "$BEFORE_SHA" \
               --head-sha "$GITHUB_SHA" \
-              --output /tmp/promotion.json
+              --output "$RUNNER_TEMP/promotion.json"
             selected="$(python3 - <<'PY'
           import json
-          data = json.load(open('/tmp/promotion.json'))
+          import os
+          from pathlib import Path
+
+          data = json.loads((Path(os.environ['RUNNER_TEMP']) / 'promotion.json').read_text())
+          if (type(data.get('schemaVersion')) is not int or data['schemaVersion'] != 1
+                  or data.get('sourceCommit') != os.environ['GITHUB_SHA']):
+              raise SystemExit('invalid publisher classification identity')
+          if data.get('eligible') is False and data.get('class') in {
+              'manual-only', 'mixed', 'none', 'actions-no-image-change',
+          }:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write('## Automatic publication skipped\n\n')
+                  summary.write('No registry tags were changed. Classification: `' + data['class'] + '`.\n\n')
+                  for reason in data.get('blockedReasons', []):
+                      summary.write('- ' + reason + '\n')
+                  summary.write('\nAfter review, use `workflow_dispatch` on `main` for '
+                                '`dependency-auto-publish.yml` with the affected `version` '
+                                '(or `all` for shared changes).\n')
+              raise SystemExit(0)
           if data.get('eligible') is not True or data.get('class') != 'base-same-minor':
               raise SystemExit('merged change is not one same-minor PHP patch update')
           affected = data.get('affectedMinors')
           if not isinstance(affected, list) or len(affected) != 1:
               raise SystemExit('publisher requires exactly one affected PHP minor')
+          if affected[0] not in ('8.2', '8.3', '8.4', '8.5'):
+              raise SystemExit('invalid affected PHP minor')
           print(affected[0])
           PY
             )"
-          else
+            if [ -z "$selected" ]; then
+              echo 'should_publish=false' >> "$GITHUB_OUTPUT"
+              echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+              echo '::notice::Automatic publication skipped; see the job summary for the reason and manual publication instructions.'
+              exit 0
+            fi
+          elif [ "$EVENT_NAME" = workflow_dispatch ]; then
             case "$REQUESTED_VERSION" in
               all) selected=8.2,8.3,8.4,8.5 ;;
               8.2|8.3|8.4|8.5) selected="$REQUESTED_VERSION" ;;
               *) echo "unsupported PHP minor: $REQUESTED_VERSION" >&2; exit 64 ;;
             esac
+          else
+            echo "unsupported publisher event: $EVENT_NAME" >&2
+            exit 64
           fi
 
           SELECTED_MINORS="$selected" python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -102,10 +132,12 @@ jobs:
           if {row['php_minor'] for row in matrix} != set(selected):
               raise SystemExit('selected PHP minor is missing from the build matrix')
           print('matrix=' + json.dumps({'include': matrix}, separators=(',', ':')))
+          print('should_publish=true')
           PY
 
       - name: Capture build metadata
         id: metadata
+        if: steps.matrix.outputs.should_publish == 'true'
         run: |
           {
             echo "created=$(git show -s --format=%cI "$GITHUB_SHA")"
@@ -115,6 +147,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.php_minor }} to Docker Hub and GHCR
     needs: prepare
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment: fpm-auto-production

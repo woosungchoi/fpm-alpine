@@ -78,7 +78,35 @@ jobs:
           print(f'head_sha={head_sha}')
           PY
 
+      - name: Preselect dependency automation PR
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.run.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          mkdir -p auto-merge-selection
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '
+            [select(.state == "open") | {
+              number, author: {login: .user.login}, baseRefName: .base.ref,
+              headRefName: .head.ref, headRepository: {nameWithOwner: .head.repo.full_name},
+              isCrossRepository: (.head.repo.full_name != .base.repo.full_name), isDraft: .draft
+            }]' > auto-merge-selection/metadata.json
+          python3 scripts/select-auto-merge-prs.py \
+            --input auto-merge-selection/metadata.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --selected-output auto-merge-selection/selected.txt \
+            --report-output auto-merge-selection/report.json
+          if [ ! -s auto-merge-selection/selected.txt ]; then
+            echo 'selected=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::PR is not an open dependency automation candidate; skipping automatic merge.'
+            exit 0
+          fi
+          test "$(cat auto-merge-selection/selected.txt)" = "$PR_NUMBER"
+          echo 'selected=true' >> "$GITHUB_OUTPUT"
+
       - name: Validate dependency-only PR
+        if: steps.candidate.outputs.selected == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.run.outputs.pr_number }}
@@ -96,6 +124,7 @@ jobs:
 
       - name: Create updater app token
         id: app-token
+        if: steps.candidate.outputs.selected == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.DEPENDENCY_UPDATE_APP_ID }}
@@ -104,6 +133,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Enable native auto-merge
+        if: steps.candidate.outputs.selected == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ steps.run.outputs.pr_number }}

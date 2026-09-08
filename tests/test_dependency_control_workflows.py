@@ -51,7 +51,7 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         self.assertIn(".github/workflows/dependency-auto-publish.yml", text)
         self.assert_actions_are_pinned(text)
 
-    def test_successful_smoke_run_enables_native_auto_merge_for_validated_dependency_prs(self) -> None:
+    def test_successful_smoke_run_requires_all_checks_before_exact_head_merge(self) -> None:
         text, data = self.load("dependency-auto-merge.yml")
         trigger = self.trigger(data)
         self.assertEqual(set(trigger), {"workflow_run"})
@@ -62,7 +62,8 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         self.assertEqual(job["environment"], "dependency-updater")
         self.assertEqual(
             job["permissions"],
-            {"actions": "read", "contents": "read", "pull-requests": "read"},
+            {"actions": "read", "checks": "read", "statuses": "read",
+             "contents": "read", "pull-requests": "read"},
         )
         self.assertIn("DEPENDENCY_AUTO_MERGE_ENABLED", job["if"])
         self.assertIn("github.event.workflow_run.conclusion == 'success'", job["if"])
@@ -80,10 +81,17 @@ class DependencyControlWorkflowTests(unittest.TestCase):
         self.assertIn("permission-contents: write", rendered)
         self.assertIn("permission-pull-requests: write", rendered)
         self.assertIn("evaluate-auto-merge-pr.sh", rendered)
-        merge_step = next(step for step in job["steps"] if step.get("name") == "Enable native auto-merge")
-        self.assertEqual(merge_step["env"]["GH_TOKEN"], "${{ steps.app-token.outputs.token }}")
+        wait_step = next(step for step in job["steps"] if step.get("name") == "Wait for every current PR check to succeed")
+        token_step = next(step for step in job["steps"] if step.get("name") == "Create updater app token")
+        self.assertLess(job["steps"].index(wait_step), job["steps"].index(token_step))
+        merge_step = next(step for step in job["steps"] if step.get("name") == "Merge fully checked dependency PR")
+        self.assertEqual(merge_step["env"]["GH_TOKEN"], "${{ github.token }}")
+        self.assertEqual(merge_step["env"]["MERGE_TOKEN"], "${{ steps.app-token.outputs.token }}")
+        self.assertIn("wait-for-pr-checks.py", wait_step["run"])
+        self.assertIn("--once", merge_step["run"])
+        self.assertLess(merge_step["run"].index("wait-for-pr-checks.py"), merge_step["run"].index("gh pr merge"))
         self.assertIn("gh pr merge", merge_step["run"])
-        self.assertIn("--auto", merge_step["run"])
+        self.assertNotIn("--auto", merge_step["run"])
         self.assertIn("--match-head-commit", merge_step["run"])
         self.assertNotIn("--admin", merge_step["run"])
         self.assertNotIn("pull_request_target", text)

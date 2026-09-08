@@ -151,7 +151,8 @@ class WorkflowPreselectionTests(unittest.TestCase):
         self.assertEqual(output.read_text(), "")
 
     def test_validation_token_and_merge_require_positive_preselection(self) -> None:
-        for name in ("Validate dependency-only PR", "Create updater app token", "Enable native auto-merge"):
+        for name in ("Validate dependency-only PR", "Wait for every current PR check to succeed",
+                     "Create updater app token", "Merge fully checked dependency PR"):
             step = next(step for step in self.steps if step.get("name") == name)
             self.assertEqual(step["if"], "steps.candidate.outputs.selected == 'true'")
         validation = next(step for step in self.steps if step.get("name") == "Validate dependency-only PR")

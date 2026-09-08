@@ -72,7 +72,8 @@ jobs:
           from pathlib import Path
 
           data = json.loads((Path(os.environ['RUNNER_TEMP']) / 'promotion.json').read_text())
-          if data.get('schemaVersion') != 1 or data.get('sourceCommit') != os.environ['GITHUB_SHA']:
+          if (type(data.get('schemaVersion')) is not int or data['schemaVersion'] != 1
+                  or data.get('sourceCommit') != os.environ['GITHUB_SHA']):
               raise SystemExit('invalid publisher classification identity')
           if data.get('eligible') is False and data.get('class') in {
               'manual-only', 'mixed', 'none', 'actions-no-image-change',
@@ -91,6 +92,8 @@ jobs:
           affected = data.get('affectedMinors')
           if not isinstance(affected, list) or len(affected) != 1:
               raise SystemExit('publisher requires exactly one affected PHP minor')
+          if affected[0] not in ('8.2', '8.3', '8.4', '8.5'):
+              raise SystemExit('invalid affected PHP minor')
           print(affected[0])
           PY
             )"

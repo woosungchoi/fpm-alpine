@@ -213,6 +213,7 @@ class PublisherSelectionTests(unittest.TestCase):
             {"eligible": False, "class": "unknown", "affectedMinors": []},
             {"eligible": True, "class": "base-same-minor", "affectedMinors": ["8.4", "8.5"]},
             {"eligible": True, "class": "base-same-minor", "affectedMinors": ["8.6"]},
+            {"eligible": True, "class": "base-same-minor", "affectedMinors": [""]},
         ):
             with self.subTest(fields=fields):
                 (self.root / "scripts/evaluate-auto-promotion.py").write_text(

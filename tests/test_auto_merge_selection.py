@@ -4,8 +4,15 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,6 +98,65 @@ class SelectionTests(unittest.TestCase):
         )
         self.assertEqual(selected, [])
         self.assertTrue(rejected)
+
+
+class WorkflowPreselectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="fpm-auto-merge-test-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "scripts").mkdir()
+        shutil.copy2(ROOT / "scripts/select-auto-merge-prs.py", self.root / "scripts")
+        (self.root / "bin").mkdir()
+        gh = self.root / "bin/gh"
+        gh.write_text('#!/bin/sh\ncat "$PR_FIXTURE"\nexit "${GH_EXIT_CODE:-0}"\n')
+        gh.chmod(0o755)
+        workflow = yaml.safe_load((ROOT / ".github/workflows/dependency-auto-merge.yml").read_text())
+        self.steps = workflow["jobs"]["enable-native-auto-merge"]["steps"]
+        self.step = next(step for step in self.steps if step.get("id") == "candidate")
+
+    def test_non_candidates_skip_but_dependency_candidates_continue(self) -> None:
+        for rows, expected in (
+            ([BASE], "true"),
+            ([{**BASE, "headRefName": "fix/publisher-manual-skip", "author": {"login": "maintainer"}}], "false"),
+            ([{**BASE, "isDraft": True}], "false"),
+            ([], "false"),
+        ):
+            with self.subTest(rows=rows):
+                fixture = self.root / "pr.json"
+                fixture.write_text(json.dumps(rows))
+                output = self.root / "output"
+                output.write_text("")
+                result = subprocess.run(
+                    ["bash", "-c", self.step["run"]], cwd=self.root,
+                    env=dict(os.environ, PATH=str(self.root / "bin") + os.pathsep + os.environ["PATH"],
+                             PR_FIXTURE=str(fixture), GITHUB_OUTPUT=str(output),
+                             PR_NUMBER="1", GITHUB_REPOSITORY="woosungchoi/fpm-alpine"),
+                    text=True, capture_output=True, timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text(), f"selected={expected}\n")
+
+    def test_api_errors_do_not_become_normal_skips(self) -> None:
+        output = self.root / "output"
+        output.write_text("")
+        result = subprocess.run(
+            ["bash", "-c", self.step["run"]], cwd=self.root,
+            env=dict(os.environ, PATH=str(self.root / "bin") + os.pathsep + os.environ["PATH"],
+                     PR_FIXTURE="/dev/null", GH_EXIT_CODE="1", GITHUB_OUTPUT=str(output),
+                     PR_NUMBER="1", GITHUB_REPOSITORY="woosungchoi/fpm-alpine"),
+            text=True, capture_output=True, timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(output.read_text(), "")
+
+    def test_validation_token_and_merge_require_positive_preselection(self) -> None:
+        for name in ("Validate dependency-only PR", "Create updater app token", "Enable native auto-merge"):
+            step = next(step for step in self.steps if step.get("name") == name)
+            self.assertEqual(step["if"], "steps.candidate.outputs.selected == 'true'")
+        validation = next(step for step in self.steps if step.get("name") == "Validate dependency-only PR")
+        self.assertIn("evaluate-auto-merge-pr.sh", validation["run"])
+        self.assertIn('test "$eligible_sha" = "$CHECKED_HEAD_SHA"', validation["run"])
 
 
 if __name__ == "__main__":

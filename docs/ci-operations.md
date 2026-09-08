@@ -44,6 +44,12 @@ Invalid manifests, source commits, classification errors, and unsupported manual
 inputs still **fail**. This distinction does not expand the automatic publishing
 allowlist or bypass the protected production environment.
 
+Likewise, `dependency-auto-merge` preselects open dependency automation PRs before
+deep validation or creating an App token. An ordinary source/test/workflow fix,
+a closed PR, or another non-candidate is an expected skip, not a failed merge.
+Eligible candidates still undergo the full dependency, identity, and exact-head
+checks; API or validation errors remain failures.
+
 ## Configuration
 
 Repository variables:

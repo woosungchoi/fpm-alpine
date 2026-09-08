@@ -113,6 +113,10 @@ class PublisherSelectionTests(unittest.TestCase):
         shutil.copytree(ROOT / "build", self.root / "build")
         self.env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         self.git("init", "-b", "main")
+        # Disposable histories need no maintenance. New Git versions may detach
+        # it after commit and recreate files while TemporaryDirectory cleans up.
+        self.git("config", "maintenance.auto", "false")
+        self.git("config", "gc.auto", "0")
         self.git("config", "user.name", "Publisher test")
         self.git("config", "user.email", "publisher@example.invalid")
         self.base = self.commit()
@@ -166,6 +170,20 @@ class PublisherSelectionTests(unittest.TestCase):
         self.assertEqual(self.outputs["should_publish"], "true")
         rows = json.loads(self.outputs["matrix"])["include"]
         self.assertEqual([row["php_minor"] for row in rows], ["8.5"])
+
+    def test_fixture_does_not_spawn_automatic_git_maintenance(self) -> None:
+        trace = self.root / ".git" / "fixture-trace.jsonl"
+        self.env["GIT_TRACE2_EVENT"] = str(trace)
+        self.commit()
+        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        automatic_children = [
+            event.get("argv") for event in events
+            if event.get("event") == "child_start"
+            and any(arg in {"maintenance", "gc"} for arg in event.get("argv", []))
+        ]
+        self.assertEqual(automatic_children, [])
+        self.assertEqual(self.git("config", "--get", "maintenance.auto"), "false")
+        self.assertEqual(self.git("config", "--get", "gc.auto"), "0")
 
     def test_pr111_mixed_test_changes_skip_with_manual_guidance(self) -> None:
         (self.root / "tests").mkdir()

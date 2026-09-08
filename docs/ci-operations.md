@@ -23,9 +23,26 @@ The active automation has one path:
    - `docker.io/woosungchoi/fpm-alpine:<minor>`
    - `ghcr.io/woosungchoi/fpm-alpine:<minor>`
 7. The publisher reads both registries back, requires the same top-level digest, and requires linux/amd64 and linux/arm64 manifests.
-8. A successful publisher run triggers the next updater discovery pass.
+8. A successful automatic publisher run with an actually completed publish job triggers the next updater discovery pass. A skipped publication does not continue the updater chain.
 
 There is no automatic new-minor onboarding. PHP 8.6 or any later minor requires a reviewed policy change. PECL updates are discovered as manual-review candidates and are not auto-merged. There is intentionally no `latest` tag.
+
+### Skipped publication versus failure
+
+Automatic publication only accepts a `build/versions.json`-only change for one
+same-minor PHP patch or digest. Keep test, source, and workflow fixes in separate
+PRs when an update should use this automatic path.
+
+A valid change requiring manual review (including a versions update mixed with
+test fixes, as in PR #111), or a change with no image update, completes preparation
+successfully but **skips** the publish job. The job summary records the classifier
+reason and manual synchronization instructions. Neither registry tags nor the
+next updater PR are changed by this skipped run. After review, use the manual
+entry point below for each affected minor, or `all` for shared changes.
+
+Invalid manifests, source commits, classification errors, and unsupported manual
+inputs still **fail**. This distinction does not expand the automatic publishing
+allowlist or bypass the protected production environment.
 
 ## Configuration
 

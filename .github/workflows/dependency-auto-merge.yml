@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   enable-native-auto-merge:
-    name: Enable native auto-merge
+    name: Merge only after all PR checks pass
     if: >-
       ${{ vars.DEPENDENCY_AUTO_MERGE_ENABLED == 'true' &&
           github.event.workflow_run.event == 'pull_request' &&
@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       actions: read # Revalidate the exact successful smoke workflow run.
+      checks: read # Inspect all PR checks, not only the required aggregate.
+      statuses: read # Include external commit statuses in the all-checks gate.
       contents: read # Checkout and inspect trusted default-branch policy code.
       pull-requests: read # Validate the same-repository dependency PR metadata.
     steps:
@@ -122,6 +124,17 @@ jobs:
           test "$eligible_pr" = "$PR_NUMBER"
           test "$eligible_sha" = "$CHECKED_HEAD_SHA"
 
+      - name: Wait for every current PR check to succeed
+        if: steps.candidate.outputs.selected == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.run.outputs.pr_number }}
+          CHECKED_HEAD_SHA: ${{ steps.run.outputs.head_sha }}
+        run: |
+          python3 scripts/wait-for-pr-checks.py \
+            --repository "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" \
+            --head-sha "$CHECKED_HEAD_SHA"
+
       - name: Create updater app token
         id: app-token
         if: steps.candidate.outputs.selected == 'true'
@@ -132,16 +145,19 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Enable native auto-merge
+      - name: Merge fully checked dependency PR
         if: steps.candidate.outputs.selected == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ steps.run.outputs.pr_number }}
           CHECKED_HEAD_SHA: ${{ steps.run.outputs.head_sha }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR_NUMBER" \
+          python3 scripts/wait-for-pr-checks.py \
+            --repository "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" \
+            --head-sha "$CHECKED_HEAD_SHA" --once
+          GH_TOKEN="$MERGE_TOKEN" gh pr merge "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --auto \
             --squash \
             --match-head-commit "$CHECKED_HEAD_SHA"

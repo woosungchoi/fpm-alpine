@@ -10,6 +10,25 @@ and the allowed-bump boundaries. GitHub Actions is the sole publisher.
 
 Protected `main` must require `docker-smoke`.
 
+PR checks are the **pre-merge** gate. The separate `main` push verification starts
+**after** merging; it cannot be a prerequisite for the merge that triggers it.
+The Actions run titles distinguish these phases without renaming `smoke-test`
+or the required `docker-smoke` check.
+
+The updater additionally waits for **all** checks and commit statuses on the
+exact PR head, not just required checks. Queued workflow runs are checked even
+before their jobs appear. Only the latest run of each workflow/event is used,
+so a successful retry supersedes an older failed run. Success must remain stable
+across two observations. Failure, cancellation, skipped/neutral checks, missing
+smoke evidence, API errors, changed PR heads, or a ten-minute timeout prevent
+merging. The read-only gate is repeated immediately before the exact-SHA squash
+merge; no future native auto-merge request is left behind. Protected-branch
+strict/up-to-date checks and admin enforcement must remain enabled. New mandatory
+CI workflows must also be added to branch protection, since no client-side check
+can atomically guard a future check that has not yet been registered.
+If a separate check recovers after the merge controller times out, rerun the
+failed `dependency-auto-merge` job; it revalidates the current PR and all checks.
+
 ## Automatic PHP patch flow
 
 The active automation has one path:
@@ -17,7 +36,7 @@ The active automation has one path:
 1. `dependency-update-pr` checks the existing PHP 8.2, 8.3, 8.4, and 8.5 lines.
 2. A newer same-minor PHP patch or refreshed digest creates one scoped PR.
 3. `smoke-test` runs the required CI matrix.
-4. `dependency-auto-merge` requests native squash auto-merge for the validated dependency PR.
+4. `dependency-auto-merge` waits for all PR checks, then squash-merges the validated exact head.
 5. The merged `build/versions.json` change triggers `dependency-auto-publish` on protected `main`.
 6. One Buildx invocation per affected minor pushes the same multi-platform image to:
    - `docker.io/woosungchoi/fpm-alpine:<minor>`
@@ -55,7 +74,7 @@ checks; API or validation errors remain failures.
 Repository variables:
 
 - `DEPENDENCY_AUTOMATION_ENABLED=true` enables automatic PR creation.
-- `DEPENDENCY_AUTO_MERGE_ENABLED=true` enables native auto-merge after required CI succeeds.
+- `DEPENDENCY_AUTO_MERGE_ENABLED=true` enables exact-head merging after all PR CI succeeds.
 - `DEPENDENCY_UPDATE_APP_ID` identifies the repository-scoped updater GitHub App.
 
 Repository secrets:
@@ -121,3 +140,5 @@ the checked source state needs attention. `verify-published-manifest.yml` opens 
 The external Snyk webhook is a non-required external advisory signal. The
 repository maintainer owns the integration. It is not a publisher or required
 check and does not replace the exact-subject Trivy fixable-CRITICAL gate.
+If that integration reports a PR check/status, automatic merging still waits
+for its success under the all-checks policy above.

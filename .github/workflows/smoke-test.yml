@@ -1,4 +1,5 @@
 name: smoke-test
+run-name: "${{ github.event_name == 'pull_request' && format('PR #{0} · pre-merge checks', github.event.pull_request.number) || 'main · post-merge / manual verification' }}"
 
 on:
   push:
@@ -97,6 +98,7 @@ jobs:
           python3 tests/test_action_update_policy.py
           python3 tests/test_image_contract_diff.py
           python3 tests/test_auto_merge_selection.py
+          python3 tests/test_all_pr_checks.py
           python3 tests/test_auto_promotion_eligibility.py
           python3 tests/test_dependency_control_workflows.py
           python3 tests/test_reproducibility_archive.py

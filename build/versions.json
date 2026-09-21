@@ -45,7 +45,7 @@
     "8.4": {
       "minor": "8.4",
       "patch": "8.4.25",
-      "base_image": "php:8.4-fpm-alpine@sha256:49734670eccf414af884c2a0c2e558401e228615f8028f1c9fca30a0d4fb1bc2",
+      "base_image": "php:8.4-fpm-alpine@sha256:c68b19eac3042f36ed7dc7b1240712ad83d421f59e79c73357a645b520f7f68d",
       "support": "active",
       "eol": "2028-12-31"
     },

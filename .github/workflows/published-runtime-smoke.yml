@@ -1,6 +1,17 @@
 name: published-runtime-smoke
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/published-runtime-smoke.yml'
+      - 'scripts/verify-maintained-runtime.sh'
+      - 'scripts/verify-published-dockerhub-image.sh'
+      - 'scripts/smoke-test-image.sh'
+      - 'scripts/report-manifest.sh'
+      - 'scripts/scan-image.sh'
+      - 'scripts/capture-image-contract.sh'
+      - 'scripts/verify-image-parity.py'
+      - 'tests/fixtures/**'
   schedule:
     - cron: '37 4 * * 0'
   workflow_dispatch:

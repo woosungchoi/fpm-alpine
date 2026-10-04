@@ -74,7 +74,7 @@ The daily manifest workflow observes active Docker Hub moving aliases by exact d
 - The workflow verifies the four active Docker Hub tags for `linux/amd64` and `linux/arm64`, and its exact-set guard rejects every additional public tag after enforcement is enabled.
 - Each run writes a GitHub Actions step summary and uploads manifest report artifacts containing the observed tag digest, per-platform digests, and attestation/metadata manifest entries when present.
 - It resolves each moving tag once, then retries raw reads against the frozen digest. This run verifies platform presence only; attestation entries are inventory and do not imply signature, provenance, SBOM, runtime or vulnerability validation.
-- `published-runtime-smoke` separately runs weekly and on manual dispatch. It reuses `verify-published-dockerhub-image.sh`, `verify-image-parity.py` and `scan-image.sh` to reverify frozen subjects: protected-history source labels, provenance, SBOM presence, FastCGI/media runtime for amd64/arm64, APK version/architecture evidence, registry config/layer parity and fixable-CRITICAL vulnerabilities.
+- `published-runtime-smoke` separately runs weekly, on manual dispatch, and on PRs changing its verification path. It reuses `verify-published-dockerhub-image.sh`, `verify-image-parity.py` and `scan-image.sh` to reverify frozen subjects: protected-history source labels, provenance, SBOM presence, FastCGI/media runtime for amd64/arm64, APK version/architecture evidence, registry config/layer parity and fixable-CRITICAL vulnerabilities.
 - The current `dependency-auto-publish.yml` builds both registries with provenance and SBOM and reads back digests/platforms; it does not sign its images. The weekly workflow therefore does not claim Cosign verification. Existing `verify-published-image.sh` and `verify-canary-image.sh` retain signature and operation gates for signed publication paths; no unsigned exception is added to those gates.
 - A successful source CI run validates its locally built candidate. It is separate from a report about the already published digest; neither deploys to an application server.
 
@@ -87,7 +87,7 @@ The daily manifest workflow observes active Docker Hub moving aliases by exact d
 - PECL latest-version observations for `imagick`, `redis`, and `apcu`, and
 - the currently pinned PECL releases versus upstream observations.
 
-The workflow runs weekly and on manual dispatch, writes a GitHub Actions step summary, and uploads `freshness-reports/` artifacts for review.
+The workflow runs weekly, on manual dispatch, and on PRs changing its verification path, writes a GitHub Actions step summary, and uploads `freshness-reports/` artifacts for review.
 
 `dependency-update-pr` is controlled by `DEPENDENCY_AUTOMATION_ENABLED`. With the repository-scoped GitHub App and that variable enabled, it serializes official PHP same-minor patch/digest updates: one run opens the next eligible pull request, and a successful automatic publication starts the next discovery pass. `dependency-auto-merge` revalidates the dependency-only diff and all checks on the exact PR head before a normal squash merge. An eligible `build/versions.json`-only update on protected `main` triggers `dependency-auto-publish` for the affected minor. PECL, runtime policy, source and workflow changes require manual review.
 

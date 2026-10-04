@@ -42,6 +42,10 @@ try {
         throw new RuntimeException('FPM request failed: ' . ($result['error'] ?? 'invalid response'));
     }
     if ($stderr !== '') { throw new RuntimeException('FastCGI stderr: ' . $stderr); }
+    if (!is_array($result['jit'] ?? null) || !is_bool($result['jit']['enabled'] ?? null) ||
+        !is_bool($result['jit']['on'] ?? null) || !is_int($result['jit']['buffer_size'] ?? null)) {
+        throw new RuntimeException('FPM JIT status missing or invalid');
+    }
     $expected = ['opcache.enable'=>'1', 'opcache.memory_consumption'=>'128', 'opcache.interned_strings_buffer'=>'8',
                  'opcache.max_accelerated_files'=>'4000', 'opcache.revalidate_freq'=>'2', 'opcache.jit'=>'tracing',
                  'opcache.jit_buffer_size'=>'100M', 'display_errors'=>'', 'display_startup_errors'=>'',

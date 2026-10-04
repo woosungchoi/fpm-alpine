@@ -147,7 +147,7 @@ for its success under the all-checks policy above.
 
 `verify-published-manifest` is a daily/post-push platform inventory, with one frozen
 digest per moving tag. Its green result does not verify runtime or supply-chain
-attestations. `published-runtime-smoke` runs weekly/manual and anonymously reuses
+attestations. `published-runtime-smoke` runs weekly/manual and for PRs changing its verification path and anonymously reuses
 the Docker Hub exact-subject verifier, registry parity script and scanner. It checks
 the published source manifest from protected main history instead of assuming that
 every existing image was built from today's HEAD. Verification reports and APK

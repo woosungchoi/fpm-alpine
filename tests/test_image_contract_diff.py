@@ -21,10 +21,11 @@ def load_module():
 
 
 BASE = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "platform": "linux/amd64",
     "phpVersion": "8.5.8",
     "packages": ["a", "b"],
+    "packageEvidence": [{"name": "a", "version": "1-r0", "architecture": "x86_64"}, {"name": "b", "version": "2-r0", "architecture": "noarch"}],
     "modules": ["Core", "imagick", "redis"],
     "iconv": {"implementation": "libiconv", "version": "1.18"},
     "fpmConfigValid": True,
@@ -41,9 +42,19 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(self.module.compare(BASE, candidate, "8.5"), [])
 
     def test_package_add_remove_fails(self) -> None:
-        candidate = {**BASE, "packages": ["a", "c"]}
+        candidate = {**BASE, "packages": ["a", "c"], "packageEvidence": [BASE["packageEvidence"][0], {"name": "c", "version": "2-r0", "architecture": "noarch"}]}
         errors = self.module.compare(BASE, candidate, "8.5")
         self.assertIn("package set drift", " ".join(errors))
+
+    def test_same_name_version_drift_fails(self):
+        candidate = {**BASE, "packageEvidence": [dict(row) for row in BASE["packageEvidence"]]}
+        candidate["packageEvidence"][0]["version"] = "1-r1"
+        self.assertIn("package version/architecture drift", " ".join(self.module.compare(BASE, candidate, "8.5")))
+
+    def test_wrong_apk_architecture_fails(self):
+        candidate = {**BASE, "packageEvidence": [dict(row) for row in BASE["packageEvidence"]]}
+        candidate["packageEvidence"][0]["architecture"] = "aarch64"
+        self.assertTrue(self.module.compare(BASE, candidate, "8.5"))
 
     def test_module_drift_fails(self) -> None:
         candidate = {**BASE, "modules": ["Core", "imagick"]}

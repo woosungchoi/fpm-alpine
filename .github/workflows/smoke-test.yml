@@ -90,6 +90,7 @@ jobs:
           python3 tests/test_qemu_runtime_retry.py
           python3 tests/test_published_operation.py
           ./tests/test_smoke_script.sh
+          python3 tests/test_verification_improvements.py
           python3 tests/test_php_lifecycle.py
           python3 tests/test_dockerhub_metadata.py
           python3 tests/test_dependency_automation.py
@@ -259,6 +260,7 @@ jobs:
       - name: Run smoke test under target platform
         env:
           EXPECTED_PHP_MINOR: ${{ matrix.php_minor }}
+          EXPECTED_PHP_PATCH: ${{ matrix.php_patch }}
           EXPECTED_PLATFORM: ${{ matrix.platform }}
           EXPECTED_IMAGICK_VERSION: ${{ matrix.imagick_version }}
           EXPECTED_REDIS_VERSION: ${{ matrix.redis_version }}
@@ -271,7 +273,9 @@ jobs:
           EXPECTED_ICONV_TARGET: ${{ matrix.iconv_target }}
           SMOKE_REPORT_DIR: smoke-reports
           SMOKE_IMAGE: fpm-alpine:smoke-${{ matrix.php_minor }}-${{ matrix.arch }}
-        run: ./scripts/smoke-test-image.sh "$SMOKE_IMAGE"
+        run: |
+          ./scripts/smoke-test-image.sh "$SMOKE_IMAGE"
+          ./tests/test_fpm_runtime_mutations.sh "$SMOKE_IMAGE"
 
       - name: Compare package and runtime contract with published baseline
         env:
@@ -284,8 +288,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p contract-reports
+          baseline_digest="$(./scripts/resolve-image-digest.sh "$BASELINE_IMAGE")"
+          baseline_subject="${BASELINE_IMAGE%:*}@${baseline_digest}"
           ./scripts/capture-image-contract.sh \
-            "$BASELINE_IMAGE" \
+            "$baseline_subject" \
             "$PLATFORM" \
             "$BASELINE_REPORT"
           ./scripts/capture-image-contract.sh \

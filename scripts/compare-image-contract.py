@@ -17,8 +17,8 @@ def _validate(name: str, data: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return [f"{name} contract root must be an object"]
-    if type(data.get("schemaVersion")) is not int or data.get("schemaVersion") != 1:
-        errors.append(f"{name} schemaVersion must be integer 1")
+    if type(data.get("schemaVersion")) is not int or data.get("schemaVersion") != 2:
+        errors.append(f"{name} schemaVersion must be integer 2")
     if not isinstance(data.get("platform"), str) or not PLATFORM.fullmatch(
         data["platform"]
     ):
@@ -35,6 +35,15 @@ def _validate(name: str, data: Any) -> list[str]:
             or value != sorted(set(value))
         ):
             errors.append(f"{name} {field} must be a sorted unique string list")
+    evidence = data.get("packageEvidence")
+    expected_arch = {"linux/amd64": "x86_64", "linux/arm64": "aarch64"}.get(data.get("platform"))
+    if (not isinstance(evidence, list) or not evidence or
+        any(not isinstance(row, dict) or set(row) != {"name", "version", "architecture"} or
+            any(not isinstance(row.get(k), str) or not row[k] for k in ("name", "version", "architecture")) or
+            row.get("architecture") not in {expected_arch, "noarch"} for row in evidence)):
+        errors.append(f"{name} package evidence is invalid")
+    elif [row["name"] for row in evidence] != data.get("packages"):
+        errors.append(f"{name} package evidence names do not match packages")
     iconv = data.get("iconv")
     if not isinstance(iconv, dict) or tuple(iconv) != ("implementation", "version"):
         errors.append(f"{name} iconv contract is invalid")
@@ -60,6 +69,10 @@ def compare(baseline: Any, candidate: Any, expected_minor: str) -> list[str]:
         removed = sorted(set(baseline["packages"]) - set(candidate["packages"]))
         added = sorted(set(candidate["packages"]) - set(baseline["packages"]))
         errors.append(f"package set drift: removed={removed}, added={added}")
+    if baseline["packageEvidence"] != candidate["packageEvidence"]:
+        old = {row["name"]: row for row in baseline["packageEvidence"]}
+        changed = [row for row in candidate["packageEvidence"] if old.get(row["name"]) != row]
+        errors.append(f"package version/architecture drift (requires review): {changed}")
     if baseline["modules"] != candidate["modules"]:
         removed = sorted(set(baseline["modules"]) - set(candidate["modules"]))
         added = sorted(set(candidate["modules"]) - set(baseline["modules"]))

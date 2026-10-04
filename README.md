@@ -57,26 +57,26 @@ For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRAN
 
 ### Protected GitHub Actions publisher
 
-GitHub Actions is the sole publisher for PHP 8.2–8.5. Docker Hub Automatic Builds and the legacy publication webhook have been removed. Manual releases use the owner-only typed `fpm-manual-publish` `repository_dispatch`, so GitHub always loads `publish.yml` from protected default-branch `main`; eligible dependency-only changes on protected `main` use a separate unattended controller that cannot pass its mutation preflight until the current Docker Hub and GHCR subjects have semantic baseline parity. Before automatic Docker Hub credentials, before each immutable Docker Hub stage, and immediately before moving aliases, the controller requires the exact source to remain current `main`, validates the SHA-bound owner cutover attestation, and anonymously verifies the live Docker Hub repository identity, active status, and `is_automated=false`. The attestation requires an actual zero-queue Builds UI observation, the exact nonpublisher hook set, post-observation rotation to a dedicated GitHub Actions token, and removal of external writers. A protected commit-backed transaction lock durably records every write attempt and result. Source pull requests cannot access registry credentials or publish images.
+GitHub Actions is the sole publisher for PHP 8.2–8.5. Docker Hub Automatic Builds and the legacy publication webhook have been removed. Source pull requests cannot access registry credentials or publish images.
 
-- Canary tags are GHCR-only and non-moving per workflow attempt: `canary-<minor>-<run-id>-<run-attempt>`. Existing GHCR canary tags are rejected before push.
-- The owner-only manual publisher creates a GHCR-only immutable canary and never logs in to Docker Hub or changes a production alias. Production alias writes belong only to the trusted automatic controller and its exact-plan recovery path.
-- GHCR release and source tags include the full verified digest (`<patch>-<date>-<digest64>` and `sha-<minor>-<commit12>-<digest64>`) so different content cannot claim the same immutable tag name.
-- Every publisher subject is checked by its registry-specific exact digest for amd64/arm64 manifests, runtime behavior, BuildKit SBOM/provenance, keyless Cosign signatures, Trivy fixable-CRITICAL findings, and cross-registry semantic parity. Top-level Docker Hub and GHCR index digests are never assumed to be interchangeable.
-- GHCR backfill uses a typed default-branch `repository_dispatch`, requires the requested source commit's `build/versions.json` to equal the trusted release manifest, copies already-verified Docker Hub exact subjects without rebuilding, and performs no Docker Hub login, alias write, or signature write. Legacy Docker Hub source subjects may predate Cosign; their trust gate is exact provenance, SBOM, labels, platform/runtime contract, and immutable digest binding. The copied GHCR canary and promoted GHCR subject are signed with an authenticated `fpm.operation=backfill-ghcr` annotation and the pinned automatic-workflow identity. A frozen SHA-bound JSON plan and no-clobber GHCR rollback pins precede moving mutation; the Docker Hub disaster fallback pin must preserve the exact original Docker Hub top-level digest or automatic promotion stops before moving aliases.
-- A separate default-branch recovery controller accepts only failed, cancelled, or timed-out publisher runs plus their exact attempt and plan SHA, and rejects recovery after any later successful trusted publisher run or rerun attempt. A successful transaction uploads a three-file immutable committed receipt immediately; if the wrapper run later fails, recovery validates that exact receipt and records a no-op instead of rolling back already-verified publication. Otherwise it classifies every alias before writing, refuses all recovery mutation if any alias is unknown, attempts registry-independent compensation for known targets, and requires a final full-set baseline read-back. Backfill recovery does not use Docker Hub credentials.
-- PHP 8.0 and 8.1 are excluded from publication, and no `latest` tag is created.
+The active `dependency-auto-publish.yml` publishes one eligible same-minor base update from protected `main` directly to both registry minor tags, using one multi-platform Buildx build with provenance and SBOM. Its read-back gate requires the published top-level digest and amd64/arm64 platform presence in both registries. Source, runtime-policy and workflow changes require manual review and do not automatically publish. The owner-only `fpm-manual-publish` dispatch in `publish.yml` separately creates an immutable GHCR canary and verifies its signature/runtime/scan gates; it does not update production aliases.
 
-See [docs/ci-operations.md](./docs/ci-operations.md) for dispatch, verification, promotion, and rollback gates.
+The repository also retains exact-subject Cosign, provenance, SBOM, semantic parity, promotion, transaction and rollback scripts, with policy/mutation tests. Those scripts' presence does not imply that every gate is executed by the active automatic publisher. This PR adds read-only periodic verification without changing publishing authority or those mutation safeguards.
+
+PHP 8.0 and 8.1 are excluded from publication, and no `latest` tag is created.
+See [docs/ci-operations.md](./docs/ci-operations.md) for the active publishing and verification paths.
 
 ### Published manifest verification reports
 
-GitHub Actions verifies active Docker Hub moving aliases and their GHCR evidence subjects by exact digest:
+The daily manifest workflow observes active Docker Hub moving aliases by exact digest:
 
 - `verify-published-manifest` runs after `main` pushes, on a schedule, and on manual dispatch.
 - The workflow verifies the four active Docker Hub tags for `linux/amd64` and `linux/arm64`, and its exact-set guard rejects every additional public tag after enforcement is enabled.
 - Each run writes a GitHub Actions step summary and uploads manifest report artifacts containing the observed tag digest, per-platform digests, and attestation/metadata manifest entries when present.
-- Scheduled/manual verification remains the source of truth for the final published state.
+- It resolves each moving tag once, then retries raw reads against the frozen digest. This run verifies platform presence only; attestation entries are inventory and do not imply signature, provenance, SBOM, runtime or vulnerability validation.
+- `published-runtime-smoke` separately runs weekly and on manual dispatch. It reuses `verify-published-dockerhub-image.sh`, `verify-image-parity.py` and `scan-image.sh` to reverify frozen subjects: protected-history source labels, provenance, SBOM presence, FastCGI/media runtime for amd64/arm64, APK version/architecture evidence, registry config/layer parity and fixable-CRITICAL vulnerabilities.
+- The current `dependency-auto-publish.yml` builds both registries with provenance and SBOM and reads back digests/platforms; it does not sign its images. The weekly workflow therefore does not claim Cosign verification. Existing `verify-published-image.sh` and `verify-canary-image.sh` retain signature and operation gates for signed publication paths; no unsigned exception is added to those gates.
+- A successful source CI run validates its locally built candidate. It is separate from a report about the already published digest; neither deploys to an application server.
 
 ### Dependency freshness and guarded update automation
 
@@ -89,7 +89,7 @@ GitHub Actions verifies active Docker Hub moving aliases and their GHCR evidence
 
 The workflow runs weekly and on manual dispatch, writes a GitHub Actions step summary, and uploads `freshness-reports/` artifacts for review.
 
-`dependency-update-pr` is a disabled-by-default updater. With the repository-scoped GitHub App and `DEPENDENCY_AUTOMATION_ENABLED=true`, it serializes official PHP same-minor patch/digest updates and PECL patch updates: one run opens only the next eligible pull request, and only a successful automatic publication starts the next candidate. After the required `docker-smoke` workflow succeeds, `dependency-auto-merge` revalidates the exact dependency-only diff and requests GitHub native auto-merge. When that PR changes `build/versions.json` on protected `main`, `dependency-auto-publish` builds PHP 8.2, 8.3, 8.4, and 8.5 for `linux/amd64` and `linux/arm64` as non-moving GHCR canaries. Every canary must pass provenance, SBOM, OCI-label, Cosign, anonymous amd64/arm64 runtime, full runtime-contract, and Trivy gates before the single protected-main controller updates the Docker Hub and GHCR minor aliases with aggregate rollback. Its JSON plan records registry-specific baselines and targets; the actual Docker Hub destination digest is captured only after the cross-registry copy.
+`dependency-update-pr` is controlled by `DEPENDENCY_AUTOMATION_ENABLED`. With the repository-scoped GitHub App and that variable enabled, it serializes official PHP same-minor patch/digest updates: one run opens the next eligible pull request, and a successful automatic publication starts the next discovery pass. `dependency-auto-merge` revalidates the dependency-only diff and all checks on the exact PR head before a normal squash merge. An eligible `build/versions.json`-only update on protected `main` triggers `dependency-auto-publish` for the affected minor. PECL, runtime policy, source and workflow changes require manual review.
 
 The human-owned policy is `build/automation-policy.json`. PHP minor membership, support/EOL state, runtime contracts, workflow permissions, publisher behavior, and exception policy always require manual review.
 
@@ -98,8 +98,8 @@ This repository is maintained through one `main` source trunk and verification w
 - `smoke-test` builds the active PHP matrix from `main` and validates PHP/FPM runtime basics, required extensions, `ffmpeg`, `iconv`, and `Imagick` behavior.
 - `verify-published-manifest` runs on a schedule and verifies the configured published Docker Hub tags.
 - `dependency-freshness` produces report-only observations; the separate updater may open strictly classified dependency-only pull requests when explicitly enabled.
-- `php-lifecycle` checks the active matrix monthly against configured EOL dates and upstream PHP release availability.
-- `published-runtime-smoke` uses the exact registry-specific subjects from a successful dependency publisher's transaction artifact. Scheduled/manual checks resolve each moving tag once and verify the GHCR exact subject's signed operation annotation before selecting the signer identity or allowing the backfill-only unsigned Docker Hub exception. Manual publication performs anonymous exact-subject verification inside its own compensated mutation step rather than attributing the whole active matrix to one manual workflow run. All paths propagate immutable subjects through manifest, provenance, SBOM, Cosign, runtime, semantic-parity, and vulnerability verification and accept only the exact authorized `publish.yml` or `dependency-auto-publish.yml` signer identity.
+- `php-lifecycle` checks configured EOL dates daily without network access; the monthly and manual runs also check upstream release availability. Issues change only when the attention state changes.
+- `published-runtime-smoke` performs the weekly/manual read-only verification described above. Each report distinguishes reverified gates from unverified signatures.
 - Dependabot proposes full-SHA GitHub Actions updates, and the repository-scoped updater may propose strictly classified PHP base or PECL patch updates.
 - Active matrix entries use the documented Imagick baseline in [BRANCH-AND-TAG-POLICY.md](./BRANCH-AND-TAG-POLICY.md).
 - Security reporting and supported-version policy are documented in [SECURITY.md](./SECURITY.md).
@@ -139,23 +139,25 @@ mutable patch pins in validator code. The `smoke-test` workflow validates those 
 PHP/platform matrix from it, and only builds and runs local CI images; it does
 not log in to a registry or publish images.
 
-To select a version locally, pass its exact `base_image` value as
-`PHP_BASE_IMAGE`. Validate all pins before building:
+The supported local command uses the same validated matrix as CI, including all
+base/PECL pins, PHP patch, OCI metadata and source epoch:
 
 ```bash
-./scripts/validate-versions.py
-docker build \
-  --build-arg PHP_BASE_IMAGE="$(./scripts/validate-versions.py --get-base 8.5)" \
-  --build-arg OCI_SOURCE="https://github.com/woosungchoi/fpm-alpine" \
-  --build-arg OCI_REVISION="$(git rev-parse HEAD)" \
-  --build-arg OCI_VERSION="8.5.8" \
-  --build-arg OCI_CREATED="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-  -t fpm-alpine:8.5-local .
+./scripts/build-local-image.py --minor 8.5 --platform linux/arm64 --tag fpm-alpine:8.5-local --smoke
+# Use linux/amd64 on an amd64 Docker host. Inspect inputs without building:
+./scripts/build-local-image.py --minor 8.5 --platform linux/arm64 --tag fpm-alpine:8.5-local --dry-run
 ```
+
+Dockerfile source arguments deliberately have no duplicated defaults. An argument-free
+`docker build .` fails on the missing base image; advanced callers must pass every
+validated source URL/checksum and base ref. This prevents a manifest update from
+silently leaving a stale local base. The smoke test compares the exact PHP patch in
+both CLI and the real FPM response.
 
 For local validation after a Docker build, run:
 
 ```bash
+EXPECTED_PHP_PATCH="$(python3 -c 'import json; print(json.load(open("build/versions.json"))["versions"]["8.5"]["patch"])')" \
 EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 \
 EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0 \
   ./scripts/smoke-test-image.sh <built-image-tag> [expected-php-minor] [expected-platform]
@@ -215,3 +217,39 @@ Clean Rhymix CMS + Docker (development & production)
 Source: <https://github.com/woosungchoi/docker-multi-site>
 
 Docker with WordPress, Gnuboard, Rhymix
+
+### Runtime settings and reproducibility scope
+
+The smoke test sends FastCGI requests to the actual FPM worker in a container
+with `--network none`, without publishing a host port. It checks FPM SAPI,
+patch/extensions, effective ini values and OPcache availability, records observed
+JIT status, and validates tiny JPEG/PNG/WebP decode/resize/encode and two-frame
+GIF→H.264 MP4/VP9 WebM output (codec, dimensions, frame count). Rejected malformed
+input is followed by a second successful FPM request. These fixtures do not prove
+CMS compatibility, performance, or all production media formats.
+
+The existing JIT defaults remain `opcache.jit=tracing` and
+`opcache.jit_buffer_size=100M`. No CMS speedup is asserted and no default is changed
+without representative latency/memory benchmarks. Service owners can mount a
+late-loading `/usr/local/etc/php/conf.d/zz-service.ini`, for example:
+
+```ini
+; Select only after measuring the service workload.
+opcache.jit=disable
+opcache.jit_buffer_size=0
+```
+
+Use an actual FPM request to inspect effective values; CLI settings do not establish
+FPM behavior. The strict smoke fixture verifies image defaults, so an image with
+intentional service overrides needs expectations adapted to that service.
+Removed PHP settings `opcache.fast_shutdown` and `log_errors_max_len` are omitted.
+
+No-cache archive A/B comparison establishes reproducibility with the same available
+inputs at the time of CI. Runtime contracts record exact installed APK name,
+version and architecture and reject unreviewed package drift; a changed version is
+not automatically called a security update. Review upstream package changelogs and
+scan evidence before accepting changes. Alpine APK repositories are not snapshot
+pinned, so rebuilding this source months later is not guaranteed to reproduce the
+same packages/digest. Historical APK retention, hashes, snapshot policy and its
+security-update process require a separate infrastructure decision; this change
+creates no external preservation service.

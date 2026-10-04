@@ -1,0 +1,50 @@
+name: published-runtime-smoke
+
+on:
+  schedule:
+    - cron: '37 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: published-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Published runtime (${{ matrix.minor }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        minor: ['8.2', '8.3', '8.4', '8.5']
+    steps:
+      - name: Checkout source history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Set up QEMU for published arm64 verification
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v3.7.0
+        with:
+          platforms: arm64
+
+      - name: Reverify anonymous exact subjects
+        env:
+          PHP_MINOR: ${{ matrix.minor }}
+        run: ./scripts/verify-maintained-runtime.sh "$PHP_MINOR"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: published-runtime-${{ matrix.minor }}
+          path: published-runtime-reports/
+          if-no-files-found: error

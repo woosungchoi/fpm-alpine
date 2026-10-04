@@ -142,3 +142,24 @@ repository maintainer owns the integration. It is not a publisher or required
 check and does not replace the exact-subject Trivy fixable-CRITICAL gate.
 If that integration reports a PR check/status, automatic merging still waits
 for its success under the all-checks policy above.
+
+## Verification scope and source improvements
+
+`verify-published-manifest` is a daily/post-push platform inventory, with one frozen
+digest per moving tag. Its green result does not verify runtime or supply-chain
+attestations. `published-runtime-smoke` runs weekly/manual and anonymously reuses
+the Docker Hub exact-subject verifier, registry parity script and scanner. It checks
+the published source manifest from protected main history instead of assuming that
+every existing image was built from today's HEAD. Verification reports and APK
+version/architecture evidence are uploaded even on failure.
+
+The current dependency publisher does not create Cosign signatures. The weekly
+workflow states this limitation and leaves existing signed-subject gates unchanged.
+Restoring signed publication or expanding mutation/controller policy is a separate
+reviewed decision; a missing signature is never reported as verified.
+
+The local `scripts/build-local-image.py` selects the same validated inputs as CI.
+Dockerfile has no independent mutable source defaults. Source/test/workflow changes
+without a versions manifest diff do not trigger dependency-auto-publish. Main smoke
+and manifest CI run after their merge; deploying a newly built image requires a
+separately authorized publication. No runtime verifier updates application servers.

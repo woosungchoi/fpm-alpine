@@ -1,4 +1,5 @@
-ARG PHP_BASE_IMAGE=php:8.5-fpm-alpine@sha256:79def1d16ece3ab1a6656c46a23bfd80ad33887fbd33626e7bd743cef54ef9c6
+# Build through scripts/build-local-image.py; every source pin comes from build/versions.json.
+ARG PHP_BASE_IMAGE
 FROM ${PHP_BASE_IMAGE}
 
 ARG SOURCE_DATE_EPOCH=0
@@ -12,12 +13,12 @@ LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
 	org.opencontainers.image.licenses="GPL-2.0-only" \
 	org.opencontainers.image.created="${OCI_CREATED}"
 
-ARG IMAGICK_URL=https://pecl.php.net/get/imagick-3.8.1.tgz
-ARG IMAGICK_SHA256=3a3587c0a524c17d0dad9673a160b90cd776e836838474e173b549ed864352ee
-ARG REDIS_URL=https://pecl.php.net/get/redis-6.3.0.tgz
-ARG REDIS_SHA256=0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5
-ARG APCU_URL=https://pecl.php.net/get/apcu-5.1.28.tgz
-ARG APCU_SHA256=ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf
+ARG IMAGICK_URL
+ARG IMAGICK_SHA256
+ARG REDIS_URL
+ARG REDIS_SHA256
+ARG APCU_URL
+ARG APCU_SHA256
 # Persistent runtime dependencies.
 RUN set -eux; \
 	apk add --no-cache \
@@ -107,7 +108,6 @@ RUN set -eux; \
 		echo 'opcache.interned_strings_buffer=8'; \
 		echo 'opcache.max_accelerated_files=4000'; \
 		echo 'opcache.revalidate_freq=2'; \
-		echo 'opcache.fast_shutdown=1'; \
 		echo 'opcache.enable=1'; \
 		echo 'opcache.jit_buffer_size=100M'; \
 		echo 'opcache.jit=tracing'; \
@@ -119,7 +119,6 @@ RUN { \
 		echo 'display_startup_errors = Off'; \
 		echo 'log_errors = On'; \
 		echo 'error_log = /dev/stderr'; \
-		echo 'log_errors_max_len = 1024'; \
 		echo 'ignore_repeated_errors = On'; \
 		echo 'ignore_repeated_source = Off'; \
 		echo 'html_errors = Off'; \

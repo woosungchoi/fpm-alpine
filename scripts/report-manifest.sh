@@ -38,11 +38,19 @@ inspect_log="$report_dir/${safe_name}.inspect.log"
 
 inspect_text=""
 raw_status=""
+digest=""
+subject=""
 : > "$inspect_log"
 for attempt in $(seq 1 "$MANIFEST_RETRY_ATTEMPTS"); do
   echo "manifest inspect attempt ${attempt}/${MANIFEST_RETRY_ATTEMPTS}: ${IMAGE_REF}" | tee -a "$inspect_log"
-  if inspect_text="$(docker buildx imagetools inspect "$IMAGE_REF" 2>&1)"; then
-    if docker buildx imagetools inspect --raw "$IMAGE_REF" > "$raw_file" 2>>"$inspect_log"; then
+  if [ -z "$digest" ] && inspect_text="$(docker buildx imagetools inspect "$IMAGE_REF" 2>&1)"; then
+    digest="$(printf '%s\n' "$inspect_text" | "$(dirname "$0")/extract-image-digest.sh")"
+    repository="${IMAGE_REF%@*}"
+    if [[ "$repository" == "$IMAGE_REF" && "${repository##*/}" == *:* ]]; then repository="${repository%:*}"; fi
+    subject="${repository}@${digest}"
+  fi
+  if [ -n "$digest" ]; then
+    if docker buildx imagetools inspect --raw "$subject" > "$raw_file" 2>>"$inspect_log"; then
       raw_status="ok"
       break
     fi
@@ -69,8 +77,6 @@ EOF
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat "$md_file" >> "$GITHUB_STEP_SUMMARY"; fi
   exit 1
 fi
-
-digest="$(printf '%s\n' "$inspect_text" | "$(dirname "$0")/extract-image-digest.sh")"
 
 parser_file="$(mktemp)"
 trap 'rm -f "$parser_file"' EXIT
@@ -122,6 +128,7 @@ missing = [item for item in expected if item not in found]
 summary = {
     "image": image_ref,
     "digest": digest,
+    "verificationScope": "manifest/platform presence only; no signature, runtime, provenance, SBOM or vulnerability verification",
     "expectedPlatforms": expected,
     "platforms": sorted(platforms, key=lambda item: item["platform"]),
     "missingPlatforms": missing,
@@ -133,6 +140,7 @@ lines = [
     f"## `{image_ref}`",
     "",
     f"- Digest: `{digest}`",
+    "- This run reverified manifest/platform presence only. Attestation entries are inventory, not verified attestations.",
     f"- Expected platforms: {', '.join(f'`{item}`' for item in expected)}",
     f"- Status: {'✅ passed' if not missing else '❌ missing ' + ', '.join(missing)}",
     f"- Publish path: {publish_path_note}",

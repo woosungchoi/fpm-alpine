@@ -204,7 +204,7 @@ assert_file scripts/check-php-lifecycle.py
 assert_executable scripts/check-php-lifecycle.py
 assert_file scripts/create-php-lifecycle-issue.sh
 assert_executable scripts/create-php-lifecycle-issue.sh
-assert_contains .github/workflows/php-lifecycle.yml "cron: '19 5 1 * *'"
+assert_contains .github/workflows/php-lifecycle.yml "cron: '19 5 * * *'"
 assert_contains .github/workflows/php-lifecycle.yml 'workflow_dispatch:'
 assert_contains .github/workflows/php-lifecycle.yml 'scripts/check-php-lifecycle.py'
 assert_contains .github/workflows/dependency-auto-publish.yml 'environment: fpm-auto-production'
@@ -217,7 +217,12 @@ assert_contains .github/workflows/dependency-auto-publish.yml 'test "$dockerhub_
 assert_not_contains .github/workflows/dependency-auto-publish.yml 'repository_dispatch:'
 assert_not_file .github/workflows/dependency-publish-recovery.yml
 assert_not_file .github/workflows/legacy-cutover-lease.yml
-assert_not_file .github/workflows/published-runtime-smoke.yml
+assert_file .github/workflows/published-runtime-smoke.yml
+assert_contains .github/workflows/published-runtime-smoke.yml 'contents: read'
+assert_not_contains .github/workflows/published-runtime-smoke.yml 'packages: write'
+assert_not_contains .github/workflows/published-runtime-smoke.yml 'secrets.'
+assert_not_contains .github/workflows/published-runtime-smoke.yml 'login-action'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-maintained-runtime.sh'
 assert_not_file .github/dockerhub-cutover-attestation.json
 assert_contains .github/workflows/smoke-test.yml 'python3 tests/test_dependency_auto_publish.py'
 python3 - <<'PY'

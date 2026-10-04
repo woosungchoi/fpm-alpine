@@ -12,8 +12,8 @@ output="${3:?output path required}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-docker run --rm --platform "$platform" --entrypoint sh "$image" -c 'apk info | sort -u' \
-  > "$tmp_dir/packages"
+docker run --rm --platform "$platform" --entrypoint cat "$image" /lib/apk/db/installed \
+  > "$tmp_dir/package-evidence"
 docker run --rm --platform "$platform" --entrypoint php "$image" -r 'echo PHP_VERSION;' \
   > "$tmp_dir/php-version"
 docker run --rm --platform "$platform" --entrypoint php "$image" -m \
@@ -33,11 +33,23 @@ from pathlib import Path
 root, platform, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 def lines(name):
     return sorted(set(filter(None, root.joinpath(name).read_text().splitlines())))
+packages = []
+for block in root.joinpath("package-evidence").read_text().split("\n\n"):
+    fields = dict(line.split(":", 1) for line in block.splitlines() if ":" in line)
+    if "P" not in fields:
+        continue
+    if not all(fields.get(key) for key in ("P", "V", "A")):
+        raise SystemExit("incomplete installed APK package record")
+    packages.append({"name": fields["P"], "version": fields["V"], "architecture": fields["A"]})
+packages.sort(key=lambda row: row["name"])
+if not packages:
+    raise SystemExit("empty installed APK evidence")
 data = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "platform": platform,
     "phpVersion": root.joinpath("php-version").read_text().strip(),
-    "packages": lines("packages"),
+    "packages": [row["name"] for row in packages],
+    "packageEvidence": packages,
     "modules": lines("modules"),
     "iconv": json.loads(root.joinpath("iconv").read_text()),
     "fpmConfigValid": root.joinpath("fpm-valid").read_text().strip() == "true",

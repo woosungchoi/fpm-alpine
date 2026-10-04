@@ -47,7 +47,8 @@ AUTO_PROMOTION_VERSIONS_FILE="$report/source-versions.json" \
 for platform in linux/amd64 linux/arm64; do
   ./scripts/scan-image.sh "$dockerhub_repository" "$dockerhub_digest" "$report/scans" "$platform"
   ./scripts/scan-image.sh "$ghcr_repository" "$ghcr_digest" "$report/scans" "$platform"
-  ./scripts/capture-image-contract.sh "$dockerhub_subject" "$platform" "$report/packages-${platform#linux/}.json"
+  platform_subject="$(./scripts/resolve-platform-image.py "$dockerhub_subject" "$platform")"
+  ./scripts/capture-image-contract.sh "$platform_subject" "$platform" "$report/packages-${platform#linux/}.json"
 done
 cat > "$report/scope.md" <<EOF
 # Published runtime verification scope

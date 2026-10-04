@@ -247,8 +247,12 @@ Removed PHP settings `opcache.fast_shutdown` and `log_errors_max_len` are omitte
 No-cache archive A/B comparison establishes reproducibility with the same available
 inputs at the time of CI. Runtime contracts record exact installed APK name,
 version and architecture and reject unreviewed package drift; a changed version is
-not automatically called a security update. Review upstream package changelogs and
-scan evidence before accepting changes. Alpine APK repositories are not snapshot
+not automatically called a security update. Review official package source and scan evidence before accepting changes. Source CI
+explicitly applies `build/approved-apk-transitions.json`: only the exact reviewed
+libpng 1.6.58-r1→1.6.59-r0 and pcre2 10.48-r0→10.49-r0 transitions on amd64/arm64
+are accepted, with official source commit evidence. Every other version, package or
+architecture drift still fails; the comparison CLI defaults to rejecting all drift.
+A future update needs a separate reviewed policy change, not an inferred security exception. Alpine APK repositories are not snapshot
 pinned, so rebuilding this source months later is not guaranteed to reproduce the
 same packages/digest. Historical APK retention, hashes, snapshot policy and its
 security-update process require a separate infrastructure decision; this change

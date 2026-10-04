@@ -51,6 +51,32 @@ class ContractTests(unittest.TestCase):
         candidate["packageEvidence"][0]["version"] = "1-r1"
         self.assertIn("package version/architecture drift", " ".join(self.module.compare(BASE, candidate, "8.5")))
 
+    def test_reviewed_transition_is_exact_and_architecture_bound(self):
+        candidate = {**BASE, "packageEvidence": [dict(row) for row in BASE["packageEvidence"]]}
+        candidate["packageEvidence"][0]["version"] = "1-r1"
+        approved = (("a", "1-r0", "1-r1", "x86_64"),)
+        self.assertEqual(self.module.compare(BASE, candidate, "8.5", approved), [])
+        self.assertTrue(self.module.compare(BASE, candidate, "8.5", (("a", "1-r0", "1-r1", "aarch64"),)))
+        candidate["packageEvidence"][0]["version"] = "1-r2"
+        self.assertTrue(self.module.compare(BASE, candidate, "8.5", approved))
+        candidate["packageEvidence"][0]["version"] = "0-r0"
+        self.assertTrue(self.module.compare(BASE, candidate, "8.5", approved))
+
+    def test_reviewed_policy_rejects_wildcards_and_duplicates(self):
+        import json, tempfile
+        path = ROOT / "build/approved-apk-transitions.json"
+        policy = json.loads(path.read_text())
+        self.assertEqual(len(self.module.load_approved_transitions(path)), 4)
+        with tempfile.TemporaryDirectory() as raw:
+            target = Path(raw) / "policy.json"
+            policy["transitions"][0]["to"] = "*"
+            target.write_text(json.dumps(policy))
+            with self.assertRaises(ValueError): self.module.load_approved_transitions(target)
+            policy = json.loads(path.read_text())
+            policy["transitions"].append(policy["transitions"][0])
+            target.write_text(json.dumps(policy))
+            with self.assertRaises(ValueError): self.module.load_approved_transitions(target)
+
     def test_wrong_apk_architecture_fails(self):
         candidate = {**BASE, "packageEvidence": [dict(row) for row in BASE["packageEvidence"]]}
         candidate["packageEvidence"][0]["architecture"] = "aarch64"

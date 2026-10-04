@@ -60,7 +60,7 @@ else:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:
                 tmp=Path(raw); (tmp/'scripts').mkdir(); (tmp/'bin').mkdir()
                 shutil.copy(ROOT/'scripts/verify-maintained-runtime.sh', tmp/'scripts')
-                for name in ('resolve-image-digest.sh','verify-published-dockerhub-image.sh','verify-image-parity.py','scan-image.sh','capture-image-contract.sh'):
+                for name in ('resolve-image-digest.sh','resolve-platform-image.py','verify-published-dockerhub-image.sh','verify-image-parity.py','scan-image.sh','capture-image-contract.sh'):
                     p=tmp/'scripts'/name
                     p.write_text('''#!/usr/bin/env python3
 import os,sys,json
@@ -68,6 +68,7 @@ from pathlib import Path
 name=Path(sys.argv[0]).name
 with open(os.environ['TRACE'],'a') as f: f.write(json.dumps([name,*sys.argv[1:]])+'\\n')
 if name=='resolve-image-digest.sh': print('sha256:'+'a'*64)
+if name=='resolve-platform-image.py': print('docker.io/woosungchoi/fpm-alpine@sha256:'+'b'*64)
 if name==os.environ['FAIL_GATE']: sys.exit(1)
 '''); p.chmod(0o755)
                 git=tmp/'bin/git'; git.write_text('''#!/usr/bin/env python3

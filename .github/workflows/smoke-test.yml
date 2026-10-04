@@ -301,7 +301,8 @@ jobs:
           python3 scripts/compare-image-contract.py \
             "$BASELINE_REPORT" \
             "$CANDIDATE_REPORT" \
-            "$PHP_MINOR"
+            "$PHP_MINOR" \
+            --approved-apk-transitions build/approved-apk-transitions.json
 
       - name: Scan source-only image
         env:

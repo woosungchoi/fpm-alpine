@@ -11,7 +11,12 @@ workflow=.github/workflows/dependency-auto-publish.yml
 assert_file "$workflow"
 assert_not_file .github/workflows/dependency-publish-recovery.yml
 assert_not_file .github/workflows/legacy-cutover-lease.yml
-assert_not_file .github/workflows/published-runtime-smoke.yml
+assert_file .github/workflows/published-runtime-smoke.yml
+assert_contains .github/workflows/published-runtime-smoke.yml 'contents: read'
+assert_not_contains .github/workflows/published-runtime-smoke.yml 'packages: write'
+assert_not_contains .github/workflows/published-runtime-smoke.yml 'secrets.'
+assert_not_contains .github/workflows/published-runtime-smoke.yml 'login-action'
+assert_contains .github/workflows/published-runtime-smoke.yml 'scripts/verify-maintained-runtime.sh'
 assert_not_file .github/dockerhub-cutover-attestation.json
 
 assert_contains "$workflow" 'branches: ["main"]'

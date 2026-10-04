@@ -23,6 +23,20 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
 
 with tempfile.TemporaryDirectory() as raw:
     root = Path(raw)
+    for today, expected, days, rc in (
+        ("2026-10-01", "ok", 91, 0), ("2026-10-02", "warning-90", 90, 0),
+        ("2026-12-01", "warning-30", 30, 0), ("2026-12-31", "warning-30", 0, 0),
+        ("2027-01-01", "eol", -1, 2),
+    ):
+        result = run("--today", today, "--skip-upstream", "--output-json", str(root / "date.json"),
+                     "--output-md", str(root / "date.md"))
+        assert result.returncode == rc, result.stderr
+        report = json.loads((root / "date.json").read_text())
+        row = report["records"][0]
+        assert (row["state"], row["daysUntilEol"]) == (expected, days)
+        assert report["upstreamChecked"] is False
+        assert "not checked" in (root / "date.md").read_text()
+
     result = run(
         "--today", "2026-10-15", "--skip-upstream",
         "--output-json", str(root / "warning.json"),

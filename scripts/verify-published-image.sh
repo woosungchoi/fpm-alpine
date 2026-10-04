@@ -218,6 +218,7 @@ fi
 mapfile -t runtime_values <<< "$runtime_values_output"
 [ "${#runtime_values[@]}" -eq 9 ] || { echo "failed to load runtime expectations" >&2; exit 1; }
 export EXPECTED_PHP_MINOR="$minor"
+export EXPECTED_PHP_PATCH="$EXPECTED_VERSION"
 export EXPECTED_IMAGICK_VERSION="${runtime_values[0]}"
 export EXPECTED_REDIS_VERSION="${runtime_values[1]}"
 export EXPECTED_APCU_VERSION="${runtime_values[2]}"

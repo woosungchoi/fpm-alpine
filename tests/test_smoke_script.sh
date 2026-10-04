@@ -26,6 +26,7 @@ case "${1:-}" in
     if [ "${MOCK_FAIL_EXEC_CONTAINS:-}" ] && [[ "${*: -1}" == *"$MOCK_FAIL_EXEC_CONTAINS"* ]]; then exit 1; fi
     exit 0
     ;;
+  cp) exit 0 ;;
   rm) exit 0 ;;
   *) exit 64 ;;
 esac
@@ -38,7 +39,7 @@ for platform in linux/amd64 linux/arm64; do
   log="$tmp/docker-$arch.log"
   report="$tmp/report-$arch.md"
   DOCKER_LOG="$log" PATH="$tmp/bin:$PATH" \
-    EXPECTED_PHP_MINOR=8.5 EXPECTED_PLATFORM="$platform" \
+    EXPECTED_PHP_MINOR=8.5 EXPECTED_PHP_PATCH=8.5.11 EXPECTED_PLATFORM="$platform" \
     EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 \
     EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0 \
     SMOKE_REPORT_MD="$report" ./scripts/smoke-test-image.sh "fixture:$arch" >/dev/null
@@ -54,11 +55,12 @@ for call in run:
     assert '--entrypoint' in call and call[call.index('--entrypoint')+1]=='php-fpm'
 config=next(c for c in run if '-d' not in c); assert config[-1]=='-t'
 server=next(c for c in run if '-d' in c); assert server[-1]=='-F'
+assert server[server.index('--network')+1]=='none'
 assert run.index(config) < run.index(server)
 assert [c for c in calls if c[0]=='inspect']
 assert [c for c in calls if c[0]=='logs']
 commands=[c[-1] for c in calls if c[0]=='exec' and len(c)>=5 and c[-3:-1]==['sh','-lc']]
-need=('PHP_MAJOR_VERSION','PHP_MINOR_VERSION','8.5',
+need=('PHP_VERSION','8.5.11','fastcgi-client.php','fpm-runtime.json','fpm-runtime-recovery.json','PHP_MAJOR_VERSION','PHP_MINOR_VERSION','8.5',
       'phpversion("imagick")','3.8.1','phpversion("redis")','6.3.0','phpversion("apcu")','5.1.28',
       'ICONV_IMPL','libiconv','ICONV_VERSION','1.18','gnu-libiconv-libs=1.18-r0','apk info -W','/usr/lib/libiconv.so.2','/usr/lib/libiconv.so.2.7.0','readlink -f','apk audit --system /usr/lib','usr/lib/(libiconv|libcharset)','ldd /usr/local/bin/php','not found','ASCII//TRANSLIT','café','caf','new Imagick()')
 for value in need: assert any(value in command for command in commands), value
@@ -72,7 +74,7 @@ done
 readiness_failure_log="$tmp/docker-readiness-failure.log"
 readiness_failure_report="$tmp/report-readiness-failure.md"
 if DOCKER_LOG="$readiness_failure_log" MOCK_NOT_READY=1 PATH="$tmp/bin:$PATH" \
-  EXPECTED_PHP_MINOR=8.5 EXPECTED_PLATFORM=linux/amd64 \
+  EXPECTED_PHP_MINOR=8.5 EXPECTED_PHP_PATCH=8.5.11 EXPECTED_PLATFORM=linux/amd64 \
   EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 \
   EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0 \
   SMOKE_REPORT_MD="$readiness_failure_report" ./scripts/smoke-test-image.sh fixture:not-ready >/dev/null 2>&1; then
@@ -87,7 +89,7 @@ assert len([call for call in calls if call[0]=='inspect']) == 40
 assert [call for call in calls if call[0]=='rm'] == [['rm', '-f', 'mock-container']]
 PY
 for missing in EXPECTED_ICONV_IMPLEMENTATION EXPECTED_ICONV_VERSION EXPECTED_ICONV_PACKAGE EXPECTED_ICONV_PACKAGE_VERSION EXPECTED_ICONV_OWNER_PATH EXPECTED_ICONV_TARGET; do
-  args=(EXPECTED_PHP_MINOR=8.5 EXPECTED_PLATFORM=linux/amd64 EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0)
+  args=(EXPECTED_PHP_MINOR=8.5 EXPECTED_PHP_PATCH=8.5.11 EXPECTED_PLATFORM=linux/amd64 EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0)
   for i in "${!args[@]}"; do [[ "${args[$i]}" == "$missing="* ]] && args[$i]="$missing="; done
   if env DOCKER_LOG="$tmp/missing-$missing.log" PATH="$tmp/bin:$PATH" "${args[@]}" SMOKE_REPORT_MD="$tmp/missing-$missing.md" ./scripts/smoke-test-image.sh fixture:missing >/dev/null 2>&1; then
     fail "smoke script accepted missing $missing"
@@ -96,7 +98,7 @@ done
 failure_log="$tmp/docker-failure.log"
 failure_report="$tmp/report-failure.md"
 if DOCKER_LOG="$failure_log" MOCK_FAIL_RUN_CONTAINS=' -t' PATH="$tmp/bin:$PATH" \
-  EXPECTED_PHP_MINOR=8.5 EXPECTED_PLATFORM=linux/amd64 \
+  EXPECTED_PHP_MINOR=8.5 EXPECTED_PHP_PATCH=8.5.11 EXPECTED_PLATFORM=linux/amd64 \
   EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 \
   EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0 \
   SMOKE_REPORT_MD="$failure_report" ./scripts/smoke-test-image.sh fixture:failure >/dev/null 2>&1; then
@@ -112,7 +114,7 @@ assert cleanup == [], cleanup
 PY
 audit_failure_report="$tmp/report-audit-failure.md"
 if DOCKER_LOG="$tmp/docker-audit-failure.log" MOCK_FAIL_EXEC_CONTAINS='apk audit --system /usr/lib' PATH="$tmp/bin:$PATH" \
-  EXPECTED_PHP_MINOR=8.5 EXPECTED_PLATFORM=linux/amd64 \
+  EXPECTED_PHP_MINOR=8.5 EXPECTED_PHP_PATCH=8.5.11 EXPECTED_PLATFORM=linux/amd64 \
   EXPECTED_IMAGICK_VERSION=3.8.1 EXPECTED_REDIS_VERSION=6.3.0 EXPECTED_APCU_VERSION=5.1.28 \
   EXPECTED_ICONV_IMPLEMENTATION=libiconv EXPECTED_ICONV_VERSION=1.18 EXPECTED_ICONV_PACKAGE=gnu-libiconv-libs EXPECTED_ICONV_PACKAGE_VERSION=1.18-r0 EXPECTED_ICONV_OWNER_PATH=/usr/lib/libiconv.so.2 EXPECTED_ICONV_TARGET=/usr/lib/libiconv.so.2.7.0 \
   SMOKE_REPORT_MD="$audit_failure_report" ./scripts/smoke-test-image.sh fixture:audit-failure >/dev/null 2>&1; then

@@ -2,7 +2,8 @@ name: php-lifecycle
 
 on:
   schedule:
-    - cron: '19 5 1 * *'
+    - cron: '19 5 * * *'
+    - cron: '49 5 1 * *'
   workflow_dispatch:
 
 concurrency:
@@ -20,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Validate versions metadata
         run: ./scripts/validate-versions.py
@@ -27,7 +30,14 @@ jobs:
       - name: Check PHP lifecycle and upstream release source
         id: lifecycle
         continue-on-error: true
-        run: ./scripts/check-php-lifecycle.py
+        run: |
+          args=()
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$EVENT_SCHEDULE" = '19 5 * * *' ]; then
+            args+=(--skip-upstream)
+          fi
+          ./scripts/check-php-lifecycle.py "${args[@]}"
+        env:
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
 
       - name: Upload lifecycle report
         if: always()

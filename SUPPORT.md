@@ -17,7 +17,7 @@ This file is the canonical lifecycle and support policy for the image tags in th
 
 For source-only CI, these four active matrix entries and their lifecycle fields are mirrored in `build/versions.json`. The validator requires the exact version set, order, status, and EOL values; this document remains the human-facing canonical lifecycle policy.
 
-The monthly `php-lifecycle` workflow warns 90 and 30 days before EOL, fails when an active matrix entry reaches EOL, and reports upstream release-source outages separately from lifecycle mismatches.
+The daily, network-free `php-lifecycle` date check warns 90 and 30 days before EOL, fails when an active matrix entry reaches EOL, and updates its issue only when the attention state changes. Monthly and manual runs additionally report upstream release-source outages separately from lifecycle mismatches. EOL is inclusive: 2026-12-31 is the final supported day for 8.2; 2027-01-01 fails.
 
 ## Unsupported legacy images
 
@@ -30,3 +30,10 @@ The former Docker Hub `this` tag was an unsupported accidental alias and is no l
 ## Tag policy
 
 Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, and `8.5`. There is intentionally no `latest`, canary, immutable, source, frozen, or legacy tag on Docker Hub. Pin an active minor or its resolved digest and review this policy before selecting a line. GHCR is the canonical evidence registry for non-moving canary, immutable release/source, provenance, signature, archive, and rollback subjects.
+
+## PHP 8.2 migration checklist
+
+- Identify applications and jobs using the 8.2 image; source CI cannot discover deployments.
+- Test a supported higher PHP minor with representative CMS requests and plugins.
+- Restrict new 8.2 deployments as the 90-day and 30-day warning states arrive.
+- Review archive/tag retention and remove 8.2 from the active matrix through a manual policy PR after its final supported day; the date check never removes it automatically.

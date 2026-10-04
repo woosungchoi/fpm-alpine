@@ -88,6 +88,7 @@ def main() -> int:
     report = {
         "schemaVersion": 1,
         "checkedAt": today.isoformat(),
+        "upstreamChecked": not args.skip_upstream,
         "records": records,
         "upstreamUnavailable": upstream_unavailable,
         "mismatches": mismatches,
@@ -100,7 +101,7 @@ def main() -> int:
     for item in records:
         lines.append(
             f"- PHP `{item['minor']}`: `{item['state']}`; EOL `{item['eol']}` "
-            f"(`{item['daysUntilEol']}` days); upstream `{item['upstreamVersion'] or 'unavailable'}`"
+            f"(`{item['daysUntilEol']}` days); upstream `{item['upstreamVersion'] or ('not checked' if args.skip_upstream else 'unavailable')}`"
         )
     if upstream_unavailable:
         lines += ["", "## Upstream source unavailable", ""] + [f"- {item}" for item in upstream_unavailable]

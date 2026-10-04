@@ -3,6 +3,7 @@ set -euo pipefail
 
 IMAGE_NAME="${1:-}"
 EXPECTED_PHP_MINOR="${2:-${EXPECTED_PHP_MINOR:-}}"
+EXPECTED_PHP_PATCH="${EXPECTED_PHP_PATCH:-}"
 EXPECTED_PLATFORM="${3:-${EXPECTED_PLATFORM:-}}"
 EXPECTED_IMAGICK_VERSION="${EXPECTED_IMAGICK_VERSION:-}"
 EXPECTED_REDIS_VERSION="${EXPECTED_REDIS_VERSION:-}"
@@ -118,10 +119,19 @@ docker_platform_args=()
 if [ -n "$EXPECTED_PLATFORM" ]; then
   docker_platform_args=(--platform "$EXPECTED_PLATFORM")
 fi
+[ -n "$EXPECTED_PHP_PATCH" ] || { echo "EXPECTED_PHP_PATCH is required" >&2; exit 64; }
 run_fpm_config_check
-container_id="$(docker run -d --rm "${docker_platform_args[@]}" --entrypoint php-fpm "$IMAGE_NAME" -F)"
+container_id="$(docker run -d --rm "${docker_platform_args[@]}" --network none --entrypoint php-fpm "$IMAGE_NAME" -F)"
 
 wait_for_fpm
+fixture_dir="$(cd "$(dirname "$0")/../tests/fixtures" && pwd)"
+docker cp "$fixture_dir/fpm-runtime.php" "$container_id:/tmp/fpm-runtime.php"
+docker cp "$fixture_dir/fastcgi-client.php" "$container_id:/tmp/fastcgi-client.php"
+docker exec "$container_id" chmod 644 /tmp/fpm-runtime.php /tmp/fastcgi-client.php
+run_check "FastCGI FPM settings and image/media conversions" "php /tmp/fastcgi-client.php '$EXPECTED_PHP_PATCH' '$EXPECTED_IMAGICK_VERSION' '$EXPECTED_REDIS_VERSION' '$EXPECTED_APCU_VERSION' > /tmp/fpm-runtime.json"
+docker cp "$container_id:/tmp/fpm-runtime.json" "$(dirname "$SMOKE_REPORT_MD")/fpm-runtime.json"
+run_check "FPM responds after malformed input" "php /tmp/fastcgi-client.php '$EXPECTED_PHP_PATCH' '$EXPECTED_IMAGICK_VERSION' '$EXPECTED_REDIS_VERSION' '$EXPECTED_APCU_VERSION' > /tmp/fpm-runtime-recovery.json"
+run_check "PHP patch: ${EXPECTED_PHP_PATCH}" "php -r 'if (PHP_VERSION !== \"${EXPECTED_PHP_PATCH}\") { fwrite(STDERR, \"unexpected PHP patch\"); exit(1); }'"
 run_check "php -v" 'php -v'
 if [ -n "$EXPECTED_PHP_MINOR" ]; then
   run_check "PHP minor: ${EXPECTED_PHP_MINOR}" "php -r 'if (PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION !== \"${EXPECTED_PHP_MINOR}\") { fwrite(STDERR, \"unexpected PHP minor: \" . PHP_MAJOR_VERSION . \".\" . PHP_MINOR_VERSION . PHP_EOL); exit(1); }'"

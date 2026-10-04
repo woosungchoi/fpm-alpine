@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "transitions": [
+    {
+      "name": "libpng",
+      "from": "1.6.58-r1",
+      "to": "1.6.59-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/8f222b50cd6e31c83f7dd69ab7c00e7471e11d4b",
+      "reason": "Observed in the official signed Alpine v3.24 repository on 2026-10-04. Review is bounded to this exact transition, with image/media/runtime and scan gates; no security-fix attribution is assumed."
+    },
+    {
+      "name": "pcre2",
+      "from": "10.48-r0",
+      "to": "10.49-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/3d497cbb3217749c4fb85f90f3b6f7908b0c1f95",
+      "reason": "Observed in the official signed Alpine v3.24 repository on 2026-10-04. Review is bounded to this exact transition, with image/media/runtime and scan gates; no security-fix attribution is assumed."
+    }
+  ]
+}

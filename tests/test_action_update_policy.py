@@ -95,6 +95,21 @@ class ActionUpdateTests(unittest.TestCase):
 """
         self.assertTrue(self.verify(diff))
 
+    def test_stale_qemu_version_comment_is_rejected(self) -> None:
+        old = "96fe6ef7f33517b61c61be40b68a1882f3264fb8"
+        new = "99012661954931238ded8c8b007157a8430204e1"
+        diff = f"""diff --git a/.github/workflows/x.yml b/.github/workflows/x.yml
+--- a/.github/workflows/x.yml
++++ b/.github/workflows/x.yml
+@@ -1 +1 @@
+-      uses: docker/setup-qemu-action@{old} # v3.7.0
++      uses: docker/setup-qemu-action@{new} # v3.7.0
+"""
+        resolver = lambda owner, repo, tag: new if tag == "v4.4.0" else old
+        self.assertTrue(self.verify(diff, resolver))
+        fixed = diff.replace(f"@{new} # v3.7.0", f"@{new} # v4.4.0")
+        self.assertEqual(self.verify(fixed, resolver), [])
+
     def test_empty_diff_is_not_an_action_update(self) -> None:
         self.assertTrue(self.verify(""))
 

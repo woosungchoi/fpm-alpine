@@ -33,6 +33,21 @@ Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, and `8.5`
 
 ## PHP 8.2 migration checklist
 
+The 90-day warning in [#130](https://github.com/woosungchoi/fpm-alpine/issues/130)
+was reviewed on 2026-10-15. PHP 8.2 stays security-only through 2026-12-31;
+no image tags or deployments are removed by acknowledging that warning.
+Prefer a supported higher minor for new deployments, after application testing.
+The next migration checkpoint is 2026-12-01 (30 days remaining), followed by
+manual active-matrix and tag-retention review on 2027-01-01.
+
+After recording a migration plan, maintainers may close a warning issue as
+completed. Only the identical warning fingerprint is acknowledged: daily runs
+do not recreate it, but a changed warning (including the 30-day checkpoint)
+creates a new issue. Closing as not planned does not acknowledge a warning.
+EOL, lifecycle mismatches and upstream-source failures are never suppressed by
+a closed issue. This acknowledgement does not certify that downstream users
+have migrated their applications.
+
 - Identify applications and jobs using the 8.2 image; source CI cannot discover deployments.
 - Test a supported higher PHP minor with representative CMS requests and plugins.
 - Restrict new 8.2 deployments as the 90-day and 30-day warning states arrive.

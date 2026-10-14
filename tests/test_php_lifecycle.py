@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -83,5 +85,66 @@ with tempfile.TemporaryDirectory() as raw:
     )
     assert result.returncode == 2
     assert json.loads((root / "mismatch.json").read_text())["mismatches"]
+
+    # Exercise the real issue script without contacting GitHub. Capture issue
+    # writes and ensure only completed, identical warnings are acknowledged.
+    fake_bin = root / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text('''#!/usr/bin/env python3
+import json,os,sys
+from pathlib import Path
+args=sys.argv[1:]
+with open(os.environ['GH_CALLS'],'a') as f: f.write(json.dumps(args)+'\\n')
+if args[:2] == ['issue','list']:
+    if args[args.index('--state')+1] == 'open':
+        print(os.environ.get('OPEN_ISSUE',''))
+    else:
+        print(os.environ['CLOSED_ISSUES'])
+elif args[:2] == ['issue','view']:
+    print(os.environ.get('OPEN_BODY',''))
+''')
+    fake_gh.chmod(0o755)
+    calls_path = root / "gh-calls.jsonl"
+    def marker(report):
+        states = [{k: r.get(k) for k in ('minor', 'support', 'eol', 'state')}
+                  for r in report.get('records', [])]
+        signal = {'states': states, 'unavailable': report.get('upstreamUnavailable', []),
+                  'mismatches': report.get('mismatches', [])}
+        fingerprint = hashlib.sha256(json.dumps(signal, sort_keys=True).encode()).hexdigest()
+        return f'<!-- php-lifecycle-state:{fingerprint} -->'
+
+    def issue_run(report_name, closed, **extra):
+        calls_path.write_text('')
+        result = subprocess.run(
+            ['bash', str(ROOT / 'scripts/create-php-lifecycle-issue.sh'),
+             str(root / (report_name + '.json')), str(root / (report_name + '.md'))],
+            env={**os.environ, 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
+                 'GH_TOKEN': 'test-only', 'GH_CALLS': str(calls_path),
+                 'CLOSED_ISSUES': json.dumps(closed), **extra},
+            capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        return [json.loads(line) for line in calls_path.read_text().splitlines()]
+
+    acknowledged = {'number': 130, 'body': marker(warning), 'stateReason': 'COMPLETED'}
+    calls = issue_run('warning', [acknowledged])
+    assert not any(c[:2] in (['issue', 'create'], ['issue', 'edit']) for c in calls)
+    for closed in ([], [{**acknowledged, 'stateReason': 'NOT_PLANNED'}],
+                   [{**acknowledged, 'body': 'a different warning'}]):
+        assert any(c[:2] == ['issue', 'create'] for c in issue_run('warning', closed))
+    calls = issue_run('warning', [], OPEN_ISSUE='130', OPEN_BODY=marker(warning))
+    assert not any(c[:2] in (['issue', 'create'], ['issue', 'edit']) for c in calls)
+    calls = issue_run('warning', [], OPEN_ISSUE='130', OPEN_BODY='old state')
+    assert any(c[:2] == ['issue', 'edit'] for c in calls)
+    result = run('--today', '2026-12-01', '--skip-upstream',
+                 '--output-json', str(root / 'next.json'), '--output-md', str(root / 'next.md'))
+    assert result.returncode == 0
+    assert any(c[:2] == ['issue', 'create'] for c in issue_run('next', [acknowledged]))
+    for report_name in ('eol', 'mismatch', 'unavailable'):
+        report = json.loads((root / (report_name + '.json')).read_text())
+        closed = [{**acknowledged, 'body': marker(report)}]
+        calls = issue_run(report_name, closed)
+        assert any(c[:2] == ['issue', 'create'] for c in calls), report_name
+        assert not any('--state' in c and 'closed' in c for c in calls), report_name
 
 print("PHP lifecycle tests passed")

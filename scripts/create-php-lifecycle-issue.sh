@@ -50,5 +50,22 @@ if [ -n "$existing" ]; then
   gh issue edit "$existing" --repo "$repo" --body-file "$body" >/dev/null
   echo "updated existing lifecycle issue #$existing"
 else
+  # A completed warning acknowledges only this exact lifecycle state. Do not
+  # recreate it daily, but never suppress EOL, mismatch, or upstream failures.
+  if [ "$state" = warning ]; then
+    closed="$(gh issue list --repo "$repo" --state closed --label "$label" --search "in:title $title" --limit 100 --json number,body,stateReason)"
+    acknowledged="$(printf '%s' "$closed" | python3 -c '
+import json,sys
+marker=sys.argv[1]
+for issue in json.load(sys.stdin):
+    if issue.get("stateReason") == "COMPLETED" and marker in issue.get("body", "").splitlines():
+        print(issue["number"])
+        break
+' "$marker")"
+    if [ -n "$acknowledged" ]; then
+      echo "lifecycle warning already acknowledged in #$acknowledged; waiting for a new attention state"
+      exit 0
+    fi
+  fi
   gh issue create --repo "$repo" --title "$title" --label "$label" --body-file "$body"
 fi

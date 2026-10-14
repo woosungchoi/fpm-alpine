@@ -22,6 +22,39 @@
       ],
       "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/3d497cbb3217749c4fb85f90f3b6f7908b0c1f95",
       "reason": "Observed in the official signed Alpine v3.24 repository on 2026-10-04. Review is bounded to this exact transition, with image/media/runtime and scan gates; no security-fix attribution is assumed."
+    },
+    {
+      "name": "openjpeg",
+      "from": "2.5.4-r1",
+      "to": "2.5.4-r2",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/b6d19fe5cb62ff83b899e224cd2408868fc21e5e",
+      "reason": "Reviewed Alpine v3.24 source on 2026-10-15: CVE-2026-6192 and OSV-2025-219 patches. Exact version/architecture transition only; package, module, runtime, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "tiff",
+      "from": "4.7.1-r0",
+      "to": "4.7.2-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/bbcfbafeadf5dac4744d065ac69338c1b58fc0d1",
+      "reason": "Reviewed Alpine v3.24 source on 2026-10-15: CVE-2026-4775 security upgrade. Exact version/architecture transition only; package, module, runtime, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "zlib",
+      "from": "1.3.2-r0",
+      "to": "1.3.2-r1",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/0afa2da0e8c8051c6f8f64a7a388e5a259904245",
+      "reason": "Reviewed Alpine v3.24 source on 2026-10-15: CVE-2026-85091 backport. Exact version/architecture transition only; package, module, runtime, reproducibility and vulnerability scan gates remain required."
     }
   ]
 }

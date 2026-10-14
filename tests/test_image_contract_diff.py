@@ -66,7 +66,7 @@ class ContractTests(unittest.TestCase):
         import json, tempfile
         path = ROOT / "build/approved-apk-transitions.json"
         policy = json.loads(path.read_text())
-        self.assertEqual(len(self.module.load_approved_transitions(path)), 4)
+        self.assertEqual(len(self.module.load_approved_transitions(path)), 10)
         with tempfile.TemporaryDirectory() as raw:
             target = Path(raw) / "policy.json"
             policy["transitions"][0]["to"] = "*"

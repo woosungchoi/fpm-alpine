@@ -99,7 +99,9 @@ import os,json,sys
 from pathlib import Path
 root=Path(os.environ['FIXTURE_ROOT']); args=sys.argv[1:]
 with (root/'calls').open('a') as f: f.write(json.dumps(args)+'\\n')
-if args[:2]==['issue','list']: print('123' if (root/'body').exists() else '')
+if args[:2]==['issue','list']:
+    if args[args.index('--state')+1]=='closed': print('[]')
+    else: print('123' if (root/'body').exists() else '')
 if args[:2]==['issue','view']: print((root/'body').read_text())
 if args[:2] in (['issue','create'],['issue','edit']):
     (root/'body').write_text(Path(args[args.index('--body-file')+1]).read_text())

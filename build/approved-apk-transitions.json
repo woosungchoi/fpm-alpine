@@ -55,6 +55,248 @@
       ],
       "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/0afa2da0e8c8051c6f8f64a7a388e5a259904245",
       "reason": "Reviewed Alpine v3.24 source on 2026-10-15: CVE-2026-85091 backport. Exact version/architecture transition only; package, module, runtime, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "alpine-release",
+      "from": "3.24.2-r0",
+      "to": "3.24.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/ee92350c8a4509152dc91c693814215a884c07c3",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: ===== release 3.24.3 =====. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "brotli-libs",
+      "from": "1.2.0-r1",
+      "to": "1.2.1-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/8313352127992a9d82e2c2024494f6c38a4dffb4",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/brotli: security upgrade to 1.2.1. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "c-ares",
+      "from": "1.34.8-r0",
+      "to": "1.34.9-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/50f178d7a4c30ea44b54b7d4731ab58558c38b14",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/c-ares: security upgrade to 1.34.9. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ca-certificates",
+      "from": "20260909-r0",
+      "to": "20261020-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/e78f5987166c6ffbe23f6472e2e8f040298fe2da",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/ca-certificates: security upgrade to 20261020. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ca-certificates-bundle",
+      "from": "20260909-r0",
+      "to": "20261020-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/e78f5987166c6ffbe23f6472e2e8f040298fe2da",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/ca-certificates: security upgrade to 20261020. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ghostscript",
+      "from": "10.07.1-r0",
+      "to": "10.08.0-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/dc20f9e480e3cfd73350f1ffd0b66f2a3cc3f46d",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: [3.24] community/ghostscript: security upgrade to 10.08.0. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick-jp2",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick-jpeg",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick-jxl",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick-libs",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick-pdf",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick-tiff",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "imagemagick-webp",
+      "from": "7.1.2.30-r0",
+      "to": "7.1.2.34-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/a72cead9c6d1819ec29224c19658061c4017aa71",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: community/imagemagick: security upgrade to 7.1.2.34. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "libcrypto3",
+      "from": "3.5.8-r0",
+      "to": "3.5.9-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/29b9ec24b1b5b39aeef51fa2a044210e2ec5258e",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/openssl: security upgrade to 3.5.9. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "libexpat",
+      "from": "2.8.5-r0",
+      "to": "2.9.0-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/c10df79ce35862cf273f98f6eb78d52e4f064ac7",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/expat: security upgrade to 2.9.0. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "libssl3",
+      "from": "3.5.8-r0",
+      "to": "3.5.9-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/29b9ec24b1b5b39aeef51fa2a044210e2ec5258e",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/openssl: security upgrade to 3.5.9. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "libx11",
+      "from": "1.8.13-r0",
+      "to": "1.8.14-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/e129d974905f6cf078e41390b58241a73519f572",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/libx11: security upgrade to 1.8.14. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "musl",
+      "from": "1.2.6-r2",
+      "to": "1.2.6-r3",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/8f79d39391b46d6dbf1800fb68b8212a21d5ee2e",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/musl: fix CVE-2026-107891. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "musl-utils",
+      "from": "1.2.6-r2",
+      "to": "1.2.6-r3",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/8f79d39391b46d6dbf1800fb68b8212a21d5ee2e",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/musl: fix CVE-2026-107891. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "nghttp2-libs",
+      "from": "1.69.0-r0",
+      "to": "1.70.0-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/d5a34efc88bbe8d18737fda28125071c4aef8517",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/nghttp2: security upgrade to 1.70.0. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "openssl",
+      "from": "3.5.8-r0",
+      "to": "3.5.9-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/29b9ec24b1b5b39aeef51fa2a044210e2ec5258e",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/openssl: security upgrade to 3.5.9. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
     }
   ]
 }

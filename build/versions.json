@@ -30,29 +30,29 @@
   "versions": {
     "8.2": {
       "minor": "8.2",
-      "patch": "8.2.34",
-      "base_image": "php:8.2-fpm-alpine@sha256:67d419a46a0f68727fa387817eabb448db7ffc48ac8b6146adaa2009974324f4",
+      "patch": "8.2.35",
+      "base_image": "php:8.2-fpm-alpine@sha256:79c64e38c4e8b7242dee6dfb531092e7ddb4913207849bae1374422163cc4032",
       "support": "security-only",
       "eol": "2026-12-31"
     },
     "8.3": {
       "minor": "8.3",
-      "patch": "8.3.35",
-      "base_image": "php:8.3-fpm-alpine@sha256:454b11c8907e32878ce92e87b13c14e1bbe6e1b10f4f96d4a19c9b62ec675d41",
+      "patch": "8.3.36",
+      "base_image": "php:8.3-fpm-alpine@sha256:41ebe02446a39ca8fa4e0b2b9e6ce819271b3cf3afac16f9a9a4524f855337ce",
       "support": "security-only",
       "eol": "2027-12-31"
     },
     "8.4": {
       "minor": "8.4",
-      "patch": "8.4.26",
-      "base_image": "php:8.4-fpm-alpine@sha256:78cd8de9970a9cd6ff4d98860a94eb5bf37dd2d5776b4785562dbfad01c29d5a",
+      "patch": "8.4.27",
+      "base_image": "php:8.4-fpm-alpine@sha256:a49524d3cec4a77d1807d0878e5bb38146116ae5489ec60c367aee53bb9b0699",
       "support": "active",
       "eol": "2028-12-31"
     },
     "8.5": {
       "minor": "8.5",
-      "patch": "8.5.11",
-      "base_image": "php:8.5-fpm-alpine@sha256:fa01fb1645cd0fc566a5f146b099adace33b906571f972f71f2182a7c12d1cd7",
+      "patch": "8.5.12",
+      "base_image": "php:8.5-fpm-alpine@sha256:75bbd8240bc8a991b0f8ddb2365f11937f93199972e3c9f7e32c63c7241f546b",
       "support": "active",
       "eol": "2029-12-31"
     }

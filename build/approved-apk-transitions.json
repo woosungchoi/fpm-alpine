@@ -297,6 +297,105 @@
       ],
       "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/29b9ec24b1b5b39aeef51fa2a044210e2ec5258e",
       "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-23: main/openssl: security upgrade to 3.5.9. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "cups-libs",
+      "from": "2.4.19-r0",
+      "to": "2.4.19-r1",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/636370bb6f28ad23a01cefdd5316b06c85fa5761",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: backport the CUPS musl thread stack overflow and HTTP OPTIONS upgrade fix. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg-libavcodec",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg-libavdevice",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg-libavfilter",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg-libavformat",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg-libavutil",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg-libswresample",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
+    },
+    {
+      "name": "ffmpeg-libswscale",
+      "from": "8.1.2-r0",
+      "to": "8.1.3-r0",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "evidence": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/66cae15cc19799ecaefa1ba9b131aeba0e5f7a86",
+      "reason": "Reviewed official Alpine v3.24 source and both native CI package inventories on 2026-10-28: upgrade FFmpeg from 8.1.2 to 8.1.3 with the upstream source checksum update. Exact observed version/architecture transition only; package/module sets, iconv, FPM, media, reproducibility and vulnerability scan gates remain required."
     }
   ]
 }

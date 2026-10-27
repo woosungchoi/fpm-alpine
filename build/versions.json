@@ -52,7 +52,7 @@
     "8.5": {
       "minor": "8.5",
       "patch": "8.5.12",
-      "base_image": "php:8.5-fpm-alpine@sha256:75bbd8240bc8a991b0f8ddb2365f11937f93199972e3c9f7e32c63c7241f546b",
+      "base_image": "php:8.5-fpm-alpine@sha256:4c2818074ec49f6abe46620f3965e0cb75bc3a5f2b417edd1aacaba6f091c40e",
       "support": "active",
       "eol": "2029-12-31"
     }

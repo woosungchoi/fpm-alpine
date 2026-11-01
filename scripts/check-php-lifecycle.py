@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
 import json
+import socket
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -20,13 +23,33 @@ def strict_date(value: object, field: str) -> dt.date:
         raise SystemExit(f"{field} is not a valid ISO date: {value!r}") from error
 
 
+def transient_fetch_error(error: OSError) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in (408, 429, 500, 502, 503, 504)
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    return (
+        isinstance(reason, (TimeoutError, ConnectionError))
+        or isinstance(reason, OSError)
+        and reason.errno in (errno.ECONNRESET, errno.ECONNABORTED, errno.ETIMEDOUT,
+                             errno.ECONNREFUSED, errno.ENETUNREACH, errno.EHOSTUNREACH,
+                             socket.EAI_AGAIN)
+    )
+
+
 def fetch_upstream(minor: str, base_url: str) -> str:
     url = base_url + minor
-    try:
-        with urllib.request.urlopen(url, timeout=20) as response:  # noqa: S310 - fixed HTTPS default
-            payload = json.load(response)
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"upstream fetch failed for PHP {minor}: {error}") from error
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=20) as response:  # noqa: S310 - fixed HTTPS default
+                payload = json.load(response)
+            break
+        except OSError as error:
+            if attempt < 2 and transient_fetch_error(error):
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(f"upstream fetch failed for PHP {minor}: {error}") from error
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"upstream response invalid for PHP {minor}: {error}") from error
     version = payload.get("version") if isinstance(payload, dict) else None
     if not isinstance(version, str) or not version.startswith(minor + "."):
         raise ValueError(f"upstream release mismatch for PHP {minor}: {version!r}")

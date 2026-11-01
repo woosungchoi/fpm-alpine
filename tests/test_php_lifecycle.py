@@ -147,4 +147,38 @@ elif args[:2] == ['issue','view']:
         assert any(c[:2] == ['issue', 'create'] for c in calls), report_name
         assert not any('--state' in c and 'closed' in c for c in calls), report_name
 
+    # Only a real successful upstream check can clear an existing outage.
+    outage_body = "Lifecycle state: **upstream-unavailable**"
+    for name in ('warning', 'date'):
+        # date.json is the final EOL fixture; use an explicit healthy date below.
+        if name == 'date':
+            healthy = {**warning, 'records': [{**r, 'state': 'ok'} for r in warning['records']]}
+            (root / 'date.json').write_text(json.dumps(healthy))
+        calls = issue_run(name, [acknowledged], OPEN_ISSUE='143', OPEN_BODY=outage_body)
+        assert not any(c[:2] in (['issue','edit'], ['issue','close']) for c in calls)
+
+    recovered = {**warning, 'upstreamChecked': True}
+    (root / 'recovered.json').write_text(json.dumps(recovered))
+    (root / 'recovered.md').write_text('Upstream checked successfully')
+    calls = issue_run('recovered', [acknowledged], OPEN_ISSUE='143', OPEN_BODY=outage_body)
+    assert any(c[:2] == ['issue','close'] for c in calls)
+    assert not any(c[:2] in (['issue','create'], ['issue','edit']) for c in calls)
+    # An unacknowledged lifecycle warning remains open after network recovery.
+    calls = issue_run('recovered', [], OPEN_ISSUE='143', OPEN_BODY=outage_body)
+    assert any(c[:2] == ['issue','edit'] for c in calls)
+    assert not any(c[:2] == ['issue','close'] for c in calls)
+    # EOL and source mismatches stay actionable even if a prior warning was acknowledged.
+    for name in ('eol', 'mismatch', 'unavailable'):
+        calls = issue_run(name, [acknowledged], OPEN_ISSUE='143', OPEN_BODY=outage_body)
+        assert not any(c[:2] == ['issue','close'] for c in calls)
+        assert any(c[:2] == ['issue','edit'] for c in calls)
+    # A successful network check without warnings may close only an outage issue.
+    healthy['upstreamChecked'] = True
+    (root / 'healthy.json').write_text(json.dumps(healthy))
+    (root / 'healthy.md').write_text('Healthy')
+    calls = issue_run('healthy', [], OPEN_ISSUE='143', OPEN_BODY=outage_body)
+    assert any(c[:2] == ['issue','close'] for c in calls)
+    calls = issue_run('healthy', [], OPEN_ISSUE='143', OPEN_BODY='Manual lifecycle concern')
+    assert not any(c[:2] == ['issue','close'] for c in calls)
+
 print("PHP lifecycle tests passed")

@@ -92,6 +92,7 @@ jobs:
           ./tests/test_smoke_script.sh
           python3 tests/test_verification_improvements.py
           python3 tests/test_php_lifecycle.py
+          python3 tests/test_php_lifecycle_retry.py
           python3 tests/test_dockerhub_metadata.py
           python3 tests/test_dependency_automation.py
           python3 tests/test_dependency_candidates.py

@@ -19,6 +19,17 @@ For source-only CI, these four active matrix entries and their lifecycle fields 
 
 The daily, network-free `php-lifecycle` date check warns 90 and 30 days before EOL, fails when an active matrix entry reaches EOL, and updates its issue only when the attention state changes. Monthly and manual runs additionally report upstream release-source outages separately from lifecycle mismatches. EOL is inclusive: 2026-12-31 is the final supported day for 8.2; 2027-01-01 fails.
 
+Transient upstream connection failures, timeouts, temporary DNS errors, HTTP 408/429,
+and HTTP 500/502/503/504 receive at most three attempts with 1- and 2-second waits.
+Certificate failures, permanent HTTP errors, invalid JSON, and unexpected release
+versions are not retried or treated as success. Persistent failures still fail CI.
+
+A date-only daily check cannot clear a previously reported upstream outage. A
+successful network check closes that outage only when no lifecycle concern remains,
+or the remaining exact warning has already been acknowledged as completed. New
+warnings, EOL, and source mismatches remain open for review. A date-only escalation
+to EOL also retains the unresolved outage marker until a network check succeeds.
+
 ## Unsupported legacy images
 
 PHP 8.0 and 8.1 remain in this lifecycle table as unsupported history, but their former Docker Hub tags are no longer published. Signed archival subjects and the source-to-archive digest map are retained in GHCR and protected workflow evidence for audit or emergency recovery. Existing deployments that referenced `8.0` or `8.1` must migrate to an active PHP line.

@@ -98,6 +98,7 @@ jobs:
           python3 tests/test_dependency_candidates.py
           python3 tests/test_dependency_update_workflow.py
           python3 tests/test_action_update_policy.py
+          python3 -m unittest discover -s tests -p test_maintenance_recovery.py
           python3 tests/test_image_contract_diff.py
           python3 tests/test_auto_merge_selection.py
           python3 tests/test_all_pr_checks.py
@@ -189,7 +190,7 @@ jobs:
             OCI_CREATED=${{ needs.prepare.outputs.created }}
             SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }}
           cache-from: type=gha,scope=php-${{ matrix.php_minor }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=php-${{ matrix.php_minor }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=php-${{ matrix.php_minor }}-${{ matrix.arch }},ignore-error=true,timeout=2m
 
       - name: Build reproducibility probe archive A
         env:
@@ -303,7 +304,8 @@ jobs:
             "$BASELINE_REPORT" \
             "$CANDIDATE_REPORT" \
             "$PHP_MINOR" \
-            --approved-apk-transitions build/approved-apk-transitions.json
+            --approved-apk-transitions build/approved-apk-transitions.json \
+            --allow-apk-upgrades-with-image "$CANDIDATE_IMAGE"
 
       - name: Scan source-only image
         env:

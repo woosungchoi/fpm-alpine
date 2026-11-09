@@ -79,6 +79,48 @@ class ContractTests(unittest.TestCase):
             target.write_text(json.dumps(policy))
             with self.assertRaises(ValueError): self.module.load_approved_transitions(target)
 
+    def alpine_pair(self):
+        import copy
+        base = copy.deepcopy(BASE)
+        base['packages'] = ['alpine-release', 'zlib']
+        base['packageEvidence'] = [
+            {'name': 'alpine-release', 'version': '3.24.3-r0', 'architecture': 'x86_64'},
+            {'name': 'zlib', 'version': '1.3.2-r1', 'architecture': 'x86_64'}]
+        candidate = copy.deepcopy(base)
+        candidate['packageEvidence'][0]['version'] = '3.24.4-r0'
+        candidate['packageEvidence'][1]['version'] = '1.4-r0'
+        return base, candidate
+
+    def test_same_alpine_branch_forward_updates_pass(self):
+        base, candidate = self.alpine_pair()
+        self.assertEqual(self.module.compare(base, candidate, '8.5', version_order=lambda a,b: '<'), [])
+
+    def test_branch_change_downgrade_and_unknown_release_fail(self):
+        base, candidate = self.alpine_pair()
+        self.assertTrue(self.module.compare(base, candidate, '8.5', version_order=lambda a,b: '>'))
+        candidate['packageEvidence'][0]['version'] = '3.25.0-r0'
+        self.assertIn('same stable Alpine branch', ' '.join(self.module.compare(base,candidate,'8.5',version_order=lambda a,b:'<')))
+        self.assertTrue(self.module.compare(BASE, BASE, '8.5',version_order=lambda a,b:'<'))
+
+    def test_forward_policy_preserves_runtime_and_package_set_guards(self):
+        base, candidate = self.alpine_pair()
+        for key, value in [('modules', ['Core']), ('fpmConfigValid', False), ('phpVersion','8.5.7'), ('iconv',{'implementation':'musl','version':'1.2.5'})]:
+            self.assertTrue(self.module.compare(base, candidate|{key:value},'8.5',version_order=lambda a,b:'<'))
+        candidate['packageEvidence'][1]['architecture'] = 'noarch'
+        self.assertTrue(self.module.compare(base,candidate,'8.5',version_order=lambda a,b:'<'))
+
+    def test_native_apk_comparison_uses_immutable_image_offline(self):
+        from unittest.mock import patch
+        with patch.object(self.module.subprocess,'check_output',side_effect=['sha256:'+'a'*64, '<']) as command:
+            order = self.module.apk_version_order('candidate:local','linux/amd64')
+            self.assertEqual(order('1.9-r0','1.10-r0'),'<')
+            argv = command.call_args.args[0]
+            self.assertIn('--network=none',argv)
+            self.assertIn('sha256:'+'a'*64,argv)
+            self.assertEqual(argv[-4:],['version','-t','1.9-r0','1.10-r0'])
+        with patch.object(self.module.subprocess,'check_output',side_effect=['sha256:'+'a'*64, 'maybe']):
+            with self.assertRaises(ValueError):self.module.apk_version_order('candidate:local','linux/amd64')('1-r0','2-r0')
+
     def test_wrong_apk_architecture_fails(self):
         candidate = {**BASE, "packageEvidence": [dict(row) for row in BASE["packageEvidence"]]}
         candidate["packageEvidence"][0]["architecture"] = "aarch64"

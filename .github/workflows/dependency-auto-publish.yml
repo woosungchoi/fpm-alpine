@@ -217,7 +217,7 @@ jobs:
             org.opencontainers.image.created=${{ needs.prepare.outputs.created }}
             org.opencontainers.image.licenses=GPL-2.0-only
           cache-from: type=gha,scope=publisher-${{ matrix.php_minor }}
-          cache-to: type=gha,mode=max,scope=publisher-${{ matrix.php_minor }}
+          cache-to: type=gha,mode=max,scope=publisher-${{ matrix.php_minor }},ignore-error=true,timeout=2m
           provenance: mode=max
           sbom: true
 

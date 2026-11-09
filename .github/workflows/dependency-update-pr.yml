@@ -2,7 +2,7 @@ name: dependency-update-pr
 
 on:
   schedule:
-    - cron: '15 5 * * 1'
+    - cron: '15 5 * * *'
   workflow_dispatch:
     inputs:
       dry_run:

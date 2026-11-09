@@ -12,11 +12,15 @@ import re
 import subprocess
 import tarfile
 import urllib.request
+import sys
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from network_retry import read_with_retry
 
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -53,14 +57,16 @@ def _fetch_url(url: str, expected_host: str, limit: int) -> bytes:
     request = urllib.request.Request(
         url, headers={"User-Agent": "fpm-alpine-dependency-updater/1"}
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        final = urlsplit(response.geturl())
-        if final.scheme != "https" or final.hostname != expected_host:
-            raise ValueError(f"request redirected outside {expected_host}")
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError(f"response from {expected_host} exceeds size limit")
-    return data
+    def download():
+        with urllib.request.urlopen(request, timeout=30) as response:
+            final = urlsplit(response.geturl())
+            if final.scheme != "https" or final.hostname != expected_host:
+                raise ValueError(f"request redirected outside {expected_host}")
+            data = response.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError(f"response from {expected_host} exceeds size limit")
+        return data
+    return read_with_retry(download)
 
 
 def patch_from_official_images(metadata: str, floating_tag: str) -> str:

@@ -163,3 +163,30 @@ Dockerfile has no independent mutable source defaults. Source/test/workflow chan
 without a versions manifest diff do not trigger dependency-auto-publish. Main smoke
 and manifest CI run after their merge; deploying a newly built image requires a
 separately authorized publication. No runtime verifier updates application servers.
+
+## Maintenance reliability
+
+Dependency discovery runs daily at 05:15 UTC and still serializes one eligible
+candidate at a time. Idempotent upstream reads retry transient transport/HTTP
+failures at most three times; redirects, size limits and invalid metadata still
+fail closed. Dependabot remains the owner of GitHub Actions pins.
+
+The runtime contract defaults to rejecting every unreviewed APK change. CI opts
+into native `apk version -t` comparison using a frozen local candidate image ID,
+without network, writable filesystem or capabilities. This permits forward
+package versions only on the same stable Alpine major/minor branch. Package
+names, architectures, PHP modules, iconv and FPM configuration remain protected;
+PHP downgrades and unknown/changed Alpine branches fail. Accepted transitions are
+printed alongside the baseline/candidate evidence. The subsequent vulnerability
+scan, runtime mutations and reproducibility checks remain mandatory.
+
+Cache exports are optional accelerators with bounded timeouts, not release gates.
+Trusted default-branch recovery retries only current same-repository dependency
+PR smoke runs with exclusively recognized transient failures, at most three total
+attempts. Publication workflows are never automatically replayed by this recovery
+job; existing digest-bound transaction reconciliation remains authoritative.
+
+A separate daily health job at 08:43 UTC fails visibly if no scheduled dependency
+check has succeeded in 48 hours. It does not send messages, change pins, merge PRs
+or replay publication. This is a GitHub-side liveness check, not an independent
+external scheduler; a GitHub-wide scheduler outage still requires external monitoring.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -54,12 +55,22 @@ def _validate(name: str, data: Any) -> list[str]:
     return errors
 
 
-def compare(baseline: Any, candidate: Any, expected_minor: str, approved: tuple = ()) -> list[str]:
+def compare(baseline: Any, candidate: Any, expected_minor: str, approved: tuple = (), *, version_order=None) -> list[str]:
     errors = _validate("baseline", baseline) + _validate("candidate", candidate)
     if errors:
         return errors
     if not re.fullmatch(r"8\.[2-5]", expected_minor):
         return errors + ["expected minor is invalid"]
+    if tuple(map(int, candidate["phpVersion"].split("."))) < tuple(map(int, baseline["phpVersion"].split("."))):
+        errors.append("PHP patch downgrade")
+    if version_order is not None:
+        def alpine_branch(contract):
+            release = next((r["version"] for r in contract["packageEvidence"] if r["name"] == "alpine-release"), "")
+            match = re.fullmatch(r"(\d+\.\d+)\.\d+-r\d+", release)
+            return match.group(1) if match else None
+        branch = alpine_branch(baseline)
+        if branch is None or branch != alpine_branch(candidate):
+            errors.append("automatic APK updates require the same stable Alpine branch")
     if baseline["platform"] != candidate["platform"]:
         errors.append("platform mismatch")
     for name, row in (("baseline", baseline), ("candidate", candidate)):
@@ -77,7 +88,10 @@ def compare(baseline: Any, candidate: Any, expected_minor: str, approved: tuple 
             if prior == row:
                 continue
             transition = (row["name"], (prior or {}).get("version"), row["version"], row["architecture"])
-            if not prior or prior["architecture"] != row["architecture"] or transition not in approved:
+            forward = False
+            if prior and prior["architecture"] == row["architecture"] and version_order is not None:
+                forward = version_order(prior["version"], row["version"]) == "<"
+            if not prior or prior["architecture"] != row["architecture"] or ((not forward) if version_order is not None else transition not in approved):
                 changed.append({"name": row["name"], "before": prior, "after": row})
         if changed:
             errors.append(f"package version/architecture drift (requires review): {changed}")
@@ -114,17 +128,41 @@ def load_approved_transitions(path: Path) -> tuple:
     return tuple(result)
 
 
+def apk_version_order(image: str, platform: str):
+    """Use the candidate's APK implementation, never lexicographic/SemVer ordering.
+
+    Freeze the local image ID before invoking it; comparison is offline and read-only.
+    """
+    image_id = subprocess.check_output(["docker", "image", "inspect", "--format", "{{.Id}}", image], text=True).strip()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        raise ValueError("invalid local comparison image ID")
+    def order(old: str, new: str) -> str:
+        if not all(re.fullmatch(r"[0-9][A-Za-z0-9._+~-]*-r[0-9]+", v) for v in (old, new)):
+            raise ValueError("invalid APK version")
+        result = subprocess.check_output([
+            "docker", "run", "--rm", "--network=none", "--read-only", "--cap-drop=ALL",
+            "--security-opt=no-new-privileges", "--platform", platform,
+            "--entrypoint", "apk", image_id, "version", "-t", old, new,
+        ], text=True, timeout=30).strip()
+        if result not in ("<", "=", ">"):
+            raise ValueError("invalid APK comparison result")
+        return result
+    return order
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("baseline")
     parser.add_argument("candidate")
     parser.add_argument("expected_minor")
     parser.add_argument("--approved-apk-transitions", type=Path, help="Explicit reviewed exact version transitions; default rejects all drift")
+    parser.add_argument("--allow-apk-upgrades-with-image", help="Allow forward APK versions on the same Alpine branch; use this local candidate image for native APK ordering")
     args = parser.parse_args()
     baseline = json.loads(Path(args.baseline).read_text())
     candidate = json.loads(Path(args.candidate).read_text())
     approved = load_approved_transitions(args.approved_apk_transitions) if args.approved_apk_transitions else ()
-    errors = compare(baseline, candidate, args.expected_minor, approved)
+    order = apk_version_order(args.allow_apk_upgrades_with_image, candidate["platform"]) if args.allow_apk_upgrades_with_image else None
+    errors = compare(baseline, candidate, args.expected_minor, approved, version_order=order)
     if errors:
         for error in errors:
             print(f"image contract rejected: {error}")
@@ -132,7 +170,7 @@ def main() -> int:
     before = {row["name"]: row for row in baseline["packageEvidence"]}
     for row in candidate["packageEvidence"]:
         if before[row["name"]] != row:
-            print(f"reviewed_apk_transition={row['name']} {before[row['name']]['version']} -> {row['version']} ({row['architecture']})")
+            print(f"accepted_apk_transition={row['name']} {before[row['name']]['version']} -> {row['version']} ({row['architecture']})")
     print(
         f"image_contract=PASS minor={args.expected_minor} platform={candidate['platform']}"
     )

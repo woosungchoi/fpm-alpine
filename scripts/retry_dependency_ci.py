@@ -7,8 +7,8 @@ import os
 import re
 import subprocess
 
-TRANSIENT = re.compile(r"i/o timeout|TLS handshake timeout|connection reset by peer|Temporary failure in name resolution|503 Service Unavailable|502 Bad Gateway|504 Gateway Timeout", re.I)
-PERMANENT = re.compile(r"image contract rejected|checksum mismatch|FAILED \(.*failures|AssertionError|undefined reference|fatal error:|CVE-\d{4}-\d+", re.I)
+TRANSIENT = re.compile(r"i/o timeout|TLS handshake timeout|connection reset by peer|Temporary failure in name resolution|503 Service Unavailable|502 Bad Gateway|504 Gateway Timeout|curl: \(22\) The requested URL returned error: (?:429|500|502|503|504)\b", re.I)
+PERMANENT = re.compile(r"image contract rejected|checksum mismatch|sha256sum:.*(?:did NOT match|FAILED)|FAILED \(.*failures|AssertionError|undefined reference|fatal error:|CVE-\d{4}-\d+", re.I)
 
 
 def eligible(run, pr, repo):

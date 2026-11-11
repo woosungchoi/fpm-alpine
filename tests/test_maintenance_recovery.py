@@ -52,3 +52,12 @@ class MaintenanceTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):m.health('woosungchoi/fpm-alpine')
         with patch.object(m,'api',return_value={'workflow_runs':[{'conclusion':'success','created_at':datetime.now(timezone.utc).isoformat()}]}):
             m.health('woosungchoi/fpm-alpine')
+
+    def test_curl_http_outages_retry_but_checksum_errors_do_not(self):
+        m = load('retry_dependency_ci')
+        jobs = [{'id': 1, 'name': 'arm64', 'conclusion': 'failure'}]
+        for status in (429, 500, 502, 503, 504):
+            log = f'curl: (22) The requested URL returned error: {status}'
+            self.assertTrue(m.retryable(jobs, {1: log}))
+            self.assertFalse(m.retryable(jobs, {1: log + '\nsha256sum: WARNING: 1 computed checksum did NOT match'}))
+        self.assertFalse(m.retryable(jobs, {1: 'curl: (22) The requested URL returned error: 404'}))

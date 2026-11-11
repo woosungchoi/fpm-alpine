@@ -190,3 +190,10 @@ A separate daily health job at 08:43 UTC fails visibly if no scheduled dependenc
 check has succeeded in 48 hours. It does not send messages, change pins, merge PRs
 or replay publication. This is a GitHub-side liveness check, not an independent
 external scheduler; a GitHub-wide scheduler outage still requires external monitoring.
+
+PECL archive downloads inside every Docker build retry transient curl failures
+(up to three retries, 15-second connect timeout, 45-second per-attempt timeout,
+120-second retry window). A final in-flight attempt can extend beyond that window.
+HTTP 404 and checksum mismatches fail immediately; pinned URLs and SHA-256
+verification remain mandatory before extraction. Dependency CI recovery also
+recognizes curl HTTP 429/500/502/503/504 failures, while checksum failures block it.

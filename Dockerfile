@@ -45,6 +45,8 @@ RUN set -eux; \
 	php -r '$result = iconv("UTF-8", "ASCII//TRANSLIT", "café"); if ($result === false || stripos($result, "caf") !== 0 || !preg_match("/^[\\x00-\\x7F]+$/", $result)) { fwrite(STDERR, "iconv transliteration failed\n"); exit(1); }'; \
 	php-fpm -t
 
+# Retry transient PECL failures locally (at most four attempts); permanent HTTP
+# errors and checksum mismatches still fail closed before extraction.
 # Build every non-Alpine source from an approved archive and verify it before extraction.
 RUN set -eux; \
 	apk add --no-cache --virtual .build-deps \
@@ -66,13 +68,13 @@ RUN set -eux; \
 	docker-php-ext-configure intl; \
 	docker-php-ext-install -j "$(nproc)" bcmath exif gd intl mysqli zip pdo pdo_mysql; \
 	for extension in imagick redis apcu; do mkdir -p "/usr/src/php/ext/$extension"; done; \
-	curl -fsSL "$IMAGICK_URL" -o /usr/src/vendor/imagick.tgz; \
+	curl -fsSL --retry 3 --retry-max-time 120 --connect-timeout 15 --max-time 45 --retry-connrefused "$IMAGICK_URL" -o /usr/src/vendor/imagick.tgz; \
 	echo "$IMAGICK_SHA256  /usr/src/vendor/imagick.tgz" | sha256sum -c -; \
 	tar -xzf /usr/src/vendor/imagick.tgz -C /usr/src/php/ext/imagick --strip-components=1; \
-	curl -fsSL "$REDIS_URL" -o /usr/src/vendor/redis.tgz; \
+	curl -fsSL --retry 3 --retry-max-time 120 --connect-timeout 15 --max-time 45 --retry-connrefused "$REDIS_URL" -o /usr/src/vendor/redis.tgz; \
 	echo "$REDIS_SHA256  /usr/src/vendor/redis.tgz" | sha256sum -c -; \
 	tar -xzf /usr/src/vendor/redis.tgz -C /usr/src/php/ext/redis --strip-components=1; \
-	curl -fsSL "$APCU_URL" -o /usr/src/vendor/apcu.tgz; \
+	curl -fsSL --retry 3 --retry-max-time 120 --connect-timeout 15 --max-time 45 --retry-connrefused "$APCU_URL" -o /usr/src/vendor/apcu.tgz; \
 	echo "$APCU_SHA256  /usr/src/vendor/apcu.tgz" | sha256sum -c -; \
 	tar -xzf /usr/src/vendor/apcu.tgz -C /usr/src/php/ext/apcu --strip-components=1; \
 	docker-php-ext-install -j "$(nproc)" imagick redis apcu; \

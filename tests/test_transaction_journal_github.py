@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 JOURNAL = ROOT / "scripts" / "transaction-journal.py"
 FAKE_GH = ROOT / "tests" / "fixtures" / "fake_gh_git_journal.py"
-MINORS = ("8.2", "8.3", "8.4", "8.5")
+MINORS = ("8.2", "8.3", "8.4", "8.5", "8.6")
 
 
 def digest(value: int) -> str:

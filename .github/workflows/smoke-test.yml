@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      introduce_86: ${{ steps.matrix.outputs.introduce_86 }}
       created: ${{ steps.metadata.outputs.created }}
       source_date_epoch: ${{ steps.metadata.outputs.source_date_epoch }}
     steps:
@@ -39,6 +40,11 @@ jobs:
           ./scripts/validate-versions.py
           matrix_args=(--matrix)
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" || "$GITHUB_EVENT_NAME" == "push" ]]; then
+            # The first 8.6 build has no published 8.6 contract. Only its
+            # onboarding diff may compare against the reviewed 8.5 baseline.
+            git show "$BASE_SHA:build/versions.json" > "$RUNNER_TEMP/base-versions.json"
+            jq -r '"introduce_86=" + ((.versions | has("8.6") | not) | tostring)' \
+              "$RUNNER_TEMP/base-versions.json" >> "$GITHUB_OUTPUT"
             python3 scripts/evaluate-auto-promotion.py \
               --base-sha "$BASE_SHA" \
               --head-sha "$HEAD_SHA" \
@@ -284,6 +290,7 @@ jobs:
         env:
           PHP_MINOR: ${{ matrix.php_minor }}
           PLATFORM: ${{ matrix.platform }}
+          INTRODUCE_86: ${{ needs.prepare.outputs.introduce_86 }}
           BASELINE_IMAGE: woosungchoi/fpm-alpine:${{ matrix.php_minor }}
           CANDIDATE_IMAGE: fpm-alpine:smoke-${{ matrix.php_minor }}-${{ matrix.arch }}
           BASELINE_REPORT: contract-reports/baseline-${{ matrix.php_minor }}-${{ matrix.arch }}.json
@@ -291,8 +298,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p contract-reports
-          baseline_digest="$(./scripts/resolve-image-digest.sh "$BASELINE_IMAGE")"
-          baseline_subject="${BASELINE_IMAGE%:*}@${baseline_digest}"
+          contract_args=()
+          if [[ "$PHP_MINOR" == 8.6 && "$INTRODUCE_86" == true ]]; then
+            baseline_subject="woosungchoi/fpm-alpine@sha256:3de5be8a20c1bcc77152fd3111bdccf04445b9215a6781641dbd1e1a6f65e47e"
+            contract_args+=(--bootstrap-86)
+          else
+            baseline_digest="$(./scripts/resolve-image-digest.sh "$BASELINE_IMAGE")"
+            baseline_subject="${BASELINE_IMAGE%:*}@${baseline_digest}"
+          fi
           ./scripts/capture-image-contract.sh \
             "$baseline_subject" \
             "$PLATFORM" \
@@ -305,6 +318,7 @@ jobs:
             "$BASELINE_REPORT" \
             "$CANDIDATE_REPORT" \
             "$PHP_MINOR" \
+            "${contract_args[@]}" \
             --approved-apk-transitions build/approved-apk-transitions.json \
             --allow-apk-upgrades-with-image "$CANDIDATE_IMAGE"
 

@@ -38,7 +38,7 @@ def main() -> int:
         raise SystemExit("invalid expected publisher mode")
     if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
         raise SystemExit("invalid expected source SHA")
-    if not re.fullmatch(r"8\.[2-5]", php_minor):
+    if not re.fullmatch(r"8\.[2-6]", php_minor):
         raise SystemExit("invalid expected PHP minor")
     if not re.fullmatch(rf"{re.escape(php_minor)}\.[0-9]+", php_patch):
         raise SystemExit("invalid expected PHP patch")

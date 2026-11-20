@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that Docker Hub exposes exactly the four active moving tags."""
+"""Verify that Docker Hub exposes exactly the five active moving tags."""
 
 from __future__ import annotations
 

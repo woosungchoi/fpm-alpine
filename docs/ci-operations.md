@@ -6,7 +6,7 @@ and the allowed-bump boundaries. GitHub Actions is the sole publisher.
 
 ## Required status check
 
-`smoke-test` builds PHP 8.2–8.5 on native amd64 and arm64 runners. The aggregate required check is `docker-smoke`; it passes only when the `dependency-safety` job and all `docker-smoke-matrix` jobs pass.
+`smoke-test` builds PHP 8.2–8.6 on native amd64 and arm64 runners. The aggregate required check is `docker-smoke`; it passes only when the `dependency-safety` job and all `docker-smoke-matrix` jobs pass.
 
 Protected `main` must require `docker-smoke`.
 
@@ -33,7 +33,7 @@ failed `dependency-auto-merge` job; it revalidates the current PR and all checks
 
 The active automation has one path:
 
-1. `dependency-update-pr` checks the existing PHP 8.2, 8.3, 8.4, and 8.5 lines.
+1. `dependency-update-pr` checks the existing PHP 8.2, 8.3, 8.4, 8.5, and 8.6 lines.
 2. A newer same-minor PHP patch or refreshed digest creates one scoped PR.
 3. `smoke-test` runs the required CI matrix.
 4. `dependency-auto-merge` waits for all PR checks, then squash-merges the validated exact head.
@@ -44,7 +44,7 @@ The active automation has one path:
 7. The publisher reads both registries back, requires the same top-level digest, and requires linux/amd64 and linux/arm64 manifests.
 8. A successful automatic publisher run with an actually completed publish job triggers the next updater discovery pass. A skipped publication does not continue the updater chain.
 
-There is no automatic new-minor onboarding. PHP 8.6 or any later minor requires a reviewed policy change. PECL updates are discovered as manual-review candidates and are not auto-merged. There is intentionally no `latest` tag.
+There is no automatic new-minor onboarding. PHP 8.7 or any later minor requires a reviewed policy change. PECL updates are discovered as manual-review candidates and are not auto-merged. There is intentionally no `latest` tag.
 
 ### Skipped publication versus failure
 

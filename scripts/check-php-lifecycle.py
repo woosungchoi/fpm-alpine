@@ -75,8 +75,8 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"failed to read versions metadata: {error}") from error
     versions = payload.get("versions") if isinstance(payload, dict) else None
-    if not isinstance(versions, dict) or list(versions) != ["8.2", "8.3", "8.4", "8.5"]:
-        raise SystemExit("active lifecycle matrix must be exactly 8.2, 8.3, 8.4, 8.5")
+    if not isinstance(versions, dict) or list(versions) != ["8.2", "8.3", "8.4", "8.5", "8.6"]:
+        raise SystemExit("active lifecycle matrix must be exactly 8.2, 8.3, 8.4, 8.5, 8.6")
 
     records: list[dict[str, object]] = []
     upstream_unavailable: list[str] = []

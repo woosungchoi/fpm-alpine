@@ -95,6 +95,7 @@ class DockerHubTagPolicyTests(unittest.TestCase):
             tag("8.3", "3"),
             tag("8.4", "4"),
             tag("8.5", "5"),
+            tag("8.6", "f"),
             tag("canary-8.5-100-1", "6"),
             tag("8.5.8-20260713-" + "7" * 64, "7"),
             tag("sha-8.5-0123456789ab-" + "8" * 64, "8"),
@@ -117,7 +118,7 @@ class DockerHubTagPolicyTests(unittest.TestCase):
         self.assertEqual(opener.requests[0][0].get_method(), "GET")
         self.assertNotIn("Authorization", dict(opener.requests[0][0].header_items()))
 
-    def test_exact_surface_requires_only_four_moving_tags(self):
+    def test_exact_surface_requires_only_five_moving_tags(self):
         keep = [row for row in self.inventory if row["name"] in module.KEEP_TAGS]
         module.verify_exact_surface(keep)
         with self.assertRaisesRegex(module.PolicyError, "unexpected"):
@@ -127,7 +128,7 @@ class DockerHubTagPolicyTests(unittest.TestCase):
 
     def test_plan_classifies_known_tags_and_rejects_unknown(self):
         plan = module.build_deletion_plan(self.inventory)
-        self.assertEqual(plan["keep_tags"], ["8.2", "8.3", "8.4", "8.5"])
+        self.assertEqual(plan["keep_tags"], ["8.2", "8.3", "8.4", "8.5", "8.6"])
         self.assertEqual(len(plan["delete"]), 6)
         self.assertEqual(plan["inventory_sha256"], module.inventory_sha256(self.inventory))
         self.assertEqual(len(module.deletion_plan_sha256(plan)), 64)

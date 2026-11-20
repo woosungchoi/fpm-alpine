@@ -59,7 +59,7 @@ with tempfile.TemporaryDirectory() as raw:
 
     upstream = root / "upstream"
     upstream.mkdir()
-    for minor, patch in (("8.2", "8.2.99"), ("8.3", "8.3.99"), ("8.4", "8.4.99"), ("8.5", "8.5.99")):
+    for minor, patch in (("8.2", "8.2.99"), ("8.3", "8.3.99"), ("8.4", "8.4.99"), ("8.5", "8.5.99"), ("8.6", "8.6.99")):
         (upstream / minor).write_text(json.dumps({"version": patch}))
     result = run(
         "--today", "2026-07-12", "--upstream-base-url", upstream.as_uri() + "/",

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 minor="${1:?active PHP minor required}"
-[[ "$minor" =~ ^8\.[2-5]$ ]] || exit 64
+[[ "$minor" =~ ^8\.[2-6]$ ]] || exit 64
 report="${2:-published-runtime-reports/$minor}"
 mkdir -p "$report"
 dockerhub_repository=docker.io/woosungchoi/fpm-alpine

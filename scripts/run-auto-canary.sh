@@ -12,7 +12,7 @@ repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 [ "$(git rev-parse HEAD)" = "$source_sha" ] || { echo "checkout/source mismatch" >&2; exit 65; }
 
 readarray -t active_minors < <(python3 -c 'import json; print("\n".join(json.load(open("build/automation-policy.json"))["lifecycle"]))')
-[ "${#active_minors[@]}" -eq 4 ] || { echo "active minor matrix must contain four rows" >&2; exit 65; }
+[ "${#active_minors[@]}" -eq 5 ] || { echo "active minor matrix must contain five rows" >&2; exit 65; }
 
 wait_for_run() {
   local correlation="$1"

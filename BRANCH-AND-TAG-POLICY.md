@@ -14,7 +14,7 @@ Support, security-only, frozen, and unsupported status is defined only in [SUPPO
 ## Docker Hub tag policy
 
 - Production users should pin an explicit tag such as `woosungchoi/fpm-alpine:8.5`.
-- Docker Hub exposes exactly four moving aliases: `8.2`, `8.3`, `8.4`, and `8.5`.
+- Docker Hub exposes exactly five moving aliases: `8.2`, `8.3`, `8.4`, `8.5`, and `8.6`.
 - Canary, immutable release/source, provenance, signature, archive, and rollback subjects are retained in GHCR instead of Docker Hub.
 - There is intentionally no `latest` tag. Consumers must select a PHP line explicitly.
 - GitHub Actions is the sole publisher for supported release targets on Docker Hub and GHCR.

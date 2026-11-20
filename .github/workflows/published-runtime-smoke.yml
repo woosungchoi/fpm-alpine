@@ -24,14 +24,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  select:
+    name: Select maintained images from the published branch
+    runs-on: ubuntu-latest
+    outputs:
+      minors: ${{ steps.select.outputs.minors }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - id: select
+        run: |
+          minors="$(jq -ce '.versions | keys' build/versions.json)"
+          echo "minors=$minors" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: select
     name: Published runtime (${{ matrix.minor }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        minor: ['8.2', '8.3', '8.4', '8.5']
+        minor: ${{ fromJSON(needs.select.outputs.minors) }}
     steps:
       - name: Checkout source history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

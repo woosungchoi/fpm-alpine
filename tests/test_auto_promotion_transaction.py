@@ -15,14 +15,14 @@ TRANSACTION = ROOT / "scripts" / "promote-auto-canaries.sh"
 PLAN_VALIDATOR = ROOT / "scripts" / "validate-auto-promotion-plan.py"
 JOURNAL = ROOT / "scripts" / "transaction-journal.py"
 PROMOTE_DOCKERHUB = ROOT / "scripts" / "promote-dockerhub-exact.sh"
-MINORS = ("8.2", "8.3", "8.4", "8.5")
+MINORS = ("8.2", "8.3", "8.4", "8.5", "8.6")
 
 
 def load_fixture_patches(path: Path) -> dict[str, str]:
     payload = json.loads(path.read_text())
     versions = payload.get("versions") if isinstance(payload, dict) else None
     if not isinstance(versions, dict) or tuple(versions) != MINORS:
-        raise ValueError("fixture version matrix must be exactly PHP 8.2-8.5")
+        raise ValueError("fixture version matrix must be exactly PHP 8.2-8.6")
     patches: dict[str, str] = {}
     for minor in MINORS:
         row = versions.get(minor)
@@ -73,9 +73,9 @@ class AutoPromotionTransactionTests(unittest.TestCase):
             path.write_text(json.dumps(manifest))
             self.assertEqual(load_fixture_patches(path)["8.3"], "8.3.99")
 
-            manifest["versions"]["8.6"] = {"patch": "8.6.0"}
+            manifest["versions"]["8.7"] = {"patch": "8.7.0"}
             path.write_text(json.dumps(manifest))
-            with self.assertRaisesRegex(ValueError, "exactly PHP 8.2-8.5"):
+            with self.assertRaisesRegex(ValueError, "exactly PHP 8.2-8.6"):
                 load_fixture_patches(path)
 
     def fixture(self, root: Path, mode: str) -> Fixture:

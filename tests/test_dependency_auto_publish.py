@@ -29,7 +29,7 @@ class DependencyAutoPublishTests(unittest.TestCase):
         self.assertEqual(self.trigger["push"]["branches"], ["main"])
         self.assertEqual(self.trigger["push"]["paths"], ["build/versions.json"])
         options = self.trigger["workflow_dispatch"]["inputs"]["version"]["options"]
-        self.assertEqual(options, ["all", "8.2", "8.3", "8.4", "8.5"])
+        self.assertEqual(options, ["all", "8.2", "8.3", "8.4", "8.5", "8.6"])
         self.assertNotIn("repository_dispatch", self.text)
 
     def test_prepare_accepts_one_same_minor_php_patch_only(self) -> None:
@@ -39,7 +39,7 @@ class DependencyAutoPublishTests(unittest.TestCase):
         self.assertIn("scripts/evaluate-auto-promotion.py", rendered)
         self.assertIn("base-same-minor", self.text)
         self.assertIn("len(affected) != 1", self.text)
-        self.assertIn("8.2,8.3,8.4,8.5", self.text)
+        self.assertIn("8.2,8.3,8.4,8.5,8.6", self.text)
         self.assertEqual(
             prepare["outputs"]["matrix"], "${{ steps.matrix.outputs.matrix }}"
         )
@@ -198,7 +198,7 @@ class PublisherSelectionTests(unittest.TestCase):
         self.assertIn("::notice::", result.stdout + result.stderr)
 
     def test_manual_one_and_all_keep_the_existing_entry_point(self) -> None:
-        for version, expected in (("8.5", ["8.5"]), ("all", ["8.2", "8.3", "8.4", "8.5"])):
+        for version, expected in (("8.5", ["8.5"]), ("all", ["8.2", "8.3", "8.4", "8.5", "8.6"])):
             with self.subTest(version=version):
                 result = self.select(EVENT_NAME="workflow_dispatch", REQUESTED_VERSION=version)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -211,7 +211,7 @@ class PublisherSelectionTests(unittest.TestCase):
             {"GITHUB_REF": "refs/heads/untrusted"},
             {"GITHUB_SHA": "0" * 40},
             {"BEFORE_SHA": "not-a-commit"},
-            {"EVENT_NAME": "workflow_dispatch", "REQUESTED_VERSION": "8.6"},
+            {"EVENT_NAME": "workflow_dispatch", "REQUESTED_VERSION": "8.7"},
             {"EVENT_NAME": "pull_request", "REQUESTED_VERSION": "8.5"},
         ):
             with self.subTest(overrides=overrides):
@@ -230,7 +230,7 @@ class PublisherSelectionTests(unittest.TestCase):
             {"eligible": False, "class": "invalid", "affectedMinors": []},
             {"eligible": False, "class": "unknown", "affectedMinors": []},
             {"eligible": True, "class": "base-same-minor", "affectedMinors": ["8.4", "8.5"]},
-            {"eligible": True, "class": "base-same-minor", "affectedMinors": ["8.6"]},
+            {"eligible": True, "class": "base-same-minor", "affectedMinors": ["8.7"]},
             {"eligible": True, "class": "base-same-minor", "affectedMinors": [""]},
         ):
             with self.subTest(fields=fields):

@@ -81,7 +81,7 @@ jobs:
               fail("manual publication correlation_id is invalid")
           version = payload.get("version")
           if version is not None and (
-              not isinstance(version, str) or re.fullmatch(r"8\.[2-5]", version) is None
+              not isinstance(version, str) or re.fullmatch(r"8\.[2-6]", version) is None
           ):
               fail("manual publication version is invalid")
 
@@ -114,7 +114,7 @@ jobs:
           fi
           test "$CHANNEL" = canary
           if [ -n "$REQUESTED_VERSION" ]; then
-            [[ "$REQUESTED_VERSION" =~ ^8\.[2-5]$ ]]
+            [[ "$REQUESTED_VERSION" =~ ^8\.[2-6]$ ]]
           fi
           ./scripts/validate-versions.py
 
@@ -362,7 +362,7 @@ jobs:
           for job in jobs:
               if job.get("conclusion") != "failure":
                   continue
-              match = re.fullmatch(r"canary \((8\.[2-5]),.*", str(job.get("name", "")))
+              match = re.fullmatch(r"canary \((8\.[2-6]),.*", str(job.get("name", "")))
               if match:
                   failed.append(match.group(1))
           if failed:

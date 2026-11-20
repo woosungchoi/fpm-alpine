@@ -45,7 +45,7 @@ class ArchiveDockerHubTagsTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
     def test_detect_php_minor_rejects_unsupported_version(self):
-        responses = iter(["docker.io/example/image@sha256:" + "2" * 64, "8.6"])
+        responses = iter(["docker.io/example/image@sha256:" + "2" * 64, "8.7"])
         setattr(module, "run", lambda *args, **kwargs: next(responses))
         with self.assertRaisesRegex(RuntimeError, "unsupported"):
             module.detect_php_minor("docker.io/example/image@sha256:" + "1" * 64)

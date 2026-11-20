@@ -41,6 +41,14 @@ class ContractTests(unittest.TestCase):
         candidate = {**BASE, "phpVersion": "8.5.9"}
         self.assertEqual(self.module.compare(BASE, candidate, "8.5"), [])
 
+    def test_initial_86_contract_preserves_runtime_requirements(self):
+        candidate = {**BASE, "phpVersion": "8.6.0"}
+        compare = self.module.compare
+        self.assertEqual(compare(BASE, candidate, "8.6", bootstrap_86=True), [])
+        self.assertTrue(compare(BASE, candidate, "8.6"))
+        self.assertTrue(compare(BASE, {**candidate, "phpVersion": "8.6.1"}, "8.6", bootstrap_86=True))
+        self.assertTrue(compare(BASE, {**candidate, "modules": ["Core"]}, "8.6", bootstrap_86=True))
+
     def test_package_add_remove_fails(self) -> None:
         candidate = {**BASE, "packages": ["a", "c"], "packageEvidence": [BASE["packageEvidence"][0], {"name": "c", "version": "2-r0", "architecture": "noarch"}]}
         errors = self.module.compare(BASE, candidate, "8.5")

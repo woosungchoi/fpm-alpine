@@ -20,7 +20,7 @@ if [ -z "$DOCKERHUB_REF" ] || [ -z "$GHCR_REF" ] || [ -z "$EXPECTED_VERSION" ]; 
   exit 64
 fi
 [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo "expected revision must be an exact lowercase commit SHA" >&2; exit 64; }
-[[ "$EXPECTED_VERSION" =~ ^8\.[2-5]\.[0-9]+$ ]] || { echo "expected version must be an active PHP patch" >&2; exit 64; }
+[[ "$EXPECTED_VERSION" =~ ^8\.[2-6]\.[0-9]+$ ]] || { echo "expected version must be an active PHP patch" >&2; exit 64; }
 case "$EXPECTED_SIGNING_REF" in
   main|8.5) ;;
   *) echo "expected signing ref must be main or 8.5" >&2; exit 64 ;;

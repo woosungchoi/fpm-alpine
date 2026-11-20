@@ -136,7 +136,7 @@ def detect_php_minor(subject: str) -> str:
         ],
         output=True,
     )
-    if not re.fullmatch(r"8\.[0-5]", minor):
+    if not re.fullmatch(r"8\.[0-6]", minor):
         raise RuntimeError(f"unsupported archived PHP minor: {minor!r}")
     return minor
 

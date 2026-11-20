@@ -16,15 +16,15 @@ REPOSITORY = "woosungchoi/fpm-alpine"
 API_BASE = "https://hub.docker.com/v2"
 AUTH_URL = f"{API_BASE}/auth/token"
 TAGS_URL = f"{API_BASE}/repositories/{REPOSITORY}/tags?page_size=100"
-KEEP_TAGS = ("8.2", "8.3", "8.4", "8.5")
+KEEP_TAGS = ("8.2", "8.3", "8.4", "8.5", "8.6")
 HTTP_TIMEOUT_SECONDS = 30
 CONFIRMATION = "DELETE NON-ACTIVE DOCKER HUB TAGS"
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 CLASSIFIERS = (
-    ("keep", re.compile(r"^8\.[2-5]$")),
-    ("canary", re.compile(r"^canary-8\.[2-5]-[1-9][0-9]*-[1-9][0-9]*$")),
-    ("immutable-release", re.compile(r"^8\.[2-5]\.[0-9]+-[0-9]{8}-[0-9a-f]{64}$")),
-    ("immutable-source", re.compile(r"^sha-8\.[2-5]-[0-9a-f]{12}-[0-9a-f]{64}$")),
+    ("keep", re.compile(r"^8\.[2-6]$")),
+    ("canary", re.compile(r"^canary-8\.[2-6]-[1-9][0-9]*-[1-9][0-9]*$")),
+    ("immutable-release", re.compile(r"^8\.[2-6]\.[0-9]+-[0-9]{8}-[0-9a-f]{64}$")),
+    ("immutable-source", re.compile(r"^sha-8\.[2-6]-[0-9a-f]{12}-[0-9a-f]{64}$")),
     ("legacy", re.compile(r"^this$")),
     ("frozen", re.compile(r"^8\.[01]$")),
 )
@@ -227,7 +227,7 @@ def validate_archive_map(plan: dict[str, Any], archive: dict[str, Any]) -> None:
         if classification != expected_row.get("classification"):
             raise PolicyError(f"archive classification mismatch: {name}")
         php_minor = entry.get("php_minor")
-        if not isinstance(php_minor, str) or not re.fullmatch(r"8\.[0-5]", php_minor):
+        if not isinstance(php_minor, str) or not re.fullmatch(r"8\.[0-6]", php_minor):
             raise PolicyError(f"archive PHP minor is invalid: {name}")
         if not isinstance(archive_ref, str) or not archive_ref.startswith("ghcr.io/woosungchoi/fpm-alpine:archive-dockerhub-"):
             raise PolicyError(f"archive reference is outside the canonical GHCR repository: {name}")

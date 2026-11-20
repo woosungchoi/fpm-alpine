@@ -8,7 +8,7 @@ repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 source_sha="${GITHUB_SHA:?GITHUB_SHA is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 
-[[ "$candidate_key" =~ ^(base-8\.[2-5]|pecl-(imagick|redis|apcu))$ ]] || {
+[[ "$candidate_key" =~ ^(base-8\.[2-6]|pecl-(imagick|redis|apcu))$ ]] || {
   echo "invalid candidate key: $candidate_key" >&2
   exit 64
 }

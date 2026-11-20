@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 AUTOMATION_BRANCH = re.compile(
-    r"^automation/(?:base-8\.[2-5]|pecl-(?:imagick|redis|apcu))-[0-9a-f]{12}$"
+    r"^automation/(?:base-8\.[2-6]|pecl-(?:imagick|redis|apcu))-[0-9a-f]{12}$"
 )
 DEPENDABOT_BRANCH = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"

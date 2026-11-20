@@ -11,7 +11,7 @@ PHP_MINOR="$2"
 DOCKERHUB_REPOSITORY="${DOCKERHUB_REPOSITORY:-docker.io/woosungchoi/fpm-alpine}"
 
 [ "$DOCKERHUB_REPOSITORY" = docker.io/woosungchoi/fpm-alpine ]
-[[ "$PHP_MINOR" =~ ^8\.[2-5]$ ]]
+[[ "$PHP_MINOR" =~ ^8\.[2-6]$ ]]
 command -v crane >/dev/null
 
 ./scripts/transaction-journal.py assert-owner "$PLAN_FILE"

@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 DEFAULT_POLICY_PATH = Path("build/automation-policy.json")
-EXPECTED_MINORS = ("8.2", "8.3", "8.4", "8.5")
+EXPECTED_MINORS = ("8.2", "8.3", "8.4", "8.5", "8.6")
 EXPECTED_DEPENDENCIES = ("imagick", "redis", "apcu")
 EXPECTED_MANUAL_ONLY = (
     "lifecycle",
@@ -82,7 +82,7 @@ def validate_policy(policy: Any, errors: list[str]) -> bool:
     else:
         require(
             tuple(lifecycle) == EXPECTED_MINORS,
-            "automation policy lifecycle keys/order must be 8.2, 8.3, 8.4, 8.5",
+            "automation policy lifecycle keys/order must be 8.2, 8.3, 8.4, 8.5, 8.6",
             errors,
         )
         for minor in EXPECTED_MINORS:
@@ -226,7 +226,7 @@ def validate(data: Any, policy: Any | None = None) -> list[str]:
         errors.append("libiconv runtime contract must be an object")
     require(
         tuple(versions) == EXPECTED_MINORS,
-        "version keys/order must be exactly 8.2, 8.3, 8.4, 8.5",
+        "version keys/order must be exactly 8.2, 8.3, 8.4, 8.5, 8.6",
         errors,
     )
     for name in EXPECTED_DEPENDENCIES:

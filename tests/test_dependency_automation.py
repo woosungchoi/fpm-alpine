@@ -110,10 +110,10 @@ class DependencyAutomationTests(unittest.TestCase):
 
     def test_new_php_minor_is_rejected(self) -> None:
         head = copy.deepcopy(VERSIONS)
-        head["versions"]["8.6"] = {
-            "minor": "8.6",
-            "patch": "8.6.0",
-            "base_image": "php:8.6-fpm-alpine@sha256:" + "9" * 64,
+        head["versions"]["8.7"] = {
+            "minor": "8.7",
+            "patch": "8.7.0",
+            "base_image": "php:8.7-fpm-alpine@sha256:" + "9" * 64,
             "support": "active",
             "eol": "2029-12-31",
         }

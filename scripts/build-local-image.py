@@ -18,7 +18,7 @@ def inputs(minor, platform):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--minor', choices=('8.2', '8.3', '8.4', '8.5'), default='8.5')
+    parser.add_argument('--minor', choices=('8.2', '8.3', '8.4', '8.5', '8.6'), default='8.5')
     parser.add_argument('--platform', choices=('linux/amd64', 'linux/arm64'), required=True)
     parser.add_argument('--tag', required=True)
     parser.add_argument('--builder', help='Optional existing isolated Buildx builder')

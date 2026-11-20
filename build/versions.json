@@ -55,6 +55,13 @@
       "base_image": "php:8.5-fpm-alpine@sha256:951fb5b1780219b81d5daffa4cebef8e0077c537f3893d9790a5dfcd66ca334d",
       "support": "active",
       "eol": "2029-12-31"
+    },
+    "8.6": {
+      "minor": "8.6",
+      "patch": "8.6.0",
+      "base_image": "php:8.6-fpm-alpine@sha256:3892978a38794b348f73d6926fb63e352b5338f8b302cdd2cf0ed968f63b50c5",
+      "support": "active",
+      "eol": "2030-12-31"
     }
   }
 }

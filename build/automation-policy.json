@@ -16,6 +16,10 @@
     "8.5": {
       "support": "active",
       "eol": "2029-12-31"
+    },
+    "8.6": {
+      "support": "active",
+      "eol": "2030-12-31"
     }
   },
   "dependencies": {

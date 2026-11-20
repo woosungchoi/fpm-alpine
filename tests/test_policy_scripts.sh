@@ -58,7 +58,7 @@ assert_regex SUPPORT.md '^\| PHP 8\.5 \(`8\.5`\) \| active support, then securit
 assert_contains SUPPORT.md 'their former Docker Hub tags are no longer published'
 assert_contains SUPPORT.md 'Signed archival subjects and the source-to-archive digest map are retained in GHCR'
 assert_contains SUPPORT.md 'The former Docker Hub `this` tag was an unsupported accidental alias and is no longer published.'
-assert_contains SUPPORT.md 'Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, and `8.5`.'
+assert_contains SUPPORT.md 'Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, `8.5`, and `8.6`.'
 assert_contains SUPPORT.md 'There is intentionally no `latest`'
 
 assert_file LICENSE
@@ -427,7 +427,7 @@ assert_file .github/workflows/sync-dockerhub-metadata.yml
 assert_file scripts/sync_dockerhub_metadata.py
 assert_executable scripts/sync_dockerhub_metadata.py
 assert_file docs/dockerhub-description.md
-assert_contains docs/dockerhub-description.md 'Docker Hub exposes exactly four active moving tags: `8.2`, `8.3`, `8.4`, and `8.5`'
+assert_contains docs/dockerhub-description.md 'Docker Hub exposes exactly five active moving tags: `8.2`, `8.3`, `8.4`, `8.5`, and `8.6`'
 assert_contains docs/dockerhub-description.md 'There is intentionally no `latest`, canary, immutable, source, frozen, or legacy tag on Docker Hub'
 assert_contains docs/dockerhub-description.md 'Non-moving canary, immutable release/source, provenance, signature, archive, and rollback evidence is retained in GHCR'
 assert_not_contains docs/dockerhub-description.md 'default branch is **`8.5`**'

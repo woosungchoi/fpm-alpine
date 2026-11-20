@@ -18,6 +18,7 @@ on:
           - "8.3"
           - "8.4"
           - "8.5"
+          - "8.6"
 
 permissions:
   contents: read
@@ -92,7 +93,7 @@ jobs:
           affected = data.get('affectedMinors')
           if not isinstance(affected, list) or len(affected) != 1:
               raise SystemExit('publisher requires exactly one affected PHP minor')
-          if affected[0] not in ('8.2', '8.3', '8.4', '8.5'):
+          if affected[0] not in ('8.2', '8.3', '8.4', '8.5', '8.6'):
               raise SystemExit('invalid affected PHP minor')
           print(affected[0])
           PY
@@ -105,8 +106,8 @@ jobs:
             fi
           elif [ "$EVENT_NAME" = workflow_dispatch ]; then
             case "$REQUESTED_VERSION" in
-              all) selected=8.2,8.3,8.4,8.5 ;;
-              8.2|8.3|8.4|8.5) selected="$REQUESTED_VERSION" ;;
+              all) selected=8.2,8.3,8.4,8.5,8.6 ;;
+              8.2|8.3|8.4|8.5|8.6) selected="$REQUESTED_VERSION" ;;
               *) echo "unsupported PHP minor: $REQUESTED_VERSION" >&2; exit 64 ;;
             esac
           else
@@ -120,7 +121,7 @@ jobs:
           import subprocess
 
           selected = os.environ['SELECTED_MINORS'].split(',')
-          if not selected or any(item not in {'8.2', '8.3', '8.4', '8.5'} for item in selected):
+          if not selected or any(item not in {'8.2', '8.3', '8.4', '8.5', '8.6'} for item in selected):
               raise SystemExit('invalid selected PHP minor set')
           rows = json.loads(
               subprocess.check_output(['./scripts/validate-versions.py', '--matrix'])

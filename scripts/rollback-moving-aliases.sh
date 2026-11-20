@@ -28,7 +28,7 @@ IDENTITY="^https://github\.com/woosungchoi/fpm-alpine/\.github/workflows/${publi
 for digest in "$PREVIOUS_DOCKERHUB_DIGEST" "$PREVIOUS_GHCR_DIGEST"; do
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "rollback requires exact prior digests" >&2; exit 2; }
 done
-[[ "$MINOR" =~ ^8\.[2-5]$ ]] || { echo "rollback minor must be active" >&2; exit 2; }
+[[ "$MINOR" =~ ^8\.[2-6]$ ]] || { echo "rollback minor must be active" >&2; exit 2; }
 [ "$DOCKERHUB_REPOSITORY" = docker.io/woosungchoi/fpm-alpine ] || { echo "invalid Docker Hub repository" >&2; exit 2; }
 [ "$GHCR_REPOSITORY" = ghcr.io/woosungchoi/fpm-alpine ] || { echo "invalid GHCR repository" >&2; exit 2; }
 if [ "$SIGN_DESTINATION" = 1 ]; then

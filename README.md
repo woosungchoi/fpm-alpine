@@ -23,6 +23,7 @@ The single `main` source trunk builds the active PHP matrix from `build/versions
 | `8.3` | `php:8.3-fpm-alpine` | security-only |
 | `8.4` | `php:8.4-fpm-alpine` | active / security support |
 | `8.5` | `php:8.5-fpm-alpine` | active / security support |
+| `8.6` | `php:8.6-fpm-alpine` | active / security support |
 
 ### Archived source history
 
@@ -41,7 +42,7 @@ What that means in practice:
 
 ## Docker tags / Docker Hub notes
 
-- Docker Hub exposes exactly `8.2`, `8.3`, `8.4`, and `8.5`
+- Docker Hub exposes exactly `8.2`, `8.3`, `8.4`, `8.5`, and `8.6`
 - Explicit active-minor tags or resolved digests remain the production contract
 - No `latest`, canary, immutable, source, frozen, or legacy tag is published on Docker Hub
 - GHCR retains non-moving canary, immutable, provenance, signature, archive, and rollback evidence
@@ -57,7 +58,7 @@ For the full policy and operational notes, see [BRANCH-AND-TAG-POLICY.md](./BRAN
 
 ### Protected GitHub Actions publisher
 
-GitHub Actions is the sole publisher for PHP 8.2–8.5. Docker Hub Automatic Builds and the legacy publication webhook have been removed. Source pull requests cannot access registry credentials or publish images.
+GitHub Actions is the sole publisher for PHP 8.2–8.6. Docker Hub Automatic Builds and the legacy publication webhook have been removed. Source pull requests cannot access registry credentials or publish images.
 
 The active `dependency-auto-publish.yml` publishes one eligible same-minor base update from protected `main` directly to both registry minor tags, using one multi-platform Buildx build with provenance and SBOM. Its read-back gate requires the published top-level digest and amd64/arm64 platform presence in both registries. Source, runtime-policy and workflow changes require manual review and do not automatically publish. The owner-only `fpm-manual-publish` dispatch in `publish.yml` separately creates an immutable GHCR canary and verifies its signature/runtime/scan gates; it does not update production aliases.
 
@@ -71,7 +72,7 @@ See [docs/ci-operations.md](./docs/ci-operations.md) for the active publishing a
 The daily manifest workflow observes active Docker Hub moving aliases by exact digest:
 
 - `verify-published-manifest` runs after `main` pushes, on a schedule, and on manual dispatch.
-- The workflow verifies the four active Docker Hub tags for `linux/amd64` and `linux/arm64`, and its exact-set guard rejects every additional public tag after enforcement is enabled.
+- The workflow verifies the five active Docker Hub tags for `linux/amd64` and `linux/arm64`, and its exact-set guard rejects every additional public tag after enforcement is enabled.
 - Each run writes a GitHub Actions step summary and uploads manifest report artifacts containing the observed tag digest, per-platform digests, and attestation/metadata manifest entries when present.
 - It resolves each moving tag once, then retries raw reads against the frozen digest. This run verifies platform presence only; attestation entries are inventory and do not imply signature, provenance, SBOM, runtime or vulnerability validation.
 - `published-runtime-smoke` separately runs weekly, on manual dispatch, and on PRs changing its verification path. It reuses `verify-published-dockerhub-image.sh`, `verify-image-parity.py` and `scan-image.sh` to reverify frozen subjects: protected-history source labels, provenance, SBOM presence, FastCGI/media runtime for amd64/arm64, APK version/architecture evidence, registry config/layer parity and fixable-CRITICAL vulnerabilities.
@@ -131,7 +132,7 @@ Treat that as the branch matrix unless a future branch-specific exception is doc
 ## Verification
 
 `build/versions.json` is the canonical machine-readable build and matrix input for
-the supported PHP 8.2–8.5 patch versions, lifecycle metadata (`support`/`eol`),
+the supported PHP 8.2–8.6 patch versions, lifecycle metadata (`support`/`eol`),
 digest-pinned base images, and verified source archives. Independently,
 `build/automation-policy.json`, `scripts/validate-versions.py`, and mutation tests enforce
 the lifecycle, source-host, runtime-contract, and allowed-bump boundaries without duplicating

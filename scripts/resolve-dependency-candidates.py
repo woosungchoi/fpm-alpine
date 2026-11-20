@@ -144,6 +144,20 @@ def resolve_base(ref: str, policy: Any) -> tuple[str, str]:
     first = _hub_tag(base_policy["tagApiBase"], tag)
     official = _official_images_metadata(base_policy["officialImagesMetadata"])
     patch = patch_from_official_images(official, tag)
+    patch_tag = f"{patch}-fpm-alpine"
+    exact = _hub_tag(base_policy["tagApiBase"], patch_tag)
+    # Alias indexes may differ for other architectures or attestations.
+    # Compare the actual Linux manifests that this repository will build on.
+    def supported_manifests(record):
+        return {
+            row["architecture"]: row["digest"]
+            for row in record["images"]
+            if isinstance(row, dict) and row.get("os") == "linux"
+            and row.get("architecture") in {"amd64", "arm64"}
+        }
+
+    if supported_manifests(first) != supported_manifests(exact):
+        raise ValueError(f"Docker Hub platforms for {tag} do not yet match {patch_tag}")
     second = _hub_tag(base_policy["tagApiBase"], tag)
     if first["digest"] != second["digest"]:
         raise ValueError(f"Docker Hub tag moved during observation: {tag}")

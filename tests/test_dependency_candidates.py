@@ -9,6 +9,7 @@ import io
 import json
 import tarfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +204,32 @@ class CandidateTests(unittest.TestCase):
                 generated_at="2026-07-12T00:00:00Z",
                 source_commit="a" * 40,
             )
+
+    def test_release_rollout_requires_both_runtime_manifests(self):
+        floating = {"digest": "sha256:" + "a" * 64, "images": [
+            {"os": "linux", "architecture": arch, "digest": "sha256:" + digit * 64}
+            for arch, digit in (("amd64", "1"), ("arm64", "2"))
+        ]}
+        exact = copy.deepcopy(floating)
+        exact["digest"] = "sha256:" + "b" * 64
+        tag = "8.2-fpm-alpine"
+        exact_tag = "8.2.36-fpm-alpine"
+        for lagging in (None, "amd64", "arm64"):
+            with self.subTest(lagging=lagging):
+                released = copy.deepcopy(exact)
+                for row in released["images"]:
+                    if row["architecture"] == lagging:
+                        row["digest"] = "sha256:" + "c" * 64
+                with patch.object(self.module, "_hub_tag", side_effect=lambda _, t: {
+                    tag: floating, exact_tag: released
+                }[t]), patch.object(self.module, "_official_images_metadata",
+                                    return_value=f"Tags: {tag}, {exact_tag}"):
+                    if lagging:
+                        with self.assertRaisesRegex(ValueError, "do not yet match"):
+                            self.module.resolve_base("php:" + tag, POLICY)
+                    else:
+                        self.assertEqual(self.module.resolve_base("php:" + tag, POLICY),
+                                         (floating["digest"], "8.2.36"))
 
     def test_php_patch_is_read_from_official_image_aliases(self) -> None:
         metadata = """Tags: 8.5.8-fpm-alpine3.24, 8.5-fpm-alpine3.24, 8.5.8-fpm-alpine, 8.5-fpm-alpine

@@ -37,22 +37,22 @@
     },
     "8.3": {
       "minor": "8.3",
-      "patch": "8.3.36",
-      "base_image": "php:8.3-fpm-alpine@sha256:f9804e0c991b5b339d6fa4fab9edf3c9c9ae68048fb1017cb6dea6265ccef054",
+      "patch": "8.3.37",
+      "base_image": "php:8.3-fpm-alpine@sha256:30b1b9bfbfce33272aa2821a079e63fcad86b8c070122a798e131d8773524d0d",
       "support": "security-only",
       "eol": "2027-12-31"
     },
     "8.4": {
       "minor": "8.4",
-      "patch": "8.4.27",
-      "base_image": "php:8.4-fpm-alpine@sha256:511af6fa3ef55c4ea0c68bb47096ba4b81771ab4949bde7813807bf177efda11",
+      "patch": "8.4.28",
+      "base_image": "php:8.4-fpm-alpine@sha256:48b0daad6d12699089e45dd5ad2a7620982fa08d18426f94bf83d926e8495f9f",
       "support": "active",
       "eol": "2028-12-31"
     },
     "8.5": {
       "minor": "8.5",
-      "patch": "8.5.12",
-      "base_image": "php:8.5-fpm-alpine@sha256:951fb5b1780219b81d5daffa4cebef8e0077c537f3893d9790a5dfcd66ca334d",
+      "patch": "8.5.13",
+      "base_image": "php:8.5-fpm-alpine@sha256:dae9c4dc795324d7ee1122644c870e9c9a3d05a9f52de27fd904cc33af20bae3",
       "support": "active",
       "eol": "2029-12-31"
     }

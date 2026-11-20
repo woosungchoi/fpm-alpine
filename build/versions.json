@@ -30,8 +30,8 @@
   "versions": {
     "8.2": {
       "minor": "8.2",
-      "patch": "8.2.35",
-      "base_image": "php:8.2-fpm-alpine@sha256:d17bc39b8ef90e12d598f19cb466f1906c3c214f4bce661dfee49404b42fea09",
+      "patch": "8.2.36",
+      "base_image": "php:8.2-fpm-alpine@sha256:913fab09564477f2d4fee22e6cdb7d9f88a93c6d201f7d728d347489a70581d6",
       "support": "security-only",
       "eol": "2026-12-31"
     },

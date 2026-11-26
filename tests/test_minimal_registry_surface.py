@@ -134,6 +134,7 @@ class MinimalRegistrySurfaceTests(unittest.TestCase):
                 "woosungchoi/fpm-alpine:8.3",
                 "woosungchoi/fpm-alpine:8.4",
                 "woosungchoi/fpm-alpine:8.5",
+                "woosungchoi/fpm-alpine:8.6",
             ],
         )
         self.assertIn("verify-dockerhub-tag-policy", workflow["jobs"])

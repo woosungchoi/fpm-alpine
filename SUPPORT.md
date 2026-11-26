@@ -12,10 +12,11 @@ This file is the canonical lifecycle and support policy for the image tags in th
 | PHP 8.3 (`8.3`) | security-only | 2027-12-31 |
 | PHP 8.4 (`8.4`) | active support, then security support | 2028-12-31 |
 | PHP 8.5 (`8.5`) | active support, then security support | 2029-12-31 |
+| PHP 8.6 (`8.6`) | active support, then security support | 2030-12-31 |
 
 “Security-only” means changes are limited to security fixes and the minimum maintenance needed to deliver them. “Active support” includes compatible bug fixes and security fixes. Support ends when the listed upstream EOL date is reached.
 
-For source-only CI, these four active matrix entries and their lifecycle fields are mirrored in `build/versions.json`. The validator requires the exact version set, order, status, and EOL values; this document remains the human-facing canonical lifecycle policy.
+For source-only CI, these five active matrix entries and their lifecycle fields are mirrored in `build/versions.json`. The validator requires the exact version set, order, status, and EOL values; this document remains the human-facing canonical lifecycle policy.
 
 The daily, network-free `php-lifecycle` date check warns 90 and 30 days before EOL, fails when an active matrix entry reaches EOL, and updates its issue only when the attention state changes. Monthly and manual runs additionally report upstream release-source outages separately from lifecycle mismatches. EOL is inclusive: 2026-12-31 is the final supported day for 8.2; 2027-01-01 fails.
 
@@ -40,7 +41,7 @@ The former Docker Hub `this` tag was an unsupported accidental alias and is no l
 
 ## Tag policy
 
-Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, and `8.5`. There is intentionally no `latest`, canary, immutable, source, frozen, or legacy tag on Docker Hub. Pin an active minor or its resolved digest and review this policy before selecting a line. GHCR is the canonical evidence registry for non-moving canary, immutable release/source, provenance, signature, archive, and rollback subjects.
+Docker Hub exposes exactly the active moving tags `8.2`, `8.3`, `8.4`, `8.5`, and `8.6`. There is intentionally no `latest`, canary, immutable, source, frozen, or legacy tag on Docker Hub. Pin an active minor or its resolved digest and review this policy before selecting a line. GHCR is the canonical evidence registry for non-moving canary, immutable release/source, provenance, signature, archive, and rollback subjects.
 
 ## PHP 8.2 migration checklist
 

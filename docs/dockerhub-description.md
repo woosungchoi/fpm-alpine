@@ -4,7 +4,7 @@ Multi-architecture PHP-FPM Alpine images for WordPress, Gnuboard, Rhymix, and re
 
 ## Supported tags
 
-- Docker Hub exposes exactly four active moving tags: `8.2`, `8.3`, `8.4`, and `8.5`.
+- Docker Hub exposes exactly five active moving tags: `8.2`, `8.3`, `8.4`, `8.5`, and `8.6`.
 - There is intentionally no `latest`, canary, immutable, source, frozen, or legacy tag on Docker Hub.
 - Non-moving canary, immutable release/source, provenance, signature, archive, and rollback evidence is retained in GHCR.
 

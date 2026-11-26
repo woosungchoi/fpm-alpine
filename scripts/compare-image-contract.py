@@ -55,11 +55,11 @@ def _validate(name: str, data: Any) -> list[str]:
     return errors
 
 
-def compare(baseline: Any, candidate: Any, expected_minor: str, approved: tuple = (), *, version_order=None) -> list[str]:
+def compare(baseline: Any, candidate: Any, expected_minor: str, approved: tuple = (), *, version_order=None, bootstrap_86=False) -> list[str]:
     errors = _validate("baseline", baseline) + _validate("candidate", candidate)
     if errors:
         return errors
-    if not re.fullmatch(r"8\.[2-5]", expected_minor):
+    if not re.fullmatch(r"8\.[2-6]", expected_minor):
         return errors + ["expected minor is invalid"]
     if tuple(map(int, candidate["phpVersion"].split("."))) < tuple(map(int, baseline["phpVersion"].split("."))):
         errors.append("PHP patch downgrade")
@@ -73,8 +73,11 @@ def compare(baseline: Any, candidate: Any, expected_minor: str, approved: tuple 
             errors.append("automatic APK updates require the same stable Alpine branch")
     if baseline["platform"] != candidate["platform"]:
         errors.append("platform mismatch")
+    if bootstrap_86 and (expected_minor != "8.6" or candidate["phpVersion"] != "8.6.0"):
+        errors.append("bootstrap is restricted to PHP 8.6.0")
     for name, row in (("baseline", baseline), ("candidate", candidate)):
-        if not row["phpVersion"].startswith(expected_minor + "."):
+        minor = "8.5" if bootstrap_86 and name == "baseline" else expected_minor
+        if not row["phpVersion"].startswith(minor + "."):
             errors.append(f"{name} PHP minor mismatch")
     if baseline["packages"] != candidate["packages"]:
         removed = sorted(set(baseline["packages"]) - set(candidate["packages"]))
@@ -157,12 +160,13 @@ def main() -> int:
     parser.add_argument("expected_minor")
     parser.add_argument("--approved-apk-transitions", type=Path, help="Explicit reviewed exact version transitions; default rejects all drift")
     parser.add_argument("--allow-apk-upgrades-with-image", help="Allow forward APK versions on the same Alpine branch; use this local candidate image for native APK ordering")
+    parser.add_argument("--bootstrap-86", action="store_true", help="Compare the initial 8.6.0 build with the pinned 8.5 contract")
     args = parser.parse_args()
     baseline = json.loads(Path(args.baseline).read_text())
     candidate = json.loads(Path(args.candidate).read_text())
     approved = load_approved_transitions(args.approved_apk_transitions) if args.approved_apk_transitions else ()
     order = apk_version_order(args.allow_apk_upgrades_with_image, candidate["platform"]) if args.allow_apk_upgrades_with_image else None
-    errors = compare(baseline, candidate, args.expected_minor, approved, version_order=order)
+    errors = compare(baseline, candidate, args.expected_minor, approved, version_order=order, bootstrap_86=args.bootstrap_86)
     if errors:
         for error in errors:
             print(f"image contract rejected: {error}")

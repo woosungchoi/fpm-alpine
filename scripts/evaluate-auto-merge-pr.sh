@@ -49,7 +49,7 @@ git cat-file -e "${base_sha}^{commit}"
 
 changed="$(git diff --name-only "$base_sha" "$head_sha")"
 [ -n "$changed" ] || reject "empty diff"
-if [[ "$head_ref" =~ ^automation/(base-8\.[2-5]|pecl-(imagick|redis|apcu))-[0-9a-f]{12}$ ]]; then
+if [[ "$head_ref" =~ ^automation/(base-8\.[2-6]|pecl-(imagick|redis|apcu))-[0-9a-f]{12}$ ]]; then
   candidate_key="${BASH_REMATCH[1]}"
   [ "$author" != "dependabot[bot]" ] && [[ "$author" =~ \[bot\]$ ]] || reject "automation author mismatch"
   [ "$changed" = build/versions.json ] || reject "automation PR changed blocked files"

@@ -29,7 +29,7 @@ case "$POLICY" in
   *) echo "policy must be moving-only or evidence" >&2; exit 64 ;;
 esac
 [[ "$SOURCE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid source digest" >&2; exit 64; }
-[[ "$MINOR" =~ ^8\.[2-5]$ ]] || { echo "minor must be active" >&2; exit 64; }
+[[ "$MINOR" =~ ^8\.[2-6]$ ]] || { echo "minor must be active" >&2; exit 64; }
 [[ "$PHP_PATCH" =~ ^${MINOR//./\.}\.[0-9]+$ ]] || { echo "PHP patch does not match minor" >&2; exit 64; }
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "source SHA must be exact" >&2; exit 64; }
 [[ "$RELEASE_DATE" =~ ^[0-9]{8}$ ]] || { echo "release date must use YYYYMMDD" >&2; exit 64; }

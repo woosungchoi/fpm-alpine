@@ -18,7 +18,7 @@ PLATFORMS=(linux/amd64 linux/arm64)
   exit 64
 }
 [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo "expected revision must be exact" >&2; exit 64; }
-[[ "$EXPECTED_VERSION" =~ ^8\.[2-5]\.[0-9]+$ ]] || { echo "expected version must be active" >&2; exit 64; }
+[[ "$EXPECTED_VERSION" =~ ^8\.[2-6]\.[0-9]+$ ]] || { echo "expected version must be active" >&2; exit 64; }
 case "$EXPECTED_SIGNING_REF" in main|8.5) ;; *) echo "invalid signing ref" >&2; exit 64 ;; esac
 case "$EXPECTED_PUBLISHER_WORKFLOW" in
   publish.yml)

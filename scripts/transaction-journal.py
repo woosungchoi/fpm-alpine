@@ -26,7 +26,7 @@ from typing import Any, NoReturn, cast
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 NONCE_RE = re.compile(r"[0-9a-f]{32}")
-MINOR_RE = re.compile(r"8\.[2-5]")
+MINOR_RE = re.compile(r"8\.[2-6]")
 PLAN_SHA_RE = re.compile(r"[0-9a-f]{64}")
 LOCK_REF = "refs/heads/fpm-transaction-lock"
 LOCK_FILE = "transaction-lock.json"
@@ -117,8 +117,8 @@ def load_plan(path_text: str) -> tuple[dict[str, Any], str]:
     require_positive_int(payload, "run_id")
     require_positive_int(payload, "run_attempt")
     units = payload.get("release_units")
-    if type(units) is not list or len(units) != 4:
-        fail("transaction plan must contain four release units")
+    if type(units) is not list or len(units) != 5:
+        fail("transaction plan must contain five release units")
     observed: set[str] = set()
     for unit in units:
         if type(unit) is not dict:
@@ -135,7 +135,7 @@ def load_plan(path_text: str) -> tuple[dict[str, Any], str]:
         target_dockerhub = require_str(unit, "target_dockerhub_digest", DIGEST_RE)
         if operation == "backfill-ghcr" and target_dockerhub != previous_dockerhub:
             fail("backfill Docker Hub target must remain the prior digest")
-    if observed != {"8.2", "8.3", "8.4", "8.5"}:
+    if observed != {"8.2", "8.3", "8.4", "8.5", "8.6"}:
         fail("transaction release-unit set mismatch")
     return payload, hashlib.sha256(raw).hexdigest()
 

@@ -36,7 +36,7 @@ iconv={
  "iconv_target":contract["target"],
 }
 expected=[]
-for minor in ("8.2", "8.3", "8.4", "8.5"):
+for minor in ("8.2", "8.3", "8.4", "8.5", "8.6"):
  for platform, arch in (("linux/amd64", "amd64"), ("linux/arm64", "arm64")):
   patch, base = versions[minor]
   row={"php_minor":minor,"php_patch":patch,"php_base_image":base,"platform":platform,"arch":arch}

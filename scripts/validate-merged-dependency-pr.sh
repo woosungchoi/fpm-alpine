@@ -34,7 +34,7 @@ author = (row.get("user") or {}).get("login", "")
 branch = head.get("ref", "")
 if repo.get("full_name") != (row.get("base", {}).get("repo") or {}).get("full_name"):
     raise SystemExit("merged dependency PR must be same-repository")
-if not re.fullmatch(r"automation/(?:base-8\.[2-5]|pecl-(?:imagick|redis|apcu))-[0-9a-f]{12}", branch):
+if not re.fullmatch(r"automation/(?:base-8\.[2-6]|pecl-(?:imagick|redis|apcu))-[0-9a-f]{12}", branch):
     raise SystemExit("merged PR branch is not an updater branch")
 if author == "dependabot[bot]" or not re.fullmatch(r"[A-Za-z0-9_.-]+\[bot\]", author):
     raise SystemExit("merged PR author is not an updater bot")

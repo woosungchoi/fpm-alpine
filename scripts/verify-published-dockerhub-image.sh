@@ -12,9 +12,9 @@ INSPECT_RETRY_DELAY_SECONDS="${INSPECT_RETRY_DELAY_SECONDS:-2}"
 EXPECTED_PLATFORMS=(linux/amd64 linux/arm64)
 VERSIONS_FILE="${AUTO_PROMOTION_VERSIONS_FILE:-build/versions.json}"
 
-if [[ ! "$DOCKERHUB_REF" =~ ^(docker\.io/)?woosungchoi/fpm-alpine(:8\.[2-5]|@sha256:[0-9a-f]{64})$ ]] ||
+if [[ ! "$DOCKERHUB_REF" =~ ^(docker\.io/)?woosungchoi/fpm-alpine(:8\.[2-6]|@sha256:[0-9a-f]{64})$ ]] ||
    [[ ! "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]] ||
-   [[ ! "$EXPECTED_VERSION" =~ ^8\.[2-5]\.[0-9]+$ ]]; then
+   [[ ! "$EXPECTED_VERSION" =~ ^8\.[2-6]\.[0-9]+$ ]]; then
   echo "usage: $0 <dockerhub-ref> <40-char-source-sha> <php-patch> [report-dir]" >&2
   exit 64
 fi

@@ -138,7 +138,7 @@ def resolve_base(ref: str, policy: Any) -> tuple[str, str]:
         raise ValueError("invalid base resolver input")
     repository, tag = ref.split(":", 1)
     if repository != base_policy.get("repository") or not re.fullmatch(
-        r"8\.[2-5]-fpm-alpine", tag
+        r"8\.[2-6]-fpm-alpine", tag
     ):
         raise ValueError("base reference is outside policy")
     first = _hub_tag(base_policy["tagApiBase"], tag)

@@ -110,7 +110,7 @@ def validate(args: argparse.Namespace) -> dict:
         label = f"release unit {index + 1}"
         if type(unit) is not dict or set(unit) != UNIT_KEYS:
             raise SystemExit(f"{label} keys do not match schema v1")
-        minor = exact_string(unit["php_minor"], re.compile(r"8\.[2-5]"), f"{label} minor")
+        minor = exact_string(unit["php_minor"], re.compile(r"8\.[2-6]"), f"{label} minor")
         patch = exact_string(
             unit["php_patch"], re.compile(rf"{re.escape(minor)}\.[0-9]+"), f"{label} patch"
         )
